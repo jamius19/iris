@@ -4,16 +4,15 @@
    for details.
 -->
 <data-extraction-rules>
+    <!-- Encrypted API keys: the Keystore key that decrypts them is not backed up or transferred. -->
     <cloud-backup>
+        <exclude domain="file" path="datastore/secrets.preferences_pb" />
         <!-- TODO: Use <include> and <exclude> to control what is backed up.
         <include .../>
         <exclude .../>
         -->
     </cloud-backup>
-    <!--
     <device-transfer>
-        <include .../>
-        <exclude .../>
+        <exclude domain="file" path="datastore/secrets.preferences_pb" />
     </device-transfer>
-    -->
 </data-extraction-rules>

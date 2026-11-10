@@ -36,10 +36,15 @@ Providers (settings store a provider id for each):
 - STT: OpenAI Realtime API, transcription-only session over WebSocket. Audio is PCM16 mono 24 kHz, sent as
   base64 chunks via `input_audio_buffer.append`. On stop: commit the buffer, wait for the final transcript.
   Verify event names and session config against current OpenAI docs before changing protocol code.
+  Default model `gpt-live-transcribe` (`gpt-4o-*-transcribe` are deprecated, shutdown 2027-02-26). It requires
+  `turn_detection: null` (no server/semantic VAD) and takes `audio.input.transcription.languages: [..]` (array;
+  never also send singular `language`). Settings store one optional code; the client wraps it into the array.
 - Cleanup: Vercel AI Gateway, OpenAI-compatible `POST https://ai-gateway.vercel.sh/v1/chat/completions`,
   `Authorization: Bearer <key>`. Structured output via
   `response_format: {type:"json_schema", json_schema:{name, schema, strict:true}}` with schema
   `{ "text": string }`. Supports multiple saved system prompts; user picks the active one. Optional (toggle).
+  Default model `openai/gpt-6-luna` (OpenAI's replacement for the deprecated 4.1/4o minis; cheap, structured
+  output). It is a reasoning model: send reasoning effort `none` for low latency.
 
 ## Key decisions (don't re-litigate without a concrete reason)
 - **OpenAI Realtime for STT**: Vercel AI Gateway's streaming STT protocol is undocumented and JS-SDK-only beta,
@@ -88,7 +93,7 @@ Update this section as checkpoints land.
 
 | Checkpoint | Scope | State |
 |---|---|---|
-| CP1 | Settings + secure API key storage | In progress |
+| CP1 | Settings + secure API key storage | Done |
 | CP2 | AccessibilityService + bubble overlay | Planned |
 | CP3 | Audio capture + OpenAI Realtime STT | Planned |
 | CP4 | Text insertion + LLM cleanup | Planned |
