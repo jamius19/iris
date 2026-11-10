@@ -60,6 +60,19 @@ class TextInsertionTest {
     }
 
     @Test
+    fun noTrailingSpaceBeforeClosingBracketQuoteOrPunctuation() {
+        for (closer in ".,!?:;)]}”’…") {
+            assertEquals(MergedText("Hi there$closer", 8, " there"), mergeInsertion("Hi$closer", 2, 2, "there"))
+        }
+    }
+
+    @Test
+    fun trailingSpaceBeforeAsciiQuote() {
+        assertEquals(MergedText("Hi there \"x\"", 9, " there "), mergeInsertion("Hi\"x\"", 2, 2, "there"))
+        assertEquals(MergedText("Hi there 'x'", 9, " there "), mergeInsertion("Hi'x'", 2, 2, "there"))
+    }
+
+    @Test
     fun selectionIsReplaced() {
         assertEquals(MergedText("Hello there", 11, "there"), mergeInsertion("Hello world", 6, 11, "there"))
     }

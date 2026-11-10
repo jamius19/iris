@@ -6,9 +6,11 @@
 package dev.jamius.iris.overlay
 
 import android.animation.ValueAnimator
+import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
+import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
@@ -66,6 +68,8 @@ class BubbleOverlay(
     private var snapAnimator: ValueAnimator? = null
 
     init {
+        // DragHandler calls performClick() on a tap.
+        @SuppressLint("ClickableViewAccessibility")
         bubble.setOnTouchListener(DragHandler())
         bubble.setOnClickListener { onTap() }
     }
@@ -73,8 +77,12 @@ class BubbleOverlay(
     fun show() {
         if (bubbleShown) return
         placeBubble()
-        windowManager.addView(bubble, bubbleParams)
-        bubbleShown = true
+        try {
+            windowManager.addView(bubble, bubbleParams)
+            bubbleShown = true
+        } catch (e: WindowManager.BadTokenException) {
+            Log.w(TAG, "Bubble not shown", e) // The service is being torn down.
+        }
     }
 
     /** Hides the bubble and the panel. Listening state is left to the owner. */
@@ -97,8 +105,12 @@ class BubbleOverlay(
         // Placed once when added; updateWindows() moves it with the bubble.
         if (!panelShown) {
             placePanel()
-            windowManager.addView(panel, panelParams)
-            panelShown = true
+            try {
+                windowManager.addView(panel, panelParams)
+                panelShown = true
+            } catch (e: WindowManager.BadTokenException) {
+                Log.w(TAG, "Panel not shown", e) // The service is being torn down.
+            }
         }
         // Runs after the next layout pass, once the text layout and the panel's height are known.
         panel.post {
@@ -112,6 +124,11 @@ class BubbleOverlay(
         if (!panelShown) return
         windowManager.removeView(panel)
         panelShown = false
+    }
+
+    /** Whether [windowId] (an accessibility window id) is the bubble's or the panel's window. */
+    fun ownsWindow(windowId: Int): Boolean = listOf(bubble, panel).any {
+        it.isAttachedToWindow && it.createAccessibilityNodeInfo().windowId == windowId
     }
 
     /** Restores a persisted position. */
@@ -147,6 +164,8 @@ class BubbleOverlay(
         bubbleParams.y = clamp(yForFraction(yFraction, size, area), visible.top, visible.bottom, size)
     }
 
+    // LEFT/RIGHT are deliberate: overlay coordinates are display coordinates, not layout direction.
+    @SuppressLint("RtlHardcoded")
     private fun placePanel() {
         val bounds = windowManager.maximumWindowMetrics.bounds
         panel.maxWidth = (bounds.width() * PANEL_MAX_WIDTH_FRACTION).roundToInt()
@@ -244,6 +263,8 @@ class BubbleOverlay(
         }
     }
 
+    // LEFT is deliberate: overlay coordinates are display coordinates, not layout direction.
+    @SuppressLint("RtlHardcoded")
     private fun overlayParams(flags: Int) = WindowManager.LayoutParams(
         WindowManager.LayoutParams.WRAP_CONTENT,
         WindowManager.LayoutParams.WRAP_CONTENT,
@@ -258,6 +279,7 @@ class BubbleOverlay(
     }
 
     private companion object {
+        const val TAG = "BubbleOverlay"
         const val PANEL_MAX_LINES = 4
         const val PANEL_MAX_WIDTH_FRACTION = 0.7f
         const val SNAP_DURATION_MS = 150L

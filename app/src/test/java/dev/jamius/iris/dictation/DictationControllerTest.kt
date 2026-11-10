@@ -98,9 +98,31 @@ class DictationControllerTest {
     }
 
     @Test
-    fun tapWhileFinalizingCancelsToIdle() = runTest {
+    fun tapSoonAfterStopWhileFinalizingIsIgnored() = runTest {
+        val controller = controller(FakeStt {
+            delay(10_000)
+            "Hi"
+        })
+
+        controller.onTap()
+        runCurrent()
+        controller.onTap()
+        advanceTimeBy(150)
+        controller.onTap() // Double tap on stop.
+        assertEquals(DictationState.Finalizing("chunk 2"), controller.state.value)
+        advanceTimeBy(FINALIZE_TAP_GRACE_MS - 200)
+        controller.onTap()
+        assertEquals(DictationState.Finalizing("chunk 2"), controller.state.value)
+
+        advanceTimeBy(6_000)
+        assertEquals(DictationState.Done("Hi"), controller.state.value)
+        assertEquals(listOf("Hi"), finals)
+    }
+
+    @Test
+    fun tapWhileFinalizingStallsCancelsToIdle() = runTest {
         val stt = FakeStt {
-            delay(1_000)
+            delay(60_000)
             "discarded"
         }
         val controller = controller(stt)
@@ -108,7 +130,7 @@ class DictationControllerTest {
         controller.onTap()
         runCurrent()
         controller.onTap()
-        advanceTimeBy(150)
+        advanceTimeBy(FINALIZE_TAP_GRACE_MS + 1)
         assertEquals(DictationState.Finalizing("chunk 2"), controller.state.value)
         controller.onTap()
         assertEquals(DictationState.Idle, controller.state.value)

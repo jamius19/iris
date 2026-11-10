@@ -20,7 +20,8 @@ internal data class MergedText(val text: String, val cursor: Int, val insertion:
 /**
  * Replaces the [selectionStart]..[selectionEnd] range of [current] with [insertion] (the cursor, if they are
  * equal). An invalid selection (-1 or out of range) appends at the end. Adds a leading space after a
- * non-whitespace character (except an opening bracket or quote) and a trailing space before one.
+ * non-whitespace character (except an opening bracket or quote) and a trailing space before one (except a closing
+ * bracket or quote, or punctuation).
  */
 internal fun mergeInsertion(current: String, selectionStart: Int, selectionEnd: Int, insertion: String): MergedText {
     val valid = selectionStart in 0..current.length && selectionEnd in 0..current.length
@@ -30,7 +31,7 @@ internal fun mergeInsertion(current: String, selectionStart: Int, selectionEnd: 
     val before = current.getOrNull(start - 1)
     val after = current.getOrNull(end)
     val leading = if (before != null && !before.isWhitespace() && before !in OPENERS) " " else ""
-    val trailing = if (after != null && !after.isWhitespace()) " " else ""
+    val trailing = if (after != null && !after.isWhitespace() && after !in CLOSERS) " " else ""
     val inserted = leading + insertion + trailing
     return MergedText(
         current.substring(0, start) + inserted + current.substring(end),
@@ -40,6 +41,9 @@ internal fun mergeInsertion(current: String, selectionStart: Int, selectionEnd: 
 }
 
 private const val OPENERS = "([{\"'“"
+
+// ASCII " and ' are left out: they may be opening quotes.
+private const val CLOSERS = ".,!?:;)]}”’…"
 
 /** How [insertText] delivered the text. */
 internal enum class Insertion { INSERTED, COPIED }

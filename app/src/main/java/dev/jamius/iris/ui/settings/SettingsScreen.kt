@@ -157,11 +157,13 @@ private fun PermissionRows() {
         accessibilityEnabled = isAccessibilityServiceEnabled(context)
         micGranted = isMicGranted(context)
     }
+    // Dismissing the first-ever prompt also returns false with no rationale, so App info needs an earlier request.
+    var micRequested by rememberSaveable { mutableStateOf(false) }
     val micPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         micGranted = it
         // Permanently denied: the system returns false without a dialog, so send the user to App info instead.
         val activity = context as Activity
-        if (!it && !activity.shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO)) {
+        if (!it && !activity.shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO) && micRequested) {
             context.startActivity(
                 Intent(
                     android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
@@ -169,6 +171,7 @@ private fun PermissionRows() {
                 )
             )
         }
+        micRequested = true
     }
 
     SectionTitle("Permissions")

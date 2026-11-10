@@ -48,6 +48,9 @@ sealed interface DictationState {
 internal const val DONE_DISPLAY_MS = 1_500L
 internal const val ERROR_DISPLAY_MS = 3_000L
 
+/** After stop, taps are ignored this long while the transcript isn't final (e.g. a double tap on stop). */
+internal const val FINALIZE_TAP_GRACE_MS = 5_000L
+
 /**
  * Runs one dictation session at a time: Idle -> Listening -> Finalizing -> Done/Error -> Idle.
  * One instance per accessibility service; use on the main thread.
@@ -74,18 +77,25 @@ class DictationController(
     /** The first [onFinalTranscript] call of the session, once the transcript is final. */
     private var hook: Job? = null
 
+    /** Started on stop; once complete, a tap before the transcript is final cancels the session. */
+    private var tapGrace: Job? = null
+
     /**
      * Bubble tap: starts a session (also while a result is shown) and stops one that is listening. While
-     * finalizing: before the transcript is final, cancels the session (the escape if it stalls); after, skips
-     * cleanup so the raw transcript is inserted right away.
+     * finalizing: before the transcript is final, ignored for [FINALIZE_TAP_GRACE_MS] after stop, then cancels the
+     * session (the escape if it stalls); after, skips cleanup so the raw transcript is inserted right away.
      */
     fun onTap() {
         when (val state = _state.value) {
             is DictationState.Listening -> {
                 stopRequested = true
+                tapGrace = scope.launch { delay(FINALIZE_TAP_GRACE_MS) }
                 _state.value = DictationState.Finalizing(state.text)
             }
-            is DictationState.Finalizing -> hook?.cancel() ?: cancel()
+            is DictationState.Finalizing -> {
+                val hook = hook
+                if (hook != null) hook.cancel() else if (tapGrace?.isCompleted == true) cancel()
+            }
             else -> start()
         }
     }

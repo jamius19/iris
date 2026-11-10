@@ -18,9 +18,6 @@ interfaces so a new provider is just a new implementation.
 - All versions live in `gradle/libs.versions.toml`.
 
 ## Architecture
-Planned layout, being built in checkpoints on branch `feature/add-voice-dictation`. Check the tree for what
-exists before assuming a package is there.
-
 | Package | Responsibility |
 |---|---|
 | (root) | `IrisApp` (Application), `AppContainer` (manual DI), `MainActivity` (hosts settings UI) |
@@ -36,10 +33,14 @@ Overlay (`overlay`, View-based, not Compose: a Compose window in a service needs
 - `IrisAccessibilityService` re-checks `findFocus(FOCUS_INPUT)` on view-focused/window events and shows the
   bubble only for `isEditable && !isPassword` nodes outside Iris's own package. The node is kept in
   `focusedEditable` as the insertion target (call `refresh()` before use). IME bounds come from `windows`
-  (TYPE_INPUT_METHOD).
+  (TYPE_INPUT_METHOD). Window-change events from Iris's own overlay windows are skipped (`ownsWindow`). The
+  overlay is created only once the stored bubble position has loaded.
 - `BubbleOverlay` owns two `TYPE_ACCESSIBILITY_OVERLAY` windows (bubble + live-text panel), positioned in display
-  coordinates. API: `onTap` callback, `setListening(Boolean)`, `showText(String)`, `hideText()`. The service
-  renders `DictationState` onto it (`render()`); the bubble pulses only while Listening.
+  coordinates. API: `onTap`/`onMoved(side, yFraction)` callbacks, `show()`, `hide()`, `setListening(Boolean)`,
+  `showText(String)`, `hideText()`, `setPosition(side, yFraction)`, `setImeTop(Int?)`,
+  `onConfigurationChanged()`, `ownsWindow(windowId)`. `addView` failures (`BadTokenException` during teardown)
+  are logged and the view stays unadded. The service renders `DictationState` onto it (`render()`, also after
+  each `show()` so a re-shown bubble restores the panel); the bubble pulses only while Listening.
 - Bubble position persists as `Settings.bubbleSide` + `bubbleYFraction` (fraction of usable height, so it
   survives rotation). Placement math is in `BubbleGeometry.kt` (unit tested).
 
@@ -54,7 +55,8 @@ Dictation (CP3):
   `Idle -> Listening(text) -> Finalizing(text) -> Done(text, notice?) | Error(message) -> Idle` (Done shown 1.5 s,
   or 3 s with a notice, which the panel shows instead of the text; Error 3 s; blank transcript = Error
   "No speech detected"). Tap: start (also from Done/Error), stop in Listening; in Finalizing, before the
-  transcript is final: cancel to Idle (escape if STT stalls); after (hook running): skip cleanup (below). Stop ends
+  transcript is final: ignored for `FINALIZE_TAP_GRACE_MS` (5 s) after stop (a double tap on stop must not discard
+  the dictation), then cancel to Idle (escape if STT stalls); after (hook running): skip cleanup (below). Stop ends
   the audio flow after the chunk in progress (`transformWhile`). `cancel()` discards. `onFocusLost()` (the
   service's debounced focus-lost hide) cancels only while Listening: once stopped, the session always finishes.
   Service destroy cancels its scope. Errors other than `SttException`/`AudioCaptureException` are logged and shown
@@ -66,7 +68,8 @@ Dictation (CP3):
 
 Cleanup + insertion (CP4):
 - Cleanup runs only if `cleanupEnabled`, with the active prompt and `cleanupModel`; the panel shows
-  "Cleaning up…" (set directly on the overlay: nothing re-renders while Finalizing). `CleanupProvider.cleanup`
+  "Cleaning up…" (`render()` shows it for Finalizing while the service's `cleaningUp` flag is set; the hook
+  re-renders when setting it, since the state doesn't change). `CleanupProvider.cleanup`
   throws `CleanupException` (user-readable). Any cleanup failure (incl. missing Gateway key) inserts the raw
   transcript; Done's notice is the error plus "Inserted the original text" (or "Original copied to clipboard"),
   so dictation is never lost. Other unexpected cleanup exceptions are logged and treated the same.
@@ -78,7 +81,8 @@ Cleanup + insertion (CP4):
 - `overlay/TextInsertion.kt`: `mergeInsertion` (pure, unit tested) replaces the selection (or inserts at the
   cursor; invalid/-1 selection, either end, appends at the end; reversed selections are normalized). Adds a
   leading space after a non-whitespace char other than `( [ { " ' “`, and a trailing space before a
-  non-whitespace char. `insertText`: `refresh()` the node, text = "" if `isShowingHintText` or text equals
+  non-whitespace char other than `. , ! ? : ; ) ] } ” ’ …` (ASCII `"`/`'` still get one: they may be openers).
+  `insertText`: `refresh()` the node, text = "" if `isShowingHintText` or text equals
   `hintText`, `ACTION_SET_TEXT` with the merged text, then `ACTION_SET_SELECTION` to the end of the inserted text.
   If SET_TEXT returns false: clipboard + `ACTION_PASTE` of the same spaced text (previous clipboard not restored).
   No/stale node or paste fails: text left on the clipboard, notice "Copied to clipboard".
@@ -171,6 +175,17 @@ Both build and unit tests must pass before reporting work as done.
   virtual time would fire timeouts instantly). Controller tests use `kotlinx-coroutines-test` virtual time.
 - No Robolectric, no instrumented/UI tests. Overlay and UI are verified manually on device by the user.
 
+## Verify on device
+Not covered by unit tests; check on a real device (ideally more than one OEM) after overlay/audio/insertion changes:
+- Background mic capture works from the bubble while another app is in front. If silenced
+  (`isClientSilenced`), add the `microphone` FGS fallback (see Key decisions).
+- Insertion in a TextView `EditText`, a Compose `TextField` and a WebView `<input>`/`<textarea>`, incl. the cursor
+  mid-text and a selection; spacing and final cursor position are right.
+- Paste fallback: a field that rejects `ACTION_SET_TEXT` gets the text via clipboard + paste.
+- Rotation mid-dictation (Listening and Finalizing): bubble re-snaps, panel follows, session isn't lost.
+- Changing field during cleanup: text is copied with "field changed"; the panel is restored if the bubble re-shows.
+- Sideloaded APK: the accessibility toggle needs App info > ⋮ > "Allow restricted settings".
+
 ## Status
 Update this section as checkpoints land.
 
@@ -180,4 +195,4 @@ Update this section as checkpoints land.
 | CP2 | AccessibilityService + bubble overlay | Done |
 | CP3 | Audio capture + OpenAI Realtime STT | Done |
 | CP4 | Text insertion + LLM cleanup | Done |
-| CP5 | Polish | Planned |
+| CP5 | Polish | Done |

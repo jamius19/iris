@@ -50,6 +50,9 @@ class IrisAccessibilityService : AccessibilityService() {
     /** [focusedEditable] when the user tapped stop: the field the dictation is inserted into. */
     private var target: AccessibilityNodeInfo? = null
 
+    /** The final hook is running cleanup: [render] shows "Cleaning up…" for Finalizing. */
+    private var cleaningUp = false
+
     override fun onServiceConnected() {
         val container = (application as IrisApp).container
         val repository = container.settingsRepository
@@ -63,11 +66,12 @@ class IrisAccessibilityService : AccessibilityService() {
             },
             onMoved = { side, yFraction -> scope.launch { repository.setBubblePosition(side, yFraction) } }
         )
-        this.overlay = overlay
-        overlay.setImeTop(imeTop())
         scope.launch { dictation.state.collect(::render) }
         scope.launch {
             val settings = repository.settings.first()
+            // Only now, so nothing shows the bubble at the default position before the stored one loads.
+            this@IrisAccessibilityService.overlay = overlay
+            overlay.setImeTop(imeTop())
             overlay.setPosition(settings.bubbleSide, settings.bubbleYFraction)
             refreshFocus() // After the stored position loads, so the bubble doesn't jump.
         }
@@ -78,7 +82,8 @@ class IrisAccessibilityService : AccessibilityService() {
             refreshFocus()
             return
         }
-        // Skips changes Iris's own overlay causes (e.g. layout updates) and avoids needless IPC.
+        // Skips Iris's own overlay windows (e.g. the panel resizing as text streams in) to avoid needless IPC.
+        if (overlay?.ownsWindow(event.windowId) == true) return
         val changes = event.windowChanges
         if (changes and IME_CHANGES != 0) overlay?.setImeTop(imeTop())
         if (changes and FOCUS_CHANGES != 0) refreshFocus()
@@ -111,6 +116,7 @@ class IrisAccessibilityService : AccessibilityService() {
         if (node != null) {
             handler.removeCallbacks(hideBubble)
             overlay.show()
+            dictation?.let { render(it.state.value) } // Restores the panel if the bubble was hidden mid-session.
         } else if (!handler.hasCallbacks(hideBubble)) {
             handler.postDelayed(hideBubble, HIDE_DELAY_MS)
         }
@@ -123,7 +129,9 @@ class IrisAccessibilityService : AccessibilityService() {
         when (state) {
             DictationState.Idle -> overlay.hideText()
             is DictationState.Listening -> overlay.showText(state.text.ifEmpty { "Listening…" })
-            is DictationState.Finalizing -> overlay.showText(state.text.ifEmpty { "Finishing…" })
+            is DictationState.Finalizing -> overlay.showText(
+                if (cleaningUp) "Cleaning up…" else state.text.ifEmpty { "Finishing…" }
+            )
             is DictationState.Done -> overlay.showText(state.notice ?: state.text)
             is DictationState.Error -> overlay.showText(state.message)
         }
@@ -143,8 +151,9 @@ class IrisAccessibilityService : AccessibilityService() {
             val container = (application as IrisApp).container
             val settings = container.settingsRepository.settings.first()
             if (settings.cleanupEnabled && !skipCleanup) {
-                // State stays Finalizing (nothing re-renders) until this returns, so the status stays up.
-                overlay?.showText("Cleaning up…")
+                // State stays Finalizing (nothing re-renders on its own) until this returns, so the status stays up.
+                cleaningUp = true
+                dictation?.let { render(it.state.value) }
                 val prompt = settings.activePrompt ?: Settings.DEFAULT_PROMPT
                 try {
                     text = container.cleanup.cleanup(transcript, prompt.systemPrompt, settings.cleanupModel)
@@ -155,6 +164,8 @@ class IrisAccessibilityService : AccessibilityService() {
                 } catch (e: Exception) {
                     Log.e(TAG, "Cleanup failed", e)
                     cleanupError = "Cleanup failed"
+                } finally {
+                    cleaningUp = false
                 }
             }
             val target = target
