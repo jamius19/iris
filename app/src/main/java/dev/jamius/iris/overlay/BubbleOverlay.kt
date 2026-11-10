@@ -65,9 +65,6 @@ class BubbleOverlay(
     private var imeTop: Int? = null
     private var snapAnimator: ValueAnimator? = null
 
-    var isListening = false
-        private set
-
     init {
         bubble.setOnTouchListener(DragHandler())
         bubble.setOnClickListener { onTap() }
@@ -90,7 +87,6 @@ class BubbleOverlay(
     }
 
     fun setListening(listening: Boolean) {
-        isListening = listening
         bubble.listening = listening
     }
 

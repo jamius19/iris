@@ -14,6 +14,8 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import dev.jamius.iris.IrisApp
+import dev.jamius.iris.dictation.DictationController
+import dev.jamius.iris.dictation.DictationState
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
@@ -28,25 +30,32 @@ class IrisAccessibilityService : AccessibilityService() {
     private val scope = MainScope()
     private val handler = Handler(Looper.getMainLooper())
     private var overlay: BubbleOverlay? = null
+    private var dictation: DictationController? = null
 
     // Debounced so transient focus gaps (rotation, app transitions, WebViews) don't flicker the bubble.
-    // Listening state is deliberately untouched here: CP3's dictation controller decides what happens to an
-    // active session when focus is lost (hook it in this runnable).
-    private val hideBubble = Runnable { overlay?.hide() }
+    // Losing focus discards any active session: there is no field to insert into anymore.
+    private val hideBubble = Runnable {
+        dictation?.cancel()
+        overlay?.hide()
+    }
 
     /** The focused editable field the bubble is shown for. Call `refresh()` before acting on it. */
     var focusedEditable: AccessibilityNodeInfo? = null
         private set
 
     override fun onServiceConnected() {
-        val repository = (application as IrisApp).container.settingsRepository
+        val container = (application as IrisApp).container
+        val repository = container.settingsRepository
+        val dictation = container.dictationController(scope, ::onFinalTranscript)
+        this.dictation = dictation
         val overlay = BubbleOverlay(
             context = this,
-            onTap = ::toggleListening,
+            onTap = dictation::onTap,
             onMoved = { side, yFraction -> scope.launch { repository.setBubblePosition(side, yFraction) } }
         )
         this.overlay = overlay
         overlay.setImeTop(imeTop())
+        scope.launch { dictation.state.collect(::render) }
         scope.launch {
             val settings = repository.settings.first()
             overlay.setPosition(settings.bubbleSide, settings.bubbleYFraction)
@@ -76,8 +85,9 @@ class IrisAccessibilityService : AccessibilityService() {
         handler.removeCallbacks(hideBubble)
         overlay?.hide()
         overlay = null
+        dictation = null
         focusedEditable = null
-        scope.cancel()
+        scope.cancel() // Also cancels any dictation session, which releases the mic and closes the socket.
         super.onDestroy()
     }
 
@@ -95,12 +105,25 @@ class IrisAccessibilityService : AccessibilityService() {
         }
     }
 
-    // CP2 placeholder: a tap only toggles the visual state. CP3's dictation controller replaces this.
-    private fun toggleListening() {
+    private fun render(state: DictationState) {
         val overlay = overlay ?: return
-        overlay.setListening(!overlay.isListening)
-        if (overlay.isListening) overlay.showText("Listening…") else overlay.hideText()
+        // Finalizing stops the pulse while keeping the text, so it reads as "working on it".
+        overlay.setListening(state is DictationState.Listening)
+        when (state) {
+            DictationState.Idle -> overlay.hideText()
+            is DictationState.Listening -> overlay.showText(state.text.ifEmpty { "Listening…" })
+            is DictationState.Finalizing -> overlay.showText(state.text.ifEmpty { "Finishing…" })
+            is DictationState.Done -> overlay.showText(state.text)
+            is DictationState.Error -> overlay.showText(state.message)
+        }
     }
+
+    /**
+     * CP4 hook: called once with the final transcript of each successful session, inside the session (cancelled
+     * with it; exceptions end in Error).
+     * TODO(CP4): optional LLM cleanup, then insert at the cursor of [focusedEditable].
+     */
+    private suspend fun onFinalTranscript(text: String) = Unit
 
     private fun imeTop(): Int? = windows
         .firstOrNull { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }

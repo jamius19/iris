@@ -37,15 +37,45 @@ Overlay (`overlay`, View-based, not Compose: a Compose window in a service needs
   bubble only for `isEditable && !isPassword` nodes outside Iris's own package. The node is kept in
   `focusedEditable` for CP4 (call `refresh()` before use). IME bounds come from `windows` (TYPE_INPUT_METHOD).
 - `BubbleOverlay` owns two `TYPE_ACCESSIBILITY_OVERLAY` windows (bubble + live-text panel), positioned in display
-  coordinates. API for CP3: `onTap` callback, `setListening(Boolean)`, `isListening`, `showText(String)`,
-  `hideText()`. The CP2 placeholder wiring (tap toggles state, "Listening…") lives in the service.
+  coordinates. API: `onTap` callback, `setListening(Boolean)`, `showText(String)`, `hideText()`. The service
+  renders `DictationState` onto it (`render()`); the bubble pulses only while Listening.
 - Bubble position persists as `Settings.bubbleSide` + `bubbleYFraction` (fraction of usable height, so it
   survives rotation). Placement math is in `BubbleGeometry.kt` (unit tested).
+
+Dictation (CP3):
+- `audio.AudioRecorder.chunks()`: cold `Flow<ByteArray>`, 100 ms PCM16 chunks on `Dispatchers.IO`; each collection
+  opens the mic, cancellation releases it. Throws `AudioCaptureException` (user-readable) for missing permission,
+  init/start failure, or `activeRecordingConfiguration.isClientSilenced` (how blocked background capture shows up).
+- `stt.SpeechToTextProvider.transcribe(audio: Flow<ByteArray>, model, language, onPartial): String`. Streams until
+  `audio` completes, then finalizes and returns the final text; `onPartial` gets the whole live text; cancelling
+  the coroutine aborts. Failures are `SttException` with a user-readable message.
+- `dictation.DictationController` (one per service, main thread, built by `AppContainer.dictationController`):
+  `Idle -> Listening(text) -> Finalizing(text) -> Done(text) | Error(message) -> Idle` (Done shown 1.5 s, Error
+  3 s; blank transcript = Error "No speech detected"). Tap: start (also from Done/Error), stop in Listening,
+  cancel to Idle in Finalizing (escape if it stalls). Stop ends the audio flow after the chunk in progress
+  (`transformWhile`). `cancel()` discards; the service calls it from the debounced focus-lost hide. Service destroy
+  cancels its scope. Errors other than `SttException`/`AudioCaptureException` are logged and shown as
+  "Something went wrong".
+- CP4 hook: `suspend IrisAccessibilityService.onFinalTranscript(text)`, run inside the session (state still
+  Finalizing) before Done, so cancel/focus loss cancels it and its exceptions end in Error. Cleanup + insertion
+  go there.
 
 Providers (settings store a provider id for each):
 - STT: OpenAI Realtime API, transcription-only session over WebSocket. Audio is PCM16 mono 24 kHz, sent as
   base64 chunks via `input_audio_buffer.append`. On stop: commit the buffer, wait for the final transcript.
   Verify event names and session config against current OpenAI docs before changing protocol code.
+  Verified 2026-11-11 (`stt.openai.RealtimeProtocol.kt`) against
+  https://developers.openai.com/api/docs/guides/realtime-transcription and
+  https://developers.openai.com/api/reference/resources/realtime/client-events (`/server-events`):
+  connect `wss://api.openai.com/v1/realtime?intent=transcription` (no `model` param: that makes a conversation
+  session) with only `Authorization: Bearer <key>` (no `OpenAI-Beta` header in the GA docs); send
+  `session.update` `{session:{type:"transcription", audio:{input:{format:{type:"audio/pcm",rate:24000},
+  transcription:{model, languages?}, turn_detection:null}}}}`. Server events used: `input_audio_buffer.committed`
+  (item_id), `conversation.item.input_audio_transcription.delta` / `.completed` / `.failed`, `error` (all
+  `error` events are treated as fatal). Deltas concatenate per item_id; items join with spaces in first-seen
+  order; final = completed items once the committed item completes, then close 1000. The 10 s final timeout
+  starts only after OkHttp's send queue drains (`queueSize() == 0`, polled; max 60 s) so slow uplinks don't
+  time out.
   Default model `gpt-live-transcribe` (`gpt-4o-*-transcribe` are deprecated, shutdown 2027-02-26). It requires
   `turn_detection: null` (no server/semantic VAD) and takes `audio.input.transcription.languages: [..]` (array;
   never also send singular `language`). Settings store one optional code; the client wraps it into the array.
@@ -101,7 +131,8 @@ Both build and unit tests must pass before reporting work as done.
 ## Testing
 - JUnit4 unit tests for core logic only: settings serialization, request/response building and parsing,
   protocol event handling, state machine.
-- Use OkHttp MockWebServer for HTTP/WebSocket tests.
+- Use OkHttp MockWebServer (`mockwebserver3`) for HTTP/WebSocket tests, with `runBlocking` (real I/O; `runTest`
+  virtual time would fire timeouts instantly). Controller tests use `kotlinx-coroutines-test` virtual time.
 - No Robolectric, no instrumented/UI tests. Overlay and UI are verified manually on device by the user.
 
 ## Status
@@ -111,6 +142,6 @@ Update this section as checkpoints land.
 |---|---|---|
 | CP1 | Settings + secure API key storage | Done |
 | CP2 | AccessibilityService + bubble overlay | Done |
-| CP3 | Audio capture + OpenAI Realtime STT | Planned |
+| CP3 | Audio capture + OpenAI Realtime STT | Done |
 | CP4 | Text insertion + LLM cleanup | Planned |
 | CP5 | Polish | Planned |

@@ -8,8 +8,15 @@ package dev.jamius.iris
 import android.content.Context
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.preferencesDataStoreFile
+import dev.jamius.iris.audio.AudioRecorder
+import dev.jamius.iris.data.settings.Secret
 import dev.jamius.iris.data.settings.SecretStore
 import dev.jamius.iris.data.settings.SettingsRepository
+import dev.jamius.iris.dictation.DictationController
+import dev.jamius.iris.stt.SpeechToTextProvider
+import dev.jamius.iris.stt.openai.OpenAiRealtimeSpeechToText
+import kotlinx.coroutines.CoroutineScope
+import okhttp3.OkHttpClient
 
 /** Manual DI: app-wide singletons, created once by [IrisApp]. */
 class AppContainer(context: Context) {
@@ -22,5 +29,23 @@ class AppContainer(context: Context) {
     val settingsRepository = SettingsRepository(
         PreferenceDataStoreFactory.create { context.preferencesDataStoreFile("settings") },
         secretStore
+    )
+
+    private val httpClient = OkHttpClient()
+
+    private val audioRecorder = AudioRecorder(context)
+
+    private val speechToText: SpeechToTextProvider = OpenAiRealtimeSpeechToText(
+        httpClient,
+        apiKey = { secretStore.get(Secret.OPENAI_API_KEY) }
+    )
+
+    /** One per accessibility service; [scope] is the service's main-thread scope. */
+    fun dictationController(scope: CoroutineScope, onFinalTranscript: suspend (String) -> Unit) = DictationController(
+        scope = scope,
+        audio = audioRecorder.chunks(),
+        stt = speechToText,
+        settings = settingsRepository.settings,
+        onFinalTranscript = onFinalTranscript,
     )
 }
