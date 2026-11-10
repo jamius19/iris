@@ -61,7 +61,10 @@ class DictationControllerTest {
     private fun TestScope.controller(
         stt: SpeechToTextProvider,
         audio: Flow<ByteArray> = this@DictationControllerTest.audio,
-        onFinalTranscript: suspend (String) -> Unit = { finals += it },
+        onFinalTranscript: suspend (String, Boolean) -> DictationState.Done = { text, _ ->
+            finals += text
+            DictationState.Done(text)
+        },
     ) = DictationController(
         scope = backgroundScope,
         audio = audio,
@@ -219,12 +222,85 @@ class DictationControllerTest {
 
     @Test
     fun finalTranscriptHookExceptionShowsGenericError() = runTest {
-        val controller = controller(FakeStt { "Hi" }, onFinalTranscript = { throw IllegalStateException("boom") })
+        val controller = controller(
+            FakeStt { "Hi" },
+            onFinalTranscript = { _, _ -> throw IllegalStateException("boom") }
+        )
 
         controller.onTap()
         runCurrent()
         controller.onTap()
         advanceTimeBy(101)
         assertEquals(DictationState.Error("Something went wrong"), controller.state.value)
+    }
+
+    @Test
+    fun doneWithNoticeShowsItForLonger() = runTest {
+        val done = DictationState.Done("Hi", notice = "Copied to clipboard")
+        val controller = controller(FakeStt { "Hi" }, onFinalTranscript = { _, _ -> done })
+
+        controller.onTap()
+        runCurrent()
+        controller.onTap()
+        advanceTimeBy(101)
+        assertEquals(done, controller.state.value)
+
+        advanceTimeBy(DONE_DISPLAY_MS + 1)
+        assertEquals(done, controller.state.value)
+        advanceTimeBy(ERROR_DISPLAY_MS - DONE_DISPLAY_MS)
+        assertEquals(DictationState.Idle, controller.state.value)
+    }
+
+    @Test
+    fun focusLostWhileListeningDiscardsSession() = runTest {
+        val controller = controller(FakeStt { "discarded" })
+
+        controller.onTap()
+        runCurrent()
+        controller.onFocusLost()
+        runCurrent()
+        assertEquals(DictationState.Idle, controller.state.value)
+        assertTrue(audioReleased)
+        advanceTimeBy(10_000)
+        assertTrue(finals.isEmpty())
+    }
+
+    @Test
+    fun focusLostWhileFinalizingFinishesSession() = runTest {
+        val controller = controller(FakeStt {
+            delay(1_000)
+            "Hi"
+        })
+
+        controller.onTap()
+        runCurrent()
+        controller.onTap()
+        advanceTimeBy(150)
+        controller.onFocusLost()
+        assertEquals(DictationState.Finalizing("chunk 2"), controller.state.value)
+
+        advanceTimeBy(1_000)
+        assertEquals(DictationState.Done("Hi"), controller.state.value)
+        assertEquals(listOf("Hi"), finals)
+    }
+
+    @Test
+    fun tapDuringCleanupInsertsRawTranscript() = runTest {
+        val calls = mutableListOf<Pair<String, Boolean>>()
+        val controller = controller(FakeStt { "Hi" }, onFinalTranscript = { text, skipCleanup ->
+            calls += text to skipCleanup
+            if (!skipCleanup) delay(1_000) // Cleanup.
+            DictationState.Done(if (skipCleanup) text else "Cleaned")
+        })
+
+        controller.onTap()
+        runCurrent()
+        controller.onTap()
+        advanceTimeBy(150)
+        assertTrue(controller.state.value is DictationState.Finalizing)
+        controller.onTap()
+        runCurrent()
+        assertEquals(DictationState.Done("Hi"), controller.state.value)
+        assertEquals(listOf("Hi" to false, "Hi" to true), calls)
     }
 }

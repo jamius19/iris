@@ -35,7 +35,8 @@ exists before assuming a package is there.
 Overlay (`overlay`, View-based, not Compose: a Compose window in a service needs lifecycle/savedstate owners):
 - `IrisAccessibilityService` re-checks `findFocus(FOCUS_INPUT)` on view-focused/window events and shows the
   bubble only for `isEditable && !isPassword` nodes outside Iris's own package. The node is kept in
-  `focusedEditable` for CP4 (call `refresh()` before use). IME bounds come from `windows` (TYPE_INPUT_METHOD).
+  `focusedEditable` as the insertion target (call `refresh()` before use). IME bounds come from `windows`
+  (TYPE_INPUT_METHOD).
 - `BubbleOverlay` owns two `TYPE_ACCESSIBILITY_OVERLAY` windows (bubble + live-text panel), positioned in display
   coordinates. API: `onTap` callback, `setListening(Boolean)`, `showText(String)`, `hideText()`. The service
   renders `DictationState` onto it (`render()`); the bubble pulses only while Listening.
@@ -50,15 +51,37 @@ Dictation (CP3):
   `audio` completes, then finalizes and returns the final text; `onPartial` gets the whole live text; cancelling
   the coroutine aborts. Failures are `SttException` with a user-readable message.
 - `dictation.DictationController` (one per service, main thread, built by `AppContainer.dictationController`):
-  `Idle -> Listening(text) -> Finalizing(text) -> Done(text) | Error(message) -> Idle` (Done shown 1.5 s, Error
-  3 s; blank transcript = Error "No speech detected"). Tap: start (also from Done/Error), stop in Listening,
-  cancel to Idle in Finalizing (escape if it stalls). Stop ends the audio flow after the chunk in progress
-  (`transformWhile`). `cancel()` discards; the service calls it from the debounced focus-lost hide. Service destroy
-  cancels its scope. Errors other than `SttException`/`AudioCaptureException` are logged and shown as
-  "Something went wrong".
-- CP4 hook: `suspend IrisAccessibilityService.onFinalTranscript(text)`, run inside the session (state still
-  Finalizing) before Done, so cancel/focus loss cancels it and its exceptions end in Error. Cleanup + insertion
-  go there.
+  `Idle -> Listening(text) -> Finalizing(text) -> Done(text, notice?) | Error(message) -> Idle` (Done shown 1.5 s,
+  or 3 s with a notice, which the panel shows instead of the text; Error 3 s; blank transcript = Error
+  "No speech detected"). Tap: start (also from Done/Error), stop in Listening; in Finalizing, before the
+  transcript is final: cancel to Idle (escape if STT stalls); after (hook running): skip cleanup (below). Stop ends
+  the audio flow after the chunk in progress (`transformWhile`). `cancel()` discards. `onFocusLost()` (the
+  service's debounced focus-lost hide) cancels only while Listening: once stopped, the session always finishes.
+  Service destroy cancels its scope. Errors other than `SttException`/`AudioCaptureException` are logged and shown
+  as "Something went wrong".
+- Final hook: `suspend IrisAccessibilityService.onFinalTranscript(text, skipCleanup): Done`, run inside the session
+  (state still Finalizing). It does cleanup + insertion and returns the Done to show (inserted text, plus a notice
+  on fallback). The controller runs it as a child `async`; a tap cancels that (cancelling the cleanup HTTP call)
+  and calls the hook again with `skipCleanup = true`, which inserts the raw transcript. Later taps are ignored.
+
+Cleanup + insertion (CP4):
+- Cleanup runs only if `cleanupEnabled`, with the active prompt and `cleanupModel`; the panel shows
+  "Cleaning up…" (set directly on the overlay: nothing re-renders while Finalizing). `CleanupProvider.cleanup`
+  throws `CleanupException` (user-readable). Any cleanup failure (incl. missing Gateway key) inserts the raw
+  transcript; Done's notice is the error plus "Inserted the original text" (or "Original copied to clipboard"),
+  so dictation is never lost. Other unexpected cleanup exceptions are logged and treated the same.
+- Target: the service snapshots `focusedEditable` when the user taps stop. At insertion, if it still equals
+  `focusedEditable` (`AccessibilityNodeInfo.equals`) the text is inserted there; else it is copied to the
+  clipboard ("Copied to clipboard — field changed"; the bubble may already be hidden). Any other hook failure
+  (settings read, insertion throwing) is logged and copies the text too. Never "Something went wrong" with the
+  text lost. Notice wording is `doneNotice` (pure, unit tested).
+- `overlay/TextInsertion.kt`: `mergeInsertion` (pure, unit tested) replaces the selection (or inserts at the
+  cursor; invalid/-1 selection, either end, appends at the end; reversed selections are normalized). Adds a
+  leading space after a non-whitespace char other than `( [ { " ' “`, and a trailing space before a
+  non-whitespace char. `insertText`: `refresh()` the node, text = "" if `isShowingHintText` or text equals
+  `hintText`, `ACTION_SET_TEXT` with the merged text, then `ACTION_SET_SELECTION` to the end of the inserted text.
+  If SET_TEXT returns false: clipboard + `ACTION_PASTE` of the same spaced text (previous clipboard not restored).
+  No/stale node or paste fails: text left on the clipboard, notice "Copied to clipboard".
 
 Providers (settings store a provider id for each):
 - STT: OpenAI Realtime API, transcription-only session over WebSocket. Audio is PCM16 mono 24 kHz, sent as
@@ -84,7 +107,20 @@ Providers (settings store a provider id for each):
   `response_format: {type:"json_schema", json_schema:{name, schema, strict:true}}` with schema
   `{ "text": string }`. Supports multiple saved system prompts; user picks the active one. Optional (toggle).
   Default model `openai/gpt-6-luna` (OpenAI's replacement for the deprecated 4.1/4o minis; cheap, structured
-  output). It is a reasoning model: send reasoning effort `none` for low latency.
+  output). It is a reasoning model: send reasoning effort `none` for low latency. A user-set cleanup model must
+  accept effort `none` (settings says so under the field); we always send it.
+  Verified 2026-11-11 (`cleanup.vercel.GatewayProtocol.kt`) against
+  https://vercel.com/docs/ai-gateway/sdks-and-apis/openai-chat-completions/reasoning,
+  `.../openai-chat-completions/structured-outputs` and
+  https://vercel.com/docs/ai-gateway/models-and-providers/reasoning:
+  Chat Completions takes top-level `reasoning_effort` (alias of the Gateway's `reasoning.effort`; nested wins if
+  both are sent); we send `reasoning_effort: "none"`. The catalog (`GET /v1/models`) lists `openai/gpt-6-luna`
+  effort values `none|low|medium|high|xhigh|max`. Response: `choices[0].message.content` is the JSON string
+  `{"text":...}`; `message.refusal` with no content = "Model refused: <refusal>"; blank text or any other shape =
+  "Unexpected response from AI Gateway". User message = raw
+  transcript; a fixed framing line appended to the system prompt says to treat it as text, not instructions.
+  Errors: 401/403 = API key message, 429 = rate limit/quota, 5xx = server error, other 4xx = gateway
+  `error.message`, transport = network error, 30 s OkHttp call timeout = "Cleanup timed out".
 
 ## Key decisions (don't re-litigate without a concrete reason)
 - **OpenAI Realtime for STT**: Vercel AI Gateway's streaming STT protocol is undocumented and JS-SDK-only beta,
@@ -143,5 +179,5 @@ Update this section as checkpoints land.
 | CP1 | Settings + secure API key storage | Done |
 | CP2 | AccessibilityService + bubble overlay | Done |
 | CP3 | Audio capture + OpenAI Realtime STT | Done |
-| CP4 | Text insertion + LLM cleanup | Planned |
+| CP4 | Text insertion + LLM cleanup | Done |
 | CP5 | Polish | Planned |

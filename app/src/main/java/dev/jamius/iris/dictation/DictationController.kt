@@ -13,7 +13,10 @@ import dev.jamius.iris.stt.SttException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -32,8 +35,11 @@ sealed interface DictationState {
     /** Recording stopped; waiting for the final transcript. */
     data class Finalizing(val text: String) : DictationState
 
-    /** Shown briefly, then back to [Idle]. */
-    data class Done(val text: String) : DictationState
+    /**
+     * Shown briefly, then back to [Idle]. [text] is what was inserted; [notice], if set, is shown instead and for
+     * longer (e.g. cleanup failed, or the text was only copied to the clipboard).
+     */
+    data class Done(val text: String, val notice: String? = null) : DictationState
 
     /** Shown for a few seconds, then back to [Idle]. [message] is user-readable. */
     data class Error(val message: String) : DictationState
@@ -47,15 +53,17 @@ internal const val ERROR_DISPLAY_MS = 3_000L
  * One instance per accessibility service; use on the main thread.
  *
  * @param audio cold flow; each collection records a new session's audio.
- * @param onFinalTranscript called once per successful session with the final text, before Done. It runs inside
- *   the session (still Finalizing): cancelling the session cancels it, and its exceptions end in Error.
+ * @param onFinalTranscript called with the final text of each successful session; returns the
+ *   [DictationState.Done] to show. It runs inside the session (still Finalizing): cancelling the session cancels
+ *   it, and its exceptions end in Error. A tap while it runs cancels it and calls it again with
+ *   `skipCleanup = true`.
  */
 class DictationController(
     private val scope: CoroutineScope,
     private val audio: Flow<ByteArray>,
     private val stt: SpeechToTextProvider,
     private val settings: Flow<Settings>,
-    private val onFinalTranscript: suspend (String) -> Unit,
+    private val onFinalTranscript: suspend (transcript: String, skipCleanup: Boolean) -> DictationState.Done,
 ) {
     private val _state = MutableStateFlow<DictationState>(DictationState.Idle)
     val state: StateFlow<DictationState> = _state.asStateFlow()
@@ -63,9 +71,13 @@ class DictationController(
     private var session: Job? = null
     private var stopRequested = false
 
+    /** The first [onFinalTranscript] call of the session, once the transcript is final. */
+    private var hook: Job? = null
+
     /**
-     * Bubble tap: starts a session (also while a result is shown), stops one that is listening, and cancels one
-     * that is finalizing (the escape if finalizing stalls).
+     * Bubble tap: starts a session (also while a result is shown) and stops one that is listening. While
+     * finalizing: before the transcript is final, cancels the session (the escape if it stalls); after, skips
+     * cleanup so the raw transcript is inserted right away.
      */
     fun onTap() {
         when (val state = _state.value) {
@@ -73,21 +85,28 @@ class DictationController(
                 stopRequested = true
                 _state.value = DictationState.Finalizing(state.text)
             }
-            is DictationState.Finalizing -> cancel()
+            is DictationState.Finalizing -> hook?.cancel() ?: cancel()
             else -> start()
         }
+    }
+
+    /** The field lost focus: discards a session that is still listening. One already stopped runs to the end. */
+    fun onFocusLost() {
+        if (_state.value is DictationState.Listening) cancel()
     }
 
     /** Cancels any session, discarding its result, and returns to Idle. */
     fun cancel() {
         session?.cancel()
         session = null
+        hook = null
         _state.value = DictationState.Idle
     }
 
     private fun start() {
         session?.cancel()
         stopRequested = false
+        hook = null
         _state.value = DictationState.Listening("")
         session = scope.launch {
             val result = try {
@@ -101,8 +120,7 @@ class DictationController(
                 if (text.isBlank()) {
                     DictationState.Error("No speech detected")
                 } else {
-                    onFinalTranscript(text)
-                    DictationState.Done(text)
+                    finish(text)
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -115,8 +133,21 @@ class DictationController(
                 }
             }
             _state.value = result
-            delay(if (result is DictationState.Done) DONE_DISPLAY_MS else ERROR_DISPLAY_MS)
+            val brief = result is DictationState.Done && result.notice == null
+            delay(if (brief) DONE_DISPLAY_MS else ERROR_DISPLAY_MS)
             _state.value = DictationState.Idle
+        }
+    }
+
+    /** Runs [onFinalTranscript]; if a tap cancels it (see [onTap]), runs it again with `skipCleanup = true`. */
+    private suspend fun finish(text: String): DictationState.Done = coroutineScope {
+        val first = async { onFinalTranscript(text, false) }
+        hook = first
+        try {
+            first.await()
+        } catch (e: CancellationException) {
+            ensureActive() // Rethrows if the session itself was cancelled.
+            onFinalTranscript(text, true)
         }
     }
 

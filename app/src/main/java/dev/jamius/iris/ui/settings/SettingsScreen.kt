@@ -112,6 +112,7 @@ fun SettingsScreen(repository: SettingsRepository, modifier: Modifier = Modifier
         SavableTextField(
             label = "Model",
             value = settings.cleanupModel,
+            supportingText = "Model must support reasoning effort 'none'",
             onSave = { scope.launch { repository.setCleanupModel(it) } }
         )
         Text("Prompts", style = MaterialTheme.typography.titleSmall)

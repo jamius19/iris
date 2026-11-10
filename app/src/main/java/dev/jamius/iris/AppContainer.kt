@@ -9,10 +9,13 @@ import android.content.Context
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.preferencesDataStoreFile
 import dev.jamius.iris.audio.AudioRecorder
+import dev.jamius.iris.cleanup.CleanupProvider
+import dev.jamius.iris.cleanup.vercel.VercelGatewayCleanup
 import dev.jamius.iris.data.settings.Secret
 import dev.jamius.iris.data.settings.SecretStore
 import dev.jamius.iris.data.settings.SettingsRepository
 import dev.jamius.iris.dictation.DictationController
+import dev.jamius.iris.dictation.DictationState
 import dev.jamius.iris.stt.SpeechToTextProvider
 import dev.jamius.iris.stt.openai.OpenAiRealtimeSpeechToText
 import kotlinx.coroutines.CoroutineScope
@@ -40,8 +43,16 @@ class AppContainer(context: Context) {
         apiKey = { secretStore.get(Secret.OPENAI_API_KEY) }
     )
 
+    val cleanup: CleanupProvider = VercelGatewayCleanup(
+        httpClient,
+        apiKey = { secretStore.get(Secret.GATEWAY_API_KEY) }
+    )
+
     /** One per accessibility service; [scope] is the service's main-thread scope. */
-    fun dictationController(scope: CoroutineScope, onFinalTranscript: suspend (String) -> Unit) = DictationController(
+    fun dictationController(
+        scope: CoroutineScope,
+        onFinalTranscript: suspend (transcript: String, skipCleanup: Boolean) -> DictationState.Done,
+    ) = DictationController(
         scope = scope,
         audio = audioRecorder.chunks(),
         stt = speechToText,

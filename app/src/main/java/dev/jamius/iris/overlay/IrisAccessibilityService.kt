@@ -10,12 +10,16 @@ import android.content.res.Configuration
 import android.graphics.Rect
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import dev.jamius.iris.IrisApp
+import dev.jamius.iris.cleanup.CleanupException
+import dev.jamius.iris.data.settings.Settings
 import dev.jamius.iris.dictation.DictationController
 import dev.jamius.iris.dictation.DictationState
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
@@ -33,15 +37,18 @@ class IrisAccessibilityService : AccessibilityService() {
     private var dictation: DictationController? = null
 
     // Debounced so transient focus gaps (rotation, app transitions, WebViews) don't flicker the bubble.
-    // Losing focus discards any active session: there is no field to insert into anymore.
+    // Losing focus discards a session that is still listening; a stopped one finishes (copied to the clipboard).
     private val hideBubble = Runnable {
-        dictation?.cancel()
+        dictation?.onFocusLost()
         overlay?.hide()
     }
 
     /** The focused editable field the bubble is shown for. Call `refresh()` before acting on it. */
     var focusedEditable: AccessibilityNodeInfo? = null
         private set
+
+    /** [focusedEditable] when the user tapped stop: the field the dictation is inserted into. */
+    private var target: AccessibilityNodeInfo? = null
 
     override fun onServiceConnected() {
         val container = (application as IrisApp).container
@@ -50,7 +57,10 @@ class IrisAccessibilityService : AccessibilityService() {
         this.dictation = dictation
         val overlay = BubbleOverlay(
             context = this,
-            onTap = dictation::onTap,
+            onTap = {
+                if (dictation.state.value is DictationState.Listening) target = focusedEditable
+                dictation.onTap()
+            },
             onMoved = { side, yFraction -> scope.launch { repository.setBubblePosition(side, yFraction) } }
         )
         this.overlay = overlay
@@ -87,6 +97,7 @@ class IrisAccessibilityService : AccessibilityService() {
         overlay = null
         dictation = null
         focusedEditable = null
+        target = null
         scope.cancel() // Also cancels any dictation session, which releases the mic and closes the socket.
         super.onDestroy()
     }
@@ -113,23 +124,63 @@ class IrisAccessibilityService : AccessibilityService() {
             DictationState.Idle -> overlay.hideText()
             is DictationState.Listening -> overlay.showText(state.text.ifEmpty { "Listening…" })
             is DictationState.Finalizing -> overlay.showText(state.text.ifEmpty { "Finishing…" })
-            is DictationState.Done -> overlay.showText(state.text)
+            is DictationState.Done -> overlay.showText(state.notice ?: state.text)
             is DictationState.Error -> overlay.showText(state.message)
         }
     }
 
     /**
-     * CP4 hook: called once with the final transcript of each successful session, inside the session (cancelled
-     * with it; exceptions end in Error).
-     * TODO(CP4): optional LLM cleanup, then insert at the cursor of [focusedEditable].
+     * Called with the final transcript of each successful session, inside the session (cancelled with it). Runs the
+     * optional LLM cleanup (unless [skipCleanup]), then inserts at the cursor of [target] if it still has focus,
+     * else copies to the clipboard. A failed cleanup inserts the original transcript, and any other failure copies
+     * the text, so the dictation is never lost.
      */
-    private suspend fun onFinalTranscript(text: String) = Unit
+    private suspend fun onFinalTranscript(transcript: String, skipCleanup: Boolean): DictationState.Done {
+        var text = transcript
+        var cleanupError: String? = null
+        var targetFocused = false
+        val insertion = try {
+            val container = (application as IrisApp).container
+            val settings = container.settingsRepository.settings.first()
+            if (settings.cleanupEnabled && !skipCleanup) {
+                // State stays Finalizing (nothing re-renders) until this returns, so the status stays up.
+                overlay?.showText("Cleaning up…")
+                val prompt = settings.activePrompt ?: Settings.DEFAULT_PROMPT
+                try {
+                    text = container.cleanup.cleanup(transcript, prompt.systemPrompt, settings.cleanupModel)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: CleanupException) {
+                    cleanupError = e.message
+                } catch (e: Exception) {
+                    Log.e(TAG, "Cleanup failed", e)
+                    cleanupError = "Cleanup failed"
+                }
+            }
+            val target = target
+            targetFocused = target != null && target == focusedEditable
+            if (targetFocused) {
+                insertText(this, target, text)
+            } else {
+                copyToClipboard(this, text)
+                Insertion.COPIED
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "Delivering the dictation failed", e)
+            copyToClipboard(this, text)
+            null
+        }
+        return DictationState.Done(text, doneNotice(cleanupError, targetFocused, insertion))
+    }
 
     private fun imeTop(): Int? = windows
         .firstOrNull { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
         ?.let { window -> Rect().also(window::getBoundsInScreen).top }
 
     private companion object {
+        const val TAG = "IrisAccessibilityService"
         const val HIDE_DELAY_MS = 300L
         const val IME_CHANGES = AccessibilityEvent.WINDOWS_CHANGE_ADDED or
             AccessibilityEvent.WINDOWS_CHANGE_REMOVED or
