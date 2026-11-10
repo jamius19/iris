@@ -50,6 +50,8 @@ class SettingsMappingTest {
         assertEquals(Settings.DEFAULT_PROMPT, settings.activePrompt)
         assertFalse(settings.openAiKeySet)
         assertFalse(settings.gatewayKeySet)
+        assertEquals(Settings.DEFAULT_BUBBLE_SIDE, settings.bubbleSide)
+        assertEquals(Settings.DEFAULT_BUBBLE_Y_FRACTION, settings.bubbleYFraction)
     }
 
     @Test
@@ -61,6 +63,8 @@ class SettingsMappingTest {
             Keys.CLEANUP_MODEL to "google/gemini-2.5-flash",
             Keys.PROMPTS to encodePrompts(prompts),
             Keys.ACTIVE_PROMPT_ID to "b",
+            Keys.BUBBLE_SIDE to "LEFT",
+            Keys.BUBBLE_Y_FRACTION to 0.75f,
         )
 
         val settings = prefs.toSettings(setOf(Secret.GATEWAY_API_KEY))
@@ -73,6 +77,8 @@ class SettingsMappingTest {
         assertEquals(prompts[1], settings.activePrompt)
         assertFalse(settings.openAiKeySet)
         assertTrue(settings.gatewayKeySet)
+        assertEquals(BubbleSide.LEFT, settings.bubbleSide)
+        assertEquals(0.75f, settings.bubbleYFraction)
     }
 
     @Test

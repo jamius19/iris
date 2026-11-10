@@ -14,6 +14,8 @@ data class CleanupPrompt(
     val systemPrompt: String,
 )
 
+enum class BubbleSide { LEFT, RIGHT }
+
 data class Settings(
     val sttProviderId: String,
     val sttModel: String,
@@ -27,6 +29,10 @@ data class Settings(
     val activePrompt: CleanupPrompt?,
     val openAiKeySet: Boolean,
     val gatewayKeySet: Boolean,
+    /** Screen edge the overlay bubble is snapped to. */
+    val bubbleSide: BubbleSide,
+    /** Bubble's vertical position as a fraction (0 = top, 1 = bottom) of the usable screen height. */
+    val bubbleYFraction: Float,
 ) {
     companion object {
         const val STT_PROVIDER_OPENAI = "openai"
@@ -34,6 +40,9 @@ data class Settings(
 
         const val DEFAULT_STT_MODEL = "gpt-live-transcribe"
         const val DEFAULT_CLEANUP_MODEL = "openai/gpt-6-luna"
+
+        val DEFAULT_BUBBLE_SIDE = BubbleSide.RIGHT
+        const val DEFAULT_BUBBLE_Y_FRACTION = 0.4f
 
         val DEFAULT_PROMPT = CleanupPrompt(
             id = "default",

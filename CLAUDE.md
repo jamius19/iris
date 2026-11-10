@@ -32,6 +32,16 @@ exists before assuming a package is there.
 | `dictation` | Session state machine/controller: audio -> STT -> cleanup -> insertion |
 | `overlay` | AccessibilityService, bubble overlay view, live-text panel |
 
+Overlay (`overlay`, View-based, not Compose: a Compose window in a service needs lifecycle/savedstate owners):
+- `IrisAccessibilityService` re-checks `findFocus(FOCUS_INPUT)` on view-focused/window events and shows the
+  bubble only for `isEditable && !isPassword` nodes outside Iris's own package. The node is kept in
+  `focusedEditable` for CP4 (call `refresh()` before use). IME bounds come from `windows` (TYPE_INPUT_METHOD).
+- `BubbleOverlay` owns two `TYPE_ACCESSIBILITY_OVERLAY` windows (bubble + live-text panel), positioned in display
+  coordinates. API for CP3: `onTap` callback, `setListening(Boolean)`, `isListening`, `showText(String)`,
+  `hideText()`. The CP2 placeholder wiring (tap toggles state, "Listening…") lives in the service.
+- Bubble position persists as `Settings.bubbleSide` + `bubbleYFraction` (fraction of usable height, so it
+  survives rotation). Placement math is in `BubbleGeometry.kt` (unit tested).
+
 Providers (settings store a provider id for each):
 - STT: OpenAI Realtime API, transcription-only session over WebSocket. Audio is PCM16 mono 24 kHz, sent as
   base64 chunks via `input_audio_buffer.append`. On stop: commit the buffer, wait for the final transcript.
@@ -53,6 +63,12 @@ Providers (settings store a provider id for each):
   persisted in DataStore. Do NOT use the deprecated `androidx.security:security-crypto`.
 - **Insertion at cursor via accessibility actions**: merge with existing text using `ACTION_SET_TEXT` + set
   selection; fall back to clipboard + `ACTION_PASTE`.
+- **Mic capture from the AccessibilityService, no foreground service**. AOSP binds accessibility services with
+  `BIND_INCLUDE_CAPABILITIES` (`AccessibilityServiceConnection.bindLocked`), so system_server's process
+  capabilities, incl. `FOREGROUND_MICROPHONE`, propagate to the app while the service is enabled. AOSP
+  `AudioPolicyService` also allows capture by an accessibility service with `AudioSource.VOICE_RECOGNITION`:
+  CP3 must record with that source. Still unverified on real devices/OEMs. Fallback if capture is silenced:
+  start a `microphone` FGS from the bubble tap. Android 17 (target 37) background-audio rules cover playback/focus.
 - **Only two abstractions**: `SpeechToTextProvider` and `CleanupProvider`. No others without a reason.
 
 ## Commands
@@ -94,7 +110,7 @@ Update this section as checkpoints land.
 | Checkpoint | Scope | State |
 |---|---|---|
 | CP1 | Settings + secure API key storage | Done |
-| CP2 | AccessibilityService + bubble overlay | Planned |
+| CP2 | AccessibilityService + bubble overlay | Done |
 | CP3 | Audio capture + OpenAI Realtime STT | Planned |
 | CP4 | Text insertion + LLM cleanup | Planned |
 | CP5 | Polish | Planned |

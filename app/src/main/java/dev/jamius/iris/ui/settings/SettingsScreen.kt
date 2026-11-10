@@ -5,6 +5,16 @@
 
 package dev.jamius.iris.ui.settings
 
+import android.Manifest
+import android.accessibilityservice.AccessibilityServiceInfo
+import android.app.Activity
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.view.accessibility.AccessibilityManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -32,12 +42,16 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import dev.jamius.iris.data.settings.CleanupPrompt
 import dev.jamius.iris.data.settings.Secret
 import dev.jamius.iris.data.settings.SettingsRepository
+import dev.jamius.iris.overlay.IrisAccessibilityService
 import kotlinx.coroutines.launch
 import java.util.UUID
 
@@ -55,7 +69,7 @@ fun SettingsScreen(repository: SettingsRepository, modifier: Modifier = Modifier
     ) {
         Text("Iris settings", style = MaterialTheme.typography.headlineSmall)
 
-        // Checkpoint 2: add "Accessibility service" and "Microphone permission" status rows here.
+        PermissionRows()
 
         SectionTitle("API keys")
         ApiKeyField(
@@ -131,6 +145,88 @@ fun SettingsScreen(repository: SettingsRepository, modifier: Modifier = Modifier
         )
     }
 }
+
+/** Accessibility service and microphone status, re-checked whenever the screen resumes. */
+@Composable
+private fun PermissionRows() {
+    val context = LocalContext.current
+    var accessibilityEnabled by remember { mutableStateOf(isAccessibilityServiceEnabled(context)) }
+    var micGranted by remember { mutableStateOf(isMicGranted(context)) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        accessibilityEnabled = isAccessibilityServiceEnabled(context)
+        micGranted = isMicGranted(context)
+    }
+    val micPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        micGranted = it
+        // Permanently denied: the system returns false without a dialog, so send the user to App info instead.
+        val activity = context as Activity
+        if (!it && !activity.shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO)) {
+            context.startActivity(
+                Intent(
+                    android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.fromParts("package", context.packageName, null)
+                )
+            )
+        }
+    }
+
+    SectionTitle("Permissions")
+    StatusRow(
+        label = "Accessibility service",
+        status = if (accessibilityEnabled) "Enabled" else "Disabled",
+        ok = accessibilityEnabled,
+        supportingText = if (accessibilityEnabled) {
+            null
+        } else {
+            "If the toggle is greyed out, open App info for Iris, tap ⋮ and choose \"Allow restricted settings\"."
+        },
+        actionLabel = "Open settings",
+        onAction = {
+            context.startActivity(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        }
+    )
+    StatusRow(
+        label = "Microphone permission",
+        status = if (micGranted) "Granted" else "Denied",
+        ok = micGranted,
+        actionLabel = "Grant",
+        onAction = if (micGranted) null else ({ micPermission.launch(Manifest.permission.RECORD_AUDIO) })
+    )
+}
+
+@Composable
+private fun StatusRow(
+    label: String,
+    status: String,
+    ok: Boolean,
+    actionLabel: String,
+    onAction: (() -> Unit)?,
+    supportingText: String? = null,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(label)
+            Text(
+                status,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+            )
+            supportingText?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+        }
+        onAction?.let { OutlinedButton(onClick = it) { Text(actionLabel) } }
+    }
+}
+
+private fun isAccessibilityServiceEnabled(context: Context): Boolean =
+    context.getSystemService(AccessibilityManager::class.java)
+        .getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
+        .any {
+            it.resolveInfo.serviceInfo.packageName == context.packageName &&
+                it.resolveInfo.serviceInfo.name == IrisAccessibilityService::class.java.name
+        }
+
+private fun isMicGranted(context: Context): Boolean =
+    context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
 @Composable
 private fun SectionTitle(text: String) {

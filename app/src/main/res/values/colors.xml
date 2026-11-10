@@ -7,4 +7,8 @@
     <color name="teal_700">#FF018786</color>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+    <color name="bubble_idle">#FF6650A4</color>
+    <color name="bubble_listening">#FFD32F2F</color>
+    <color name="panel_background">#E6212121</color>
+    <color name="panel_text">#FFFFFFFF</color>
 </resources>

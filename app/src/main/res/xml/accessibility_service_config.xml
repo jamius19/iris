@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    typeViewFocused / typeWindowStateChanged: input focus may have moved.
+    typeWindowsChanged + flagRetrieveInteractiveWindows: windows appeared/disappeared (incl. the IME, whose
+    bounds keep the bubble above the keyboard); also lets findFocus() search all windows.
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeViewFocused|typeWindowStateChanged|typeWindowsChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagRetrieveInteractiveWindows"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/accessibility_service_description"
+    android:notificationTimeout="100" />

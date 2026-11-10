@@ -10,6 +10,7 @@ import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
@@ -59,6 +60,13 @@ class SettingsRepository(
         dataStore.edit { it[Keys.ACTIVE_PROMPT_ID] = id }
     }
 
+    suspend fun setBubblePosition(side: BubbleSide, yFraction: Float) {
+        dataStore.edit {
+            it[Keys.BUBBLE_SIDE] = side.name
+            it[Keys.BUBBLE_Y_FRACTION] = yFraction
+        }
+    }
+
     suspend fun setApiKey(secret: Secret, value: String) {
         secretStore.put(secret, value.trim())
     }
@@ -81,6 +89,8 @@ internal object Keys {
     val CLEANUP_MODEL = stringPreferencesKey("cleanup_model")
     val PROMPTS = stringPreferencesKey("cleanup_prompts")
     val ACTIVE_PROMPT_ID = stringPreferencesKey("cleanup_active_prompt_id")
+    val BUBBLE_SIDE = stringPreferencesKey("bubble_side")
+    val BUBBLE_Y_FRACTION = floatPreferencesKey("bubble_y_fraction")
 }
 
 private val json = Json { ignoreUnknownKeys = true }
@@ -107,5 +117,7 @@ internal fun Preferences.toSettings(storedSecrets: Set<Secret>): Settings {
         activePrompt = prompts.firstOrNull { it.id == activePromptId } ?: prompts.firstOrNull(),
         openAiKeySet = Secret.OPENAI_API_KEY in storedSecrets,
         gatewayKeySet = Secret.GATEWAY_API_KEY in storedSecrets,
+        bubbleSide = this[Keys.BUBBLE_SIDE]?.let(BubbleSide::valueOf) ?: Settings.DEFAULT_BUBBLE_SIDE,
+        bubbleYFraction = this[Keys.BUBBLE_Y_FRACTION] ?: Settings.DEFAULT_BUBBLE_Y_FRACTION,
     )
 }
