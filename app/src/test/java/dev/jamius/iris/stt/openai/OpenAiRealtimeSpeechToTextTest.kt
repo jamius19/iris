@@ -52,14 +52,12 @@ class OpenAiRealtimeSpeechToTextTest {
 
     private fun stt(
         apiKey: String? = "sk-test",
-        finalTimeoutMs: Long = 10_000,
         httpClient: OkHttpClient = OkHttpClient(),
     ) = OpenAiRealtimeSpeechToText(
         httpClient,
         apiKey = { apiKey },
         url = server.url("/v1/realtime?intent=transcription").toString(),
-        warmUpUrl = server.url("/v1/models").toString(),
-        finalTimeoutMs = finalTimeoutMs
+        warmUpUrl = server.url("/v1/models").toString()
     )
 
     private fun upgrade(
@@ -110,6 +108,7 @@ class OpenAiRealtimeSpeechToTextTest {
             flowOf(byteArrayOf(1, 2), byteArrayOf(3, 4)),
             "gpt-live-transcribe",
             "en",
+            TIMEOUT_MS,
             partials::add
         )
 
@@ -139,7 +138,7 @@ class OpenAiRealtimeSpeechToTextTest {
             }
         })
 
-        stt().transcribe(flowOf(byteArrayOf(1, 2)), "gpt-live-transcribe", "", {})
+        stt().transcribe(flowOf(byteArrayOf(1, 2)), "gpt-live-transcribe", "", TIMEOUT_MS, {})
 
         val audio = received.filter { type(it) == "input_audio_buffer.append" }.map(::appendedAudio)
         assertEquals(listOf(2, MIN_COMMIT_BYTES - 2), audio.map { it.size })
@@ -155,7 +154,7 @@ class OpenAiRealtimeSpeechToTextTest {
             }
         })
 
-        stt().transcribe(flowOf(ByteArray(MIN_COMMIT_BYTES)), "gpt-live-transcribe", "", {})
+        stt().transcribe(flowOf(ByteArray(MIN_COMMIT_BYTES)), "gpt-live-transcribe", "", TIMEOUT_MS, {})
 
         assertEquals(1, received.count { type(it) == "input_audio_buffer.append" })
     }
@@ -170,7 +169,7 @@ class OpenAiRealtimeSpeechToTextTest {
         })
         val start = System.nanoTime()
 
-        val text = stt().transcribe(flowOf(byteArrayOf(1, 2)), "gpt-live-transcribe", "", {})
+        val text = stt().transcribe(flowOf(byteArrayOf(1, 2)), "gpt-live-transcribe", "", TIMEOUT_MS, {})
 
         assertEquals("Hi.", text)
         assertTrue((System.nanoTime() - start) / 1_000_000 < 2_000) // Didn't wait for the server's close reply.
@@ -191,7 +190,7 @@ class OpenAiRealtimeSpeechToTextTest {
         stt.warmUp()
         val warmUp = server.takeRequest()
         while (httpClient.connectionPool.idleConnectionCount() == 0) Thread.sleep(10) // Response consumed.
-        stt.transcribe(flowOf(byteArrayOf(1, 2)), "gpt-live-transcribe", "", {})
+        stt.transcribe(flowOf(byteArrayOf(1, 2)), "gpt-live-transcribe", "", TIMEOUT_MS, {})
 
         assertEquals("HEAD", warmUp.method)
         assertEquals("/v1/models", warmUp.target)
@@ -222,7 +221,7 @@ class OpenAiRealtimeSpeechToTextTest {
         while (httpClient.dispatcher.runningCallsCount() > 0) Thread.sleep(10)
         assertEquals(1, server.requestCount)
 
-        stt.transcribe(flowOf(byteArrayOf(1, 2)), "gpt-live-transcribe", "", {})
+        stt.transcribe(flowOf(byteArrayOf(1, 2)), "gpt-live-transcribe", "", TIMEOUT_MS, {})
         stt.warmUp() // The session took the warmed connection: warms a new one.
 
         assertEquals("HEAD", server.takeRequest().method)
@@ -235,7 +234,7 @@ class OpenAiRealtimeSpeechToTextTest {
         upgrade(onOpen = { it.send("""{"type":"error","error":{"type":"server_error","message":"Boom"}}""") })
 
         val error = assertThrows(SttException::class.java) {
-            runBlocking { stt().transcribe(endlessAudio, "gpt-live-transcribe", "", {}) }
+            runBlocking { stt().transcribe(endlessAudio, "gpt-live-transcribe", "", TIMEOUT_MS, {}) }
         }
         assertEquals("OpenAI error: Boom", error.message)
     }
@@ -245,7 +244,7 @@ class OpenAiRealtimeSpeechToTextTest {
         server.enqueue(MockResponse.Builder().code(401).build())
 
         val error = assertThrows(SttException::class.java) {
-            runBlocking { stt().transcribe(endlessAudio, "gpt-live-transcribe", "", {}) }
+            runBlocking { stt().transcribe(endlessAudio, "gpt-live-transcribe", "", TIMEOUT_MS, {}) }
         }
         assertEquals("OpenAI rejected the API key. Check it in Iris settings.", error.message)
     }
@@ -253,7 +252,7 @@ class OpenAiRealtimeSpeechToTextTest {
     @Test(timeout = TEST_TIMEOUT_MS)
     fun missingApiKeyFailsWithoutConnecting() {
         val error = assertThrows(SttException::class.java) {
-            runBlocking { stt(apiKey = null).transcribe(endlessAudio, "gpt-live-transcribe", "", {}) }
+            runBlocking { stt(apiKey = null).transcribe(endlessAudio, "gpt-live-transcribe", "", TIMEOUT_MS, {}) }
         }
         assertEquals("Add your OpenAI API key in Iris settings", error.message)
         assertEquals(0, server.requestCount)
@@ -281,7 +280,7 @@ class OpenAiRealtimeSpeechToTextTest {
             deltasSeen.await()
         }
 
-        val text = stt().transcribe(audio, "gpt-live-transcribe", "", { live ->
+        val text = stt().transcribe(audio, "gpt-live-transcribe", "", TIMEOUT_MS, { live ->
             partials += live
             if (live == "Hello world") deltasSeen.complete(Unit)
         })
@@ -296,7 +295,7 @@ class OpenAiRealtimeSpeechToTextTest {
 
         val error = assertThrows(SttException::class.java) {
             runBlocking {
-                stt(finalTimeoutMs = 200).transcribe(flowOf(byteArrayOf(1, 2)), "gpt-live-transcribe", "", {})
+                stt().transcribe(flowOf(byteArrayOf(1, 2)), "gpt-live-transcribe", "", 200, {})
             }
         }
         assertEquals("Timed out waiting for the transcript", error.message)
@@ -305,7 +304,7 @@ class OpenAiRealtimeSpeechToTextTest {
     @Test(timeout = TEST_TIMEOUT_MS)
     fun cancellingClosesTheSocket() = runBlocking {
         upgrade()
-        val session = launch { stt().transcribe(endlessAudio, "gpt-live-transcribe", "", {}) }
+        val session = launch { stt().transcribe(endlessAudio, "gpt-live-transcribe", "", TIMEOUT_MS, {}) }
         while (received.isEmpty()) delay(10) // Connected: the server got session.update.
 
         session.cancelAndJoin()
@@ -324,7 +323,7 @@ class OpenAiRealtimeSpeechToTextTest {
         }
 
         val error = assertThrows(SttException::class.java) {
-            runBlocking { stt().transcribe(audio, "gpt-live-transcribe", "", {}) }
+            runBlocking { stt().transcribe(audio, "gpt-live-transcribe", "", TIMEOUT_MS, {}) }
         }
         assertEquals("OpenAI closed the connection: Going away", error.message)
     }
@@ -346,7 +345,7 @@ class OpenAiRealtimeSpeechToTextTest {
             }
         )
 
-        val text = stt().transcribe(flowOf(byteArrayOf(1, 2)), "gpt-live-transcribe", "", {})
+        val text = stt().transcribe(flowOf(byteArrayOf(1, 2)), "gpt-live-transcribe", "", TIMEOUT_MS, {})
 
         assertEquals("Still fine.", text)
     }
@@ -362,6 +361,7 @@ class OpenAiRealtimeSpeechToTextTest {
 
     private companion object {
         const val TEST_TIMEOUT_MS = 15_000L
+        const val TIMEOUT_MS = 10_000L
         const val COMMITTED = """{"type":"input_audio_buffer.committed","item_id":"item_1"}"""
     }
 }

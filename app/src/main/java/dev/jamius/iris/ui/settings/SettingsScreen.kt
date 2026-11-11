@@ -262,6 +262,15 @@ fun SettingsScreen(repository: SettingsRepository, cleanup: CleanupProvider, mod
                         allowBlank = true,
                         onSave = { scope.launch { repository.setSttLanguage(it) } }
                     )
+                    SliderSetting(
+                        label = "Timeout",
+                        value = settings.sttTimeoutSeconds,
+                        range = Settings.STT_TIMEOUT_RANGE,
+                        step = 1,
+                        valueText = { "$it s" },
+                        supportingText = "How long to wait for the final transcript after you stop.",
+                        onSave = { scope.launch { repository.setSttTimeoutSeconds(it) } }
+                    )
                 }
             }
 

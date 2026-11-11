@@ -143,7 +143,7 @@ class DictationController(
                         emit(it.bytes)
                         stoppedAt.let { stop -> stop == null || it.readAtNanos <= stop }
                     }
-                    stt.transcribe(chunks, model, config.sttLanguage, ::onPartial)
+                    stt.transcribe(chunks, model, config.sttLanguage, config.sttTimeoutSeconds * 1000L, ::onPartial)
                 }
                 if (text.isBlank()) DictationState.Error("No speech detected") else onFinalTranscript(text)
             } catch (e: CancellationException) {

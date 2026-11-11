@@ -24,6 +24,8 @@ data class Settings(
     val gatewaySttModel: String,
     /** ISO-639-1 code; blank means auto-detect. */
     val sttLanguage: String,
+    /** How long to wait for the final transcript once the audio is sent; past it the session fails. */
+    val sttTimeoutSeconds: Int,
     val cleanupEnabled: Boolean,
     val cleanupProviderId: String,
     val cleanupModel: String,
@@ -62,6 +64,9 @@ data class Settings(
         const val DEFAULT_STT_MODEL = "gpt-live-transcribe"
         const val DEFAULT_GATEWAY_STT_MODEL = "openai/gpt-live-transcribe"
         const val DEFAULT_CLEANUP_MODEL = "openai/gpt-6-luna"
+
+        const val DEFAULT_STT_TIMEOUT_SECONDS = 10
+        val STT_TIMEOUT_RANGE = 5..30
 
         const val DEFAULT_REASONING_EFFORT = "low"
 

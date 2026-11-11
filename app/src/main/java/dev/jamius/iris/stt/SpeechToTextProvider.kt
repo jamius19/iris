@@ -25,11 +25,13 @@ interface SpeechToTextProvider {
      * [onPartial] runs in the caller's context.
      *
      * @param language ISO-639-1 code, or blank to auto-detect.
+     * @param timeoutMs how long to wait for the final transcript once all audio is sent.
      */
     suspend fun transcribe(
         audio: Flow<ByteArray>,
         model: String,
         language: String,
+        timeoutMs: Long,
         onPartial: (String) -> Unit,
     ): String
 

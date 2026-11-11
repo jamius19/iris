@@ -122,11 +122,13 @@ Dictation (CP3):
   permission, init/start failure, or `activeRecordingConfiguration.isClientSilenced` (how blocked background capture
   shows up); a read that returns after cancellation (stop) ends quietly (`ensureActive()` before those checks). Each
   chunk carries `level` = `pcm16Level` (pure, unit tested): RMS dBFS mapped from -55..-12 dB to 0..1, then `pow 0.7`.
-- `stt.SpeechToTextProvider.transcribe(audio: Flow<ByteArray>, model, language, onPartial): String`. Streams until
-  `audio` completes, then finalizes and returns the final text; `onPartial` gets the whole live text; cancelling
-  the coroutine aborts. Failures are `SttException` with a user-readable message. `warmUp()`: fire-and-forget
-  pre-connect, throttled by the provider (below). `sampleRate(model)`: the rate `audio` must have (default
-  24 000; the Gateway provider overrides it).
+- `stt.SpeechToTextProvider.transcribe(audio: Flow<ByteArray>, model, language, timeoutMs, onPartial): String`.
+  Streams until `audio` completes, then finalizes and returns the final text; `onPartial` gets the whole live text;
+  cancelling the coroutine aborts. `timeoutMs`: how long to wait for the final transcript once all audio is sent;
+  the controller passes `Settings.sttTimeoutSeconds` (5..30, default 10; min 5 so a too-short wait can't fail
+  every dictation) per session, both providers use it (below). Failures are `SttException` with a user-readable
+  message. `warmUp()`: fire-and-forget pre-connect, throttled by the provider (below). `sampleRate(model)`: the
+  rate `audio` must have (default 24 000; the Gateway provider overrides it).
 - `dictation.DictationController` (one per service, main thread, built by `AppContainer.dictationController`;
   `audio: (sampleRate) -> Flow<AudioChunk>` = `audioRecorder::chunks`, `stt: (Settings) -> SpeechToTextProvider` =
   `AppContainer::speechToText`, picked once per session after the settings load, with `Settings.activeSttModel`):
@@ -137,8 +139,8 @@ Dictation (CP3):
   Listening, else `start()` (so the spinner ignores taps), and the pill to `stop()`. A tap that acts (start, stop,
   cancel; decided from the state at tap time) gets a haptic (`haptic()`: `EFFECT_HEAVY_CLICK`, touch usage, so the
   touch-haptics setting applies; needs `VIBRATE`); ignored taps, drags and focus-loss cancels don't. Finalizing
-  can't be cancelled by a tap: stalls end via the STT final timeout (OpenAI 10 s; Gateway: 60 s drain, 15 s stall,
-  one reconnect within its budget, then 15 s stall again) / cleanup 15 s stall.
+  can't be cancelled by a tap: stalls end via the STT timeout `T` = `sttTimeoutSeconds` (OpenAI: 60 s drain, then
+  `T`; Gateway: 60 s drain, `T` stall, one reconnect within its budget, then `T` stall again) / cleanup 15 s stall.
   `level: StateFlow<Float>`: the latest chunk's `level` while Listening (set in `transformWhile`), 0 otherwise; the
   service pushes it to the pill. Stop records the stop time (`clock`); the audio flow (`transformWhile`) keeps
   sending queued chunks (e.g. behind a stalled main thread) until it has sent the first one read after that time
@@ -197,8 +199,9 @@ Providers (settings store a provider id for each):
   (item_id), `conversation.item.input_audio_transcription.delta` / `.completed` / `.failed`, `error` (all
   `error` events are treated as fatal). Deltas concatenate per item_id; items join with spaces in first-seen
   order; final = completed items once the committed item completes; it is returned at once (`close(1000)` only
-  enqueues the close frame, the handshake finishes in the background). The 10 s final timeout starts only after
-  OkHttp's send queue drains (`queueSize() == 0`, polled every 10 ms; max 60 s) so slow uplinks don't time out.
+  enqueues the close frame, the handshake finishes in the background). The final timeout (`timeoutMs`, from
+  `sttTimeoutSeconds`, default 10 s) starts only after OkHttp's send queue drains (`queueSize() == 0`, polled
+  every 10 ms; max 60 s) so slow uplinks don't time out.
   A commit needs >= 100 ms of audio (server error "buffer too small" otherwise), so less is padded with silence.
   Warm-up (`OpenAiRealtimeSpeechToText.warmUp()`, failures only `Log.d`): the service calls it when it shows the
   bubble (`refreshFocus`) and on each state change, skipped while a session is Listening/Finalizing or without the
@@ -246,7 +249,7 @@ Providers (settings store a provider id for each):
   `onPartial` skips text that only cuts words off the end (`onlyTrims`), finals always show; CJK joins unspaced.
   One loop over a `Channel` fed by the audio collector, each socket's listener (tagged with an attempt number, so
   a replaced socket's late events are ignored) and the drain wait. Reconnect once: a failure after connecting (or
-  a connect failure without an HTTP response, or the 15 s stall below) cancels the socket, opens a new one, sends
+  a connect failure without an HTTP response, or the stall below) cancels the socket, opens a new one, sends
   the start frame, resends every chunk sent so far (all kept in memory: 48 KB/s at 24 kHz) waiting while OkHttp's
   queue holds > 1 MiB (OkHttp closes a socket over 16 MiB queued), then `audio-done` if already stopped; logs a
   `Log.w` with the seconds resent. Every `error` part is retried once (error names can't be told apart; the cost is
@@ -261,12 +264,12 @@ Providers (settings store a provider id for each):
   hidden), so it may jump back once while the new stream catches up. Under 100 ms of audio is padded with silence
   before `audio-done`. After `audio-done`: wait for OkHttp's queue to drain (max 60 s, "Timed out sending audio to
   AI Gateway"; terminal on purpose: a slow/stuck uplink won't improve with a full resend, which would push
-  Finalizing past ~90 s), then a stall timer: 15 s without a server part reconnects (above; a silently dead socket
-  only shows up here), a second stall = "Timed out waiting for the transcript" (a timer, not a total, so a
-  reconnected stream re-transcribing a long recording isn't cut off). Worst-case Finalizing without server parts:
-  60 s drain + 15 s stall + reconnect budget + 15 s stall. A `finish` before `audio-done` is accepted (text so far,
-  `Log.w`). A model id without `/` counts as `openai/` for the rate and options (the Gateway qualifies it so). On
-  `finish`: `close(1000)` and return.
+  Finalizing past ~90 s), then a stall timer: `timeoutMs` (`sttTimeoutSeconds`, default 10 s; the same both times)
+  without a server part reconnects (above; a silently dead socket only shows up here), a second stall = "Timed out
+  waiting for the transcript" (a timer, not a total, so a reconnected stream re-transcribing a long recording isn't
+  cut off). Worst-case Finalizing without server parts: 60 s drain + stall + reconnect budget + stall. A `finish`
+  before `audio-done` is accepted (text so far, `Log.w`). A model id without `/` counts as `openai/` for the rate
+  and options (the Gateway qualifies it so). On `finish`: `close(1000)` and return.
   Warm-up: like OpenAI's (keyless `HEAD https://ai-gateway.vercel.sh/v1/models` through the HTTP/1.1 client, 3 min
   throttle, reset by `transcribe` and by a failure; emulator log `Warm-up: http/1.1 200`; the Gateway's HTTP/1.1
   idle timeout is unmeasured). Logs `Timing: transcribe->ws open X ms` and `Timing: audio-done->finish X ms`.
@@ -338,7 +341,9 @@ Providers (settings store a provider id for each):
   "Unexpected response from AI Gateway".
   Settings > Transcription: two radio rows (OpenAI (direct) / Vercel AI Gateway, each naming its key; the selected
   one appends " · not set" in the error colour without its key), then the OpenAI model text field or the Gateway
-  model combobox (below, hint "Streaming transcription models"), then the shared language field.
+  model combobox (below, hint "Streaming transcription models"), then the shared language field, then a "Timeout"
+  `SliderSetting` (5..30 s, step 1) for `sttTimeoutSeconds`, hint "How long to wait for the final transcript after
+  you stop."
   Settings shows the cleanup model (and the Gateway STT model: `GatewayModelField`) as an editable M3
   `ExposedDropdownMenuBox` (`PrimaryEditable` field): any
   custom id can be typed; typing filters the list (case-insensitive substring); explicit Save as other fields.

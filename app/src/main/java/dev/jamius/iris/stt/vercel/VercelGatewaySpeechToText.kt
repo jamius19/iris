@@ -41,7 +41,6 @@ class VercelGatewaySpeechToText(
     private val apiKey: suspend () -> String?,
     private val url: String = TRANSCRIPTION_URL,
     private val warmUpUrl: String = GATEWAY_WARM_UP_URL,
-    private val stallTimeoutMs: Long = STALL_TIMEOUT_MS,
     private val reconnectTimeoutMs: Long = RECONNECT_TIMEOUT_MS,
     private val reconnectDelayMs: Long = RECONNECT_DELAY_MS,
 ) : SpeechToTextProvider {
@@ -60,6 +59,7 @@ class VercelGatewaySpeechToText(
         audio: Flow<ByteArray>,
         model: String,
         language: String,
+        timeoutMs: Long,
         onPartial: (String) -> Unit,
     ): String {
         val key = apiKey()?.takeIf { it.isNotBlank() }
@@ -83,7 +83,9 @@ class VercelGatewaySpeechToText(
             .build()
         warmedUpAt = null // The handshake takes the warmed connection (an upgraded one never returns to the pool).
         val rate = sampleRate(model)
-        val session = Session(request, model, rate, startFrame(rate, providerOptions(model, language)), onPartial)
+        val session = Session(
+            request, model, rate, startFrame(rate, providerOptions(model, language)), timeoutMs, onPartial
+        )
         var closed = false
         try {
             val text = session.run(audio)
@@ -129,6 +131,8 @@ class VercelGatewaySpeechToText(
         private val model: String,
         private val rate: Int,
         private val start: String,
+        /** The stall timeout: how long a drained stream may go without any event. */
+        private val stallTimeoutMs: Long,
         private val onPartial: (String) -> Unit,
     ) {
         private val inputs = Channel<Input>(Channel.UNLIMITED)
@@ -357,7 +361,6 @@ class VercelGatewaySpeechToText(
     private companion object {
         const val TAG = "VercelGatewayStt"
         const val NORMAL_CLOSURE = 1000
-        const val STALL_TIMEOUT_MS = 15_000L
         const val STALL_MESSAGE = "Timed out waiting for the transcript"
         const val DRAIN_TIMEOUT_MS = 60_000L
         const val DRAIN_POLL_MS = 10L

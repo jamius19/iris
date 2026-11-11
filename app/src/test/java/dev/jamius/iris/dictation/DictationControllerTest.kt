@@ -54,6 +54,7 @@ class DictationControllerTest {
     ) : SpeechToTextProvider {
         var calls = 0
         var model = ""
+        var timeoutMs = 0L
 
         override fun sampleRate(model: String) = rate
 
@@ -61,10 +62,12 @@ class DictationControllerTest {
             audio: Flow<ByteArray>,
             model: String,
             language: String,
+            timeoutMs: Long,
             onPartial: (String) -> Unit,
         ): String {
             calls++
             this.model = model
+            this.timeoutMs = timeoutMs
             var chunks = 0
             audio.collect { onPartial("chunk ${++chunks}") }
             return result()
@@ -176,6 +179,21 @@ class DictationControllerTest {
     }
 
     @Test
+    fun sessionPassesTheSttTimeoutSetting() = runTest {
+        val stt = FakeStt { "Hi" }
+        val settings = emptyPreferences().toSettings(emptySet()).copy(sttTimeoutSeconds = 20)
+        val controller = controller(stt, settings = settings)
+
+        controller.start()
+        runCurrent()
+        controller.stop()
+        advanceTimeBy(101)
+
+        assertEquals(DictationState.Done("Hi"), controller.state.value)
+        assertEquals(20_000L, stt.timeoutMs)
+    }
+
+    @Test
     fun chunksQueuedBeforeTheStopTapAreAllSent() = runTest {
         var sent = 0
         val controller = controller(object : SpeechToTextProvider {
@@ -183,6 +201,7 @@ class DictationControllerTest {
                 audio: Flow<ByteArray>,
                 model: String,
                 language: String,
+                timeoutMs: Long,
                 onPartial: (String) -> Unit,
             ): String {
                 audio.collect { if (++sent == 1) delay(1_000) } // A stall: chunks queue up meanwhile.
@@ -303,6 +322,7 @@ class DictationControllerTest {
                     audio: Flow<ByteArray>,
                     model: String,
                     language: String,
+                    timeoutMs: Long,
                     onPartial: (String) -> Unit,
                 ): String {
                     var chunks = 0

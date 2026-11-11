@@ -35,7 +35,6 @@ class OpenAiRealtimeSpeechToText(
     private val apiKey: suspend () -> String?,
     private val url: String = REALTIME_URL,
     private val warmUpUrl: String = WARM_UP_URL,
-    private val finalTimeoutMs: Long = FINAL_TIMEOUT_MS,
 ) : SpeechToTextProvider {
 
     // OkHttp connects WebSockets on `httpClient.newBuilder().protocols(listOf(HTTP_1_1))`. A pooled connection is
@@ -50,6 +49,7 @@ class OpenAiRealtimeSpeechToText(
         audio: Flow<ByteArray>,
         model: String,
         language: String,
+        timeoutMs: Long,
         onPartial: (String) -> Unit,
     ): String {
         val key = apiKey()?.takeIf { it.isNotBlank() }
@@ -76,7 +76,7 @@ class OpenAiRealtimeSpeechToText(
                 // A socket failure meanwhile fails `final`, which cancels this wait.
                 withTimeoutOrNull(DRAIN_TIMEOUT_MS) { while (socket.queueSize() > 0) delay(DRAIN_POLL_MS) }
                     ?: throw SttException("Timed out sending audio to OpenAI")
-                withTimeoutOrNull(finalTimeoutMs) { final.await() }
+                withTimeoutOrNull(timeoutMs) { final.await() }
                     ?: throw SttException("Timed out waiting for the transcript")
             }
             // Doesn't wait: only enqueues the close frame, and the close handshake finishes in the background.
@@ -158,7 +158,6 @@ class OpenAiRealtimeSpeechToText(
     private companion object {
         const val TAG = "OpenAiRealtimeStt"
         const val NORMAL_CLOSURE = 1000
-        const val FINAL_TIMEOUT_MS = 10_000L
         const val DRAIN_TIMEOUT_MS = 60_000L
         const val DRAIN_POLL_MS = 10L
 

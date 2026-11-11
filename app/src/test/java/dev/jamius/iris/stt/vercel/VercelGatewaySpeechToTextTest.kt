@@ -51,7 +51,6 @@ class VercelGatewaySpeechToTextTest {
 
     private fun stt(
         apiKey: String? = "vck-test",
-        stallTimeoutMs: Long = 10_000,
         reconnectTimeoutMs: Long = 5_000,
         httpClient: OkHttpClient = OkHttpClient(),
     ) = VercelGatewaySpeechToText(
@@ -59,7 +58,6 @@ class VercelGatewaySpeechToTextTest {
         apiKey = { apiKey },
         url = server.url("/v4/ai/transcription-model").toString(),
         warmUpUrl = server.url("/v1/models").toString(),
-        stallTimeoutMs = stallTimeoutMs,
         reconnectTimeoutMs = reconnectTimeoutMs,
         reconnectDelayMs = 50
     )
@@ -115,7 +113,7 @@ class VercelGatewaySpeechToTextTest {
         val stream = upgrade(answering(delta("Hello"), delta(" world"), finish("Hello, world.")))
         val partials = mutableListOf<String>()
 
-        val text = stt().transcribe(flowOf(CHUNK_A, CHUNK_B), MODEL, "en", partials::add)
+        val text = stt().transcribe(flowOf(CHUNK_A, CHUNK_B), MODEL, "en", TIMEOUT_MS, partials::add)
 
         assertEquals("Hello, world.", text)
         assertEquals(listOf("Hello", "Hello world"), partials)
@@ -146,7 +144,7 @@ class VercelGatewaySpeechToTextTest {
     fun shortAudioIsPaddedWithSilenceToOneHundredMsAtTheModelsRate() = runBlocking {
         val stream = upgrade(answering(finish("")))
 
-        stt().transcribe(flowOf(byteArrayOf(1, 2)), "google/gemini-3.5-transcribe-live", "", {})
+        stt().transcribe(flowOf(byteArrayOf(1, 2)), "google/gemini-3.5-transcribe-live", "", TIMEOUT_MS, {})
 
         val audio = stream.frames.filterIsInstance<ByteString>()
         assertEquals(listOf(2, 16_000 * 2 / 10 - 2), audio.map { it.size })
@@ -171,7 +169,7 @@ class VercelGatewaySpeechToTextTest {
         )
         val partials = mutableListOf<String>()
 
-        val text = stt().transcribe(flowOf(CHUNK_A, CHUNK_B), MODEL, "", partials::add)
+        val text = stt().transcribe(flowOf(CHUNK_A, CHUNK_B), MODEL, "", TIMEOUT_MS, partials::add)
 
         assertEquals("One two three four.", text)
         assertEquals(listOf("one two three", "one two three four", "One two three four."), partials)
@@ -193,7 +191,7 @@ class VercelGatewaySpeechToTextTest {
             emit(CHUNK_B)
         }
 
-        val text = stt().transcribe(audio, MODEL, "", {})
+        val text = stt().transcribe(audio, MODEL, "", TIMEOUT_MS, {})
 
         assertEquals("Hi.", text)
         assertEquals(2, server.requestCount)
@@ -210,7 +208,7 @@ class VercelGatewaySpeechToTextTest {
         }))
         val second = upgrade(answering(finish("Hi.")))
 
-        val text = stt().transcribe(flowOf(CHUNK_A, CHUNK_B), MODEL, "", {})
+        val text = stt().transcribe(flowOf(CHUNK_A, CHUNK_B), MODEL, "", TIMEOUT_MS, {})
 
         assertEquals("Hi.", text)
         assertEquals(
@@ -225,7 +223,7 @@ class VercelGatewaySpeechToTextTest {
         upgrade(answering(ERROR_PART))
 
         val error = assertThrows(SttException::class.java) {
-            runBlocking { stt().transcribe(flowOf(CHUNK_A), MODEL, "", {}) }
+            runBlocking { stt().transcribe(flowOf(CHUNK_A), MODEL, "", TIMEOUT_MS, {}) }
         }
         assertEquals("AI Gateway error: Boom", error.message)
         assertEquals(2, server.requestCount)
@@ -237,7 +235,7 @@ class VercelGatewaySpeechToTextTest {
         server.enqueue(noResponse)
         val third = upgrade(answering(finish("Hi.")))
 
-        val text = stt().transcribe(flowOf(CHUNK_A, CHUNK_B), MODEL, "", {})
+        val text = stt().transcribe(flowOf(CHUNK_A, CHUNK_B), MODEL, "", TIMEOUT_MS, {})
 
         assertEquals("Hi.", text)
         assertEquals(3, server.requestCount)
@@ -253,7 +251,7 @@ class VercelGatewaySpeechToTextTest {
         val startedAt = System.nanoTime()
 
         val error = assertThrows(SttException::class.java) {
-            runBlocking { stt(reconnectTimeoutMs = 500).transcribe(endlessAudio, MODEL, "", {}) }
+            runBlocking { stt(reconnectTimeoutMs = 500).transcribe(endlessAudio, MODEL, "", TIMEOUT_MS, {}) }
         }
         assertEquals("Reconnecting to AI Gateway timed out", error.message)
         assertTrue(server.requestCount >= 3) // The first try, the reconnect and at least one more handshake.
@@ -265,7 +263,7 @@ class VercelGatewaySpeechToTextTest {
         upgrade(ServerStream())
         val second = upgrade(answering(finish("Hi.")))
 
-        val text = stt(stallTimeoutMs = 200).transcribe(flowOf(CHUNK_A, CHUNK_B), MODEL, "", {})
+        val text = stt().transcribe(flowOf(CHUNK_A, CHUNK_B), MODEL, "", 200, {})
 
         assertEquals("Hi.", text)
         assertEquals(
@@ -279,7 +277,7 @@ class VercelGatewaySpeechToTextTest {
         server.enqueue(MockResponse.Builder().code(401).body("""{"error":{"message":"Invalid key"}}""").build())
 
         val error = assertThrows(SttException::class.java) {
-            runBlocking { stt().transcribe(endlessAudio, MODEL, "", {}) }
+            runBlocking { stt().transcribe(endlessAudio, MODEL, "", TIMEOUT_MS, {}) }
         }
         assertEquals("AI Gateway rejected the API key. Check it in Iris settings.", error.message)
         assertEquals(1, server.requestCount)
@@ -292,7 +290,7 @@ class VercelGatewaySpeechToTextTest {
         )
 
         val error = assertThrows(SttException::class.java) {
-            runBlocking { stt().transcribe(endlessAudio, "x/y", "", {}) }
+            runBlocking { stt().transcribe(endlessAudio, "x/y", "", TIMEOUT_MS, {}) }
         }
         assertEquals("AI Gateway error: Model 'x/y' not found", error.message)
         assertEquals(1, server.requestCount)
@@ -304,7 +302,7 @@ class VercelGatewaySpeechToTextTest {
         upgrade(ServerStream())
 
         val error = assertThrows(SttException::class.java) {
-            runBlocking { stt(stallTimeoutMs = 200).transcribe(flowOf(CHUNK_A), MODEL, "", {}) }
+            runBlocking { stt().transcribe(flowOf(CHUNK_A), MODEL, "", 200, {}) }
         }
         assertEquals("Timed out waiting for the transcript", error.message)
         assertEquals(2, server.requestCount)
@@ -313,7 +311,7 @@ class VercelGatewaySpeechToTextTest {
     @Test(timeout = TEST_TIMEOUT_MS)
     fun cancellingClosesTheSocket() = runBlocking {
         val stream = upgrade(ServerStream())
-        val session = launch { stt().transcribe(endlessAudio, MODEL, "", {}) }
+        val session = launch { stt().transcribe(endlessAudio, MODEL, "", TIMEOUT_MS, {}) }
         while (stream.frames.isEmpty()) delay(10) // Connected: the server got the start frame.
 
         session.cancelAndJoin()
@@ -324,7 +322,7 @@ class VercelGatewaySpeechToTextTest {
     @Test(timeout = TEST_TIMEOUT_MS)
     fun missingApiKeyFailsWithoutConnecting() {
         val error = assertThrows(SttException::class.java) {
-            runBlocking { stt(apiKey = " ").transcribe(endlessAudio, MODEL, "", {}) }
+            runBlocking { stt(apiKey = " ").transcribe(endlessAudio, MODEL, "", TIMEOUT_MS, {}) }
         }
         assertEquals("Add your Vercel AI Gateway API key in Iris settings", error.message)
         assertEquals(0, server.requestCount)
@@ -333,7 +331,7 @@ class VercelGatewaySpeechToTextTest {
     @Test(timeout = TEST_TIMEOUT_MS)
     fun modelIdThatCantBeAHeaderFailsWithoutConnecting() {
         val error = assertThrows(SttException::class.java) {
-            runBlocking { stt().transcribe(endlessAudio, "openai/gpt-ü", "", {}) }
+            runBlocking { stt().transcribe(endlessAudio, "openai/gpt-ü", "", TIMEOUT_MS, {}) }
         }
         assertEquals("Invalid model id: openai/gpt-ü", error.message)
         assertEquals(0, server.requestCount)
@@ -349,7 +347,7 @@ class VercelGatewaySpeechToTextTest {
         stt.warmUp()
         val warmUp = server.takeRequest()
         while (httpClient.connectionPool.idleConnectionCount() == 0) Thread.sleep(10) // Response consumed.
-        stt.transcribe(flowOf(CHUNK_A), MODEL, "", {})
+        stt.transcribe(flowOf(CHUNK_A), MODEL, "", TIMEOUT_MS, {})
 
         assertEquals("HEAD", warmUp.method)
         assertEquals("/v1/models", warmUp.target)
@@ -375,7 +373,7 @@ class VercelGatewaySpeechToTextTest {
         while (httpClient.dispatcher.runningCallsCount() > 0) Thread.sleep(10)
         assertEquals(1, server.requestCount)
 
-        stt.transcribe(flowOf(CHUNK_A), MODEL, "", {})
+        stt.transcribe(flowOf(CHUNK_A), MODEL, "", TIMEOUT_MS, {})
         stt.warmUp() // The session took the warmed connection: warms a new one.
 
         assertEquals("HEAD", server.takeRequest().method)
@@ -393,6 +391,7 @@ class VercelGatewaySpeechToTextTest {
 
     private companion object {
         const val TEST_TIMEOUT_MS = 15_000L
+        const val TIMEOUT_MS = 10_000L
         const val MODEL = "openai/gpt-live-transcribe"
         const val START_TYPE = "transcription-stream.start"
         const val AUDIO_DONE_TYPE = "transcription-stream.audio-done"
