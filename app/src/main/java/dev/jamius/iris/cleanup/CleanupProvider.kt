@@ -16,4 +16,7 @@ interface CleanupProvider {
      * Cancel the calling coroutine to abort. Throws [CleanupException] on failures.
      */
     suspend fun cleanup(text: String, systemPrompt: String, model: String): String
+
+    /** Ids of the chat models usable for [cleanup], sorted. Throws [CleanupException] on failures. */
+    suspend fun listModels(): List<String>
 }

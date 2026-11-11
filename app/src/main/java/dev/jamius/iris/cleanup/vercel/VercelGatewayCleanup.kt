@@ -7,7 +7,9 @@ package dev.jamius.iris.cleanup.vercel
 
 import dev.jamius.iris.cleanup.CleanupException
 import dev.jamius.iris.cleanup.CleanupProvider
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
@@ -25,6 +27,7 @@ class VercelGatewayCleanup(
     httpClient: OkHttpClient,
     private val apiKey: suspend () -> String?,
     private val url: String = CHAT_COMPLETIONS_URL,
+    private val modelsUrl: String = MODELS_URL,
     callTimeoutMs: Long = CALL_TIMEOUT_MS,
 ) : CleanupProvider {
 
@@ -47,20 +50,33 @@ class VercelGatewayCleanup(
             )
     }
 
+    /** The catalog is public, so no key is sent (an invalid one would get a 401). */
+    override suspend fun listModels(): List<String> {
+        val request = Request.Builder().url(modelsUrl).build()
+        val (code, body) = execute(request, networkError = ::modelsNetworkErrorMessage)
+        if (code !in 200..299) throw CleanupException(httpErrorMessage(code, body))
+        // The catalog is several hundred KB; parse it off the caller's (main) thread.
+        return withContext(Dispatchers.Default) { parseModelsResponse(body) }
+            ?: throw CleanupException("Unexpected response from AI Gateway")
+    }
+
     /** Returns the HTTP code and body. Cancelling the coroutine cancels the call. */
-    private suspend fun execute(request: Request): Pair<Int, String> = suspendCancellableCoroutine { cont ->
+    private suspend fun execute(
+        request: Request,
+        networkError: (IOException) -> String = ::networkErrorMessage,
+    ): Pair<Int, String> = suspendCancellableCoroutine { cont ->
         val call = httpClient.newCall(request)
         cont.invokeOnCancellation { call.cancel() }
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
-                cont.resumeWithException(CleanupException(networkErrorMessage(e)))
+                cont.resumeWithException(CleanupException(networkError(e)))
             }
 
             override fun onResponse(call: Call, response: Response) {
                 val result = try {
                     response.use { it.code to it.body.string() }
                 } catch (e: IOException) {
-                    cont.resumeWithException(CleanupException(networkErrorMessage(e)))
+                    cont.resumeWithException(CleanupException(networkError(e)))
                     return
                 }
                 cont.resume(result)

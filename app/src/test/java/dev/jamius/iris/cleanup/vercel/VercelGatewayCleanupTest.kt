@@ -26,6 +26,7 @@ import okhttp3.EventListener
 import okhttp3.OkHttpClient
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -51,6 +52,7 @@ class VercelGatewayCleanupTest {
         httpClient,
         apiKey = { apiKey },
         url = server.url("/v1/chat/completions").toString(),
+        modelsUrl = server.url("/v1/models").toString(),
         callTimeoutMs = callTimeoutMs
     )
 
@@ -222,6 +224,85 @@ class VercelGatewayCleanupTest {
 
         assertEquals("Add your Vercel AI Gateway API key in Iris settings", error.message)
         assertEquals(0, server.requestCount)
+    }
+
+    /** A `GET /v1/models` body; each pair is an id and its `type` (omitted when null). */
+    private fun models(vararg models: Pair<String, String?>) = buildJsonObject {
+        put("object", "list")
+        put("data", buildJsonArray {
+            for ((id, type) in models) {
+                add(buildJsonObject {
+                    put("id", id)
+                    put("object", "model")
+                    type?.let { put("type", it) }
+                })
+            }
+        })
+    }.toString()
+
+    @Test(timeout = TEST_TIMEOUT_MS)
+    fun listModelsKeepsLanguageModelsSortedAndSendsNoKey() = runBlocking {
+        respond(
+            200,
+            models(
+                "openai/gpt-6-luna" to "language",
+                "openai/text-embedding-3-small" to "embedding",
+                "anthropic/claude-haiku" to "language",
+                "bfl/flux-pro-1.1" to "image",
+                "acme/untyped" to null,
+            )
+        )
+
+        val ids = cleanup().listModels()
+
+        assertEquals(listOf("acme/untyped", "anthropic/claude-haiku", "openai/gpt-6-luna"), ids)
+        val request = server.takeRequest()
+        assertEquals("GET", request.method)
+        assertEquals("/v1/models", request.target)
+        assertNull(request.headers["Authorization"])
+    }
+
+    @Test(timeout = TEST_TIMEOUT_MS)
+    fun listModelsWorksWithoutAKey() = runBlocking {
+        respond(200, models("openai/gpt-6-luna" to "language"))
+
+        assertEquals(listOf("openai/gpt-6-luna"), cleanup(apiKey = null).listModels())
+        assertNull(server.takeRequest().headers["Authorization"])
+    }
+
+    @Test(timeout = TEST_TIMEOUT_MS)
+    fun listModelsMalformedResponseFails() {
+        for (body in listOf("<html>oops</html>", """{"object":"list"}""", """{"data":{}}""")) {
+            respond(200, body)
+            assertEquals("Unexpected response from AI Gateway", failure { cleanup().listModels() }.message)
+        }
+    }
+
+    @Test(timeout = TEST_TIMEOUT_MS)
+    fun listModelsHttpErrorsMapToReadableMessages() {
+        val cases = listOf(
+            401 to "AI Gateway rejected the API key. Check it in Iris settings.",
+            429 to "AI Gateway rate limit or quota reached",
+            502 to "AI Gateway server error (HTTP 502)",
+            404 to "AI Gateway request failed (HTTP 404)",
+        )
+        for ((code, message) in cases) {
+            respond(code, "not json")
+            assertEquals(message, failure { cleanup().listModels() }.message)
+        }
+    }
+
+    @Test(timeout = TEST_TIMEOUT_MS)
+    fun listModelsTimeoutHasItsOwnMessage() {
+        server.enqueue(
+            MockResponse.Builder()
+                .body(models("openai/gpt-6-luna" to "language"))
+                .headersDelay(2, TimeUnit.SECONDS)
+                .build()
+        )
+
+        val error = failure { cleanup(callTimeoutMs = 200).listModels() }
+        assertEquals("Loading models timed out", error.message)
     }
 
     private fun JsonObject.string(key: String) = this[key]!!.jsonPrimitive.content

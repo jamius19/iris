@@ -13,6 +13,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.view.accessibility.AccessibilityManager
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.DrawableRes
@@ -31,11 +32,14 @@ import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
@@ -48,7 +52,12 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -56,6 +65,7 @@ import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
@@ -77,11 +87,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -89,6 +101,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import dev.jamius.iris.R
+import dev.jamius.iris.cleanup.CleanupException
+import dev.jamius.iris.cleanup.CleanupProvider
 import dev.jamius.iris.data.settings.CleanupPrompt
 import dev.jamius.iris.data.settings.Secret
 import dev.jamius.iris.data.settings.SettingsRepository
@@ -100,7 +114,7 @@ import java.util.UUID
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(repository: SettingsRepository, modifier: Modifier = Modifier) {
+fun SettingsScreen(repository: SettingsRepository, cleanup: CleanupProvider, modifier: Modifier = Modifier) {
     val settings = repository.settings.collectAsState(initial = null).value
     val scope = rememberCoroutineScope()
     var editingPrompt by remember { mutableStateOf<CleanupPrompt?>(null) }
@@ -210,10 +224,9 @@ fun SettingsScreen(repository: SettingsRepository, modifier: Modifier = Modifier
                 }
                 CardDivider()
                 FieldsColumn(modifier = Modifier.alpha(cleanupAlpha)) {
-                    SavableTextField(
-                        label = "Model",
+                    CleanupModelField(
                         value = settings.cleanupModel,
-                        supportingText = "Model must support reasoning effort 'none'",
+                        listModels = cleanup::listModels,
                         onSave = { scope.launch { repository.setCleanupModel(it) } }
                     )
                 }
@@ -522,20 +535,6 @@ private fun SavableTextField(
 ) {
     // Keyed on the stored value, so the field resets to it after a save.
     var input by rememberSaveable(value) { mutableStateOf(value) }
-    // While focused, scroll the whole field (incl. supporting text) into view once the IME inset stops changing.
-    val bringIntoView = remember { BringIntoViewRequester() }
-    var focused by remember { mutableStateOf(false) }
-    val ime = WindowInsets.ime
-    val density = LocalDensity.current
-    LaunchedEffect(focused) {
-        if (focused) {
-            // collectLatest restarts the wait on every inset change, so this runs after the IME animation ends.
-            snapshotFlow { ime.getBottom(density) }.collectLatest {
-                delay(IME_SETTLE_MS)
-                bringIntoView.bringIntoView()
-            }
-        }
-    }
     OutlinedTextField(
         value = input,
         onValueChange = { input = it },
@@ -553,9 +552,196 @@ private fun SavableTextField(
         },
         modifier = Modifier
             .fillMaxWidth()
-            .bringIntoViewRequester(bringIntoView)
-            .onFocusChanged { focused = it.isFocused }
+            .bringIntoViewAboveIme()
     )
+}
+
+/**
+ * Cleanup model combobox: type any model id, or pick one from the Gateway's list (filtered by what was typed).
+ * The list is fetched on first open or on refresh and kept in memory only. Saves like [SavableTextField].
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CleanupModelField(value: String, listModels: suspend () -> List<String>, onSave: (String) -> Unit) {
+    var input by rememberSaveable(value) { mutableStateOf(value) }
+    // What the user typed to filter the list; empty shows the whole list. Cleared when the field opens the menu.
+    var query by remember { mutableStateOf("") }
+    var models by remember { mutableStateOf<List<String>?>(null) }
+    var loading by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var menuOpen by remember { mutableStateOf(false) }
+    var focused by remember { mutableStateOf(false) }
+    var menuWidth by remember { mutableStateOf(0.dp) }
+    val density = LocalDensity.current
+    val scope = rememberCoroutineScope()
+
+    val filtered = remember(models, query) {
+        models.orEmpty().filter { it.contains(query.trim(), ignoreCase = true) }
+    }
+    val expanded = menuOpen && filtered.isNotEmpty()
+
+    fun load() {
+        if (loading) return
+        loading = true
+        error = null
+        scope.launch {
+            try {
+                models = listModels()
+            } catch (e: CleanupException) {
+                error = e.message
+            } finally {
+                loading = false
+            }
+        }
+    }
+
+    fun close() {
+        menuOpen = false
+        query = ""
+    }
+
+    // Auto-fetch on the first open. An effect, so a toggle undone in the same event (see below) fetches nothing.
+    LaunchedEffect(menuOpen) {
+        if (menuOpen && models == null && error == null) load()
+    }
+
+    // The box handles back only while it's expanded (see below), so close a menu opened by refresh here.
+    BackHandler(enabled = expanded && !focused) { menuOpen = false }
+
+    // Centres the 48dp refresh button on the field's box, which sits half the floating label's line height lower.
+    val refreshTop = with(density) { MaterialTheme.typography.bodySmall.lineHeight.toDp() } / 2 +
+        (OutlinedTextFieldDefaults.MinHeight - 48.dp) / 2
+
+    Row {
+        // The box focuses the field (opening the IME) while expanded, so it only gets `expanded` while the field
+        // is focused: refresh then opens the menu without focusing it. The field's anchor also sees taps on the
+        // trailing Save button (it toggles the menu before its onClick runs), so Save closes the menu explicitly.
+        ExposedDropdownMenuBox(
+            expanded = expanded && focused,
+            onExpandedChange = {
+                if (it && !expanded) {
+                    query = ""
+                    menuOpen = true
+                } else {
+                    menuOpen = false
+                }
+            },
+            modifier = Modifier
+                .weight(1f)
+                .onSizeChanged { menuWidth = with(density) { it.width.toDp() } }
+        ) {
+            OutlinedTextField(
+                value = input,
+                onValueChange = {
+                    input = it
+                    query = it
+                    menuOpen = true
+                },
+                label = { Text("Model") },
+                supportingText = {
+                    Column {
+                        Text("Model must support structured output and reasoning effort 'none'")
+                        error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                    }
+                },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    autoCorrectEnabled = false,
+                    capitalization = KeyboardCapitalization.None
+                ),
+                trailingIcon = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        ExposedDropdownMenuDefaults.TrailingIcon(
+                            expanded = expanded,
+                            modifier = Modifier.menuAnchor(ExposedDropdownMenuAnchorType.SecondaryEditable)
+                        )
+                        if (input.trim() != value) {
+                            TextButton(
+                                onClick = {
+                                    close()
+                                    onSave(input)
+                                },
+                                enabled = input.isNotBlank()
+                            ) { Text("Save") }
+                        }
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryEditable)
+                    .onFocusChanged { focused = it.isFocused }
+                    .bringIntoViewAboveIme(contentKey = error)
+            )
+            ExposedDropdownMenu(expanded = expanded, onDismissRequest = { menuOpen = false }) {
+                // Lazy, as the list has hundreds of models. The menu measures its content's intrinsic size, which
+                // lazy lists don't support, so the list gets a fixed size: the field's width and its items' height
+                // (one line each), capped.
+                LazyColumn(
+                    modifier = Modifier
+                        .width(menuWidth)
+                        .height(minOf(MODEL_MENU_ITEM_HEIGHT * filtered.size, MODEL_MENU_MAX_HEIGHT))
+                ) {
+                    items(filtered) { model ->
+                        DropdownMenuItem(
+                            text = { Text(model, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                            onClick = {
+                                input = model
+                                close()
+                            },
+                            contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding
+                        )
+                    }
+                }
+            }
+        }
+        if (loading) {
+            Box(
+                modifier = Modifier
+                    .padding(top = refreshTop)
+                    .size(48.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+            }
+        } else {
+            IconButton(
+                onClick = {
+                    load()
+                    menuOpen = true
+                },
+                modifier = Modifier.padding(top = refreshTop)
+            ) {
+                Icon(painterResource(R.drawable.ic_refresh), contentDescription = "Refresh models")
+            }
+        }
+    }
+}
+
+private val MODEL_MENU_MAX_HEIGHT = 280.dp
+
+/** A one-line [DropdownMenuItem]'s height (its minimum, M3 menu list item token). */
+private val MODEL_MENU_ITEM_HEIGHT = 48.dp
+
+/**
+ * While focused, scrolls the whole field (incl. supporting text) into view once the IME inset stops changing,
+ * and again when [contentKey] changes (e.g. an error grows the supporting text).
+ */
+@Composable
+private fun Modifier.bringIntoViewAboveIme(contentKey: Any? = null): Modifier {
+    val bringIntoView = remember { BringIntoViewRequester() }
+    var focused by remember { mutableStateOf(false) }
+    val ime = WindowInsets.ime
+    val density = LocalDensity.current
+    LaunchedEffect(focused, contentKey) {
+        if (focused) {
+            // collectLatest restarts the wait on every inset change, so this runs after the IME animation ends.
+            snapshotFlow { ime.getBottom(density) }.collectLatest {
+                delay(IME_SETTLE_MS)
+                bringIntoView.bringIntoView()
+            }
+        }
+    }
+    return bringIntoViewRequester(bringIntoView).onFocusChanged { focused = it.isFocused }
 }
 
 private const val IME_SETTLE_MS = 100L

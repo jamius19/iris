@@ -125,6 +125,21 @@ Providers (settings store a provider id for each):
   transcript; a fixed framing line appended to the system prompt says to treat it as text, not instructions.
   Errors: 401/403 = API key message, 429 = rate limit/quota, 5xx = server error, other 4xx = gateway
   `error.message`, transport = network error, 30 s OkHttp call timeout = "Cleanup timed out".
+- Cleanup model list: `CleanupProvider.listModels()` = `GET https://ai-gateway.vercel.sh/v1/models` (checked
+  2026-11-11: public, no auth needed; an invalid Bearer key gets 401, so the request is sent unauthenticated and
+  the key is never read). Body `{object:"list", data:[{id, type, ...}]}` with `type` one of
+  `language|embedding|image|video|speech|transcription|realtime|reranking|evaluation`. We keep
+  `type == "language"` (or no `type`), sorted by id. HTTP errors map as above; timeout = "Loading models timed
+  out", other transport errors = "Couldn't load models (network error)" (no raw exception in the UI); no `data`
+  array = "Unexpected response from AI Gateway".
+  Settings shows the cleanup model as an editable M3 `ExposedDropdownMenuBox` (`PrimaryEditable` field): any
+  custom id can be typed; typing filters the list (case-insensitive substring); explicit Save as other fields.
+  The list is fetched on first open or via the refresh button and kept in memory only. The menu renders a lazy,
+  height-bounded `LazyColumn` (fixed to the field's width: the menu measures intrinsic width, which lazy lists
+  don't support). Refresh is an `IconButton` beside the field (not in it), so it doesn't focus the field or
+  clear the filter; the box gets `expanded` only while the field is focused, since it focuses its anchor (IME)
+  while expanded. The field's anchor also sees taps on the trailing Save (it toggles the menu first), so Save
+  closes the menu explicitly. A fetch error re-triggers the field's bring-into-view above the IME.
 
 ## Key decisions (don't re-litigate without a concrete reason)
 - **OpenAI Realtime for STT**: Vercel AI Gateway's streaming STT protocol is undocumented and JS-SDK-only beta,

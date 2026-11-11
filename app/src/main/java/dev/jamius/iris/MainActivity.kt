@@ -11,10 +11,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        val settingsRepository = (application as IrisApp).container.settingsRepository
+        val container = (application as IrisApp).container
         setContent {
             IrisTheme {
-                SettingsScreen(repository = settingsRepository)
+                SettingsScreen(repository = container.settingsRepository, cleanup = container.cleanup)
             }
         }
     }
