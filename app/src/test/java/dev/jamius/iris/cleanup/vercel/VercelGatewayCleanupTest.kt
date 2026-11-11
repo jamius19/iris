@@ -6,12 +6,12 @@
 package dev.jamius.iris.cleanup.vercel
 
 import dev.jamius.iris.cleanup.CleanupException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -20,10 +20,13 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import mockwebserver3.MockResponse
+import mockwebserver3.MockResponseBody
 import mockwebserver3.MockWebServer
 import okhttp3.Call
 import okhttp3.EventListener
 import okhttp3.OkHttpClient
+import okio.BufferedSink
+import okio.ByteString.Companion.encodeUtf8
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -47,49 +50,91 @@ class VercelGatewayCleanupTest {
     private fun cleanup(
         apiKey: String? = "vck-test",
         callTimeoutMs: Long = 10_000,
+        stallTimeoutMs: Long = 10_000,
         httpClient: OkHttpClient = OkHttpClient(),
     ) = VercelGatewayCleanup(
         httpClient,
         apiKey = { apiKey },
         url = server.url("/v1/chat/completions").toString(),
         modelsUrl = server.url("/v1/models").toString(),
-        callTimeoutMs = callTimeoutMs
+        callTimeoutMs = callTimeoutMs,
+        stallTimeoutMs = stallTimeoutMs
     )
+
+    private suspend fun VercelGatewayCleanup.clean(onPartial: (String) -> Unit = {}) =
+        cleanup("hello", "Clean it.", "m", onPartial)
 
     private fun respond(code: Int, body: String) =
         server.enqueue(MockResponse.Builder().code(code).body(body).build())
 
-    /** A chat completion whose message content is [content] (itself a JSON string for structured output). */
-    private fun completion(content: String) = buildJsonObject {
+    private fun respondStream(body: String) = server.enqueue(streamResponse(body).build())
+
+    private fun streamResponse(body: String) =
+        MockResponse.Builder().addHeader("Content-Type", "text/event-stream").body(body)
+
+    /** An SSE body with one `data:` event per payload. */
+    private fun sse(vararg payloads: String) = payloads.joinToString("") { "data: $it\n\n" }
+
+    /** A `chat.completion.chunk` whose `choices[0].delta` has [content] and/or [refusal], and [finishReason]. */
+    private fun chunk(
+        content: String? = null,
+        refusal: String? = null,
+        finishReason: String? = null,
+    ) = buildJsonObject {
         put("id", "chatcmpl-1")
+        put("object", "chat.completion.chunk")
         put("choices", buildJsonArray {
             add(buildJsonObject {
                 put("index", 0)
-                put("message", buildJsonObject {
+                put("delta", buildJsonObject {
                     put("role", "assistant")
-                    put("content", content)
+                    content?.let { put("content", it) }
+                    refusal?.let { put("refusal", it) }
                 })
-                put("finish_reason", "stop")
+                put("finish_reason", finishReason)
             })
         })
     }.toString()
+
+    /** A complete stream whose content deltas are [contents]. */
+    private fun streamed(vararg contents: String) = sse(*contents.map { chunk(it) }.toTypedArray(), "[DONE]")
 
     private fun failure(block: suspend () -> Unit): CleanupException =
         assertThrows(CleanupException::class.java) { runBlocking { block() } }
 
     @Test(timeout = TEST_TIMEOUT_MS)
-    fun sendsStructuredRequestAndReturnsCleanedText() = runBlocking {
-        respond(200, completion("""{"text":"  Hello, world.  "}"""))
+    fun streamsPartialsAndReturnsTheParsedText() = runBlocking {
+        val body = sse(chunk(content = "")) + ": heartbeat\n\n" +
+            sse(
+                chunk("""{"te"""),
+                chunk("""xt":"  Hel"""),
+                chunk("""lo, wo"""),
+                chunk("""rld.  "}"""),
+                """{"id":"chatcmpl-1","choices":[],"usage":{"total_tokens":9}}""",
+                "[DONE]"
+            )
+        respondStream(body)
+        val partials = mutableListOf<String>()
 
-        val text = cleanup().cleanup("um hello world", "Clean it.", "openai/gpt-6-luna")
+        val text = cleanup().cleanup("um hello world", "Clean it.", "openai/gpt-6-luna", partials::add)
 
+        assertEquals(listOf("  Hel", "  Hello, wo", "  Hello, world.  "), partials)
         assertEquals("Hello, world.", text)
+    }
+
+    @Test(timeout = TEST_TIMEOUT_MS)
+    fun sendsStreamingStructuredRequest() = runBlocking {
+        respondStream(streamed("""{"text":"Hi."}"""))
+
+        cleanup().cleanup("um hello world", "Clean it.", "openai/gpt-6-luna") {}
+
         val request = server.takeRequest()
         assertEquals("POST", request.method)
         assertEquals("/v1/chat/completions", request.target)
         assertEquals("Bearer vck-test", request.headers["Authorization"])
         val body = Json.parseToJsonElement(request.body!!.utf8()).jsonObject
         assertEquals("openai/gpt-6-luna", body.string("model"))
+        assertEquals("true", body.string("stream"))
         assertEquals("none", body.string("reasoning_effort"))
         val messages = body["messages"]!!.jsonArray.map { it.jsonObject }
         assertEquals(listOf("system", "user"), messages.map { it.string("role") })
@@ -104,35 +149,67 @@ class VercelGatewayCleanupTest {
     }
 
     @Test(timeout = TEST_TIMEOUT_MS)
-    fun contentThatIsNotTheSchemaFails() {
-        respond(200, completion("Hello, world."))
+    fun escapesSplitAcrossChunksDecode() = runBlocking {
+        val content = """{"text":"Line\none \"q\" back\\slash caf\u00e9 \ud83d\ude00"}"""
+        val expected = "Line\none \"q\" back\\slash café 😀"
+        // One delta per character splits every escape.
+        respondStream(streamed(*content.map { it.toString() }.toTypedArray()))
+        val partials = mutableListOf<String>()
 
-        val error = failure { cleanup().cleanup("hello", "Clean it.", "m") }
-        assertEquals("Unexpected response from AI Gateway", error.message)
+        val text = cleanup().clean(partials::add)
+
+        assertEquals(expected, text)
+        assertEquals(expected, partials.last())
+        partials.forEach { assertTrue(expected.startsWith(it)) }
+    }
+
+    @Test(timeout = TEST_TIMEOUT_MS)
+    fun contentThatIsNotTheSchemaFails() {
+        respondStream(streamed("Hello, ", "world."))
+
+        assertEquals("Unexpected response from AI Gateway", failure { cleanup().clean() }.message)
     }
 
     @Test(timeout = TEST_TIMEOUT_MS)
     fun blankCleanedTextFails() {
-        respond(200, completion("""{"text":"  "}"""))
+        respondStream(streamed("""{"text":"  "}"""))
 
-        val error = failure { cleanup().cleanup("hello", "Clean it.", "m") }
-        assertEquals("Unexpected response from AI Gateway", error.message)
+        assertEquals("Unexpected response from AI Gateway", failure { cleanup().clean() }.message)
     }
 
     @Test(timeout = TEST_TIMEOUT_MS)
-    fun missingChoicesFails() {
-        respond(200, """{"id":"chatcmpl-1","choices":[]}""")
+    fun truncatedStreamFailsAfterItsPartials() {
+        respondStream(sse(chunk("""{"text":"Hel"""), chunk("lo")))
+        val partials = mutableListOf<String>()
 
-        val error = failure { cleanup().cleanup("hello", "Clean it.", "m") }
+        val error = failure { cleanup().clean(partials::add) }
+
         assertEquals("Unexpected response from AI Gateway", error.message)
+        assertEquals(listOf("Hel", "Hello"), partials)
     }
 
     @Test(timeout = TEST_TIMEOUT_MS)
-    fun nonJsonBodyFails() {
-        respond(200, "<html>oops</html>")
+    fun malformedStreamsFail() {
+        val bodies = listOf(
+            sse(chunk("""{"text":"""), "not json", "[DONE]"),
+            sse("""{"id":"chatcmpl-1","choices":[]}""", "[DONE]"),
+            "<html>oops</html>",
+            "",
+        )
+        for (body in bodies) {
+            respondStream(body)
+            assertEquals(body, "Unexpected response from AI Gateway", failure { cleanup().clean() }.message)
+        }
+    }
 
-        val error = failure { cleanup().cleanup("hello", "Clean it.", "m") }
-        assertEquals("Unexpected response from AI Gateway", error.message)
+    @Test(timeout = TEST_TIMEOUT_MS)
+    fun errorEventMidStreamFails() {
+        val error = """{"error":{"message":"Stream error occurred","type":"server_error"}}"""
+        respondStream(sse(chunk("""{"text":"Hel"""), error, "[DONE]"))
+        assertEquals("AI Gateway error: Stream error occurred", failure { cleanup().clean() }.message)
+
+        respondStream(sse(chunk("""{"text":"Hel"""), """{"error":"boom"}"""))
+        assertEquals("AI Gateway error", failure { cleanup().clean() }.message)
     }
 
     @Test(timeout = TEST_TIMEOUT_MS)
@@ -145,73 +222,71 @@ class VercelGatewayCleanupTest {
         )
         for ((code, message) in cases) {
             respond(code, """{"error":{"message":"ignored"}}""")
-            assertEquals(message, failure { cleanup().cleanup("hello", "Clean it.", "m") }.message)
+            assertEquals(message, failure { cleanup().clean() }.message)
         }
     }
 
     @Test(timeout = TEST_TIMEOUT_MS)
     fun clientErrorShowsGatewayMessageWhenPresent() {
         respond(400, """{"error":{"message":"Model not found","type":"invalid_request_error"}}""")
-        assertEquals(
-            "AI Gateway error: Model not found",
-            failure { cleanup().cleanup("hello", "Clean it.", "m") }.message
-        )
+        assertEquals("AI Gateway error: Model not found", failure { cleanup().clean() }.message)
 
         respond(404, "not json")
-        assertEquals(
-            "AI Gateway request failed (HTTP 404)",
-            failure { cleanup().cleanup("hello", "Clean it.", "m") }.message
-        )
+        assertEquals("AI Gateway request failed (HTTP 404)", failure { cleanup().clean() }.message)
     }
 
     @Test(timeout = TEST_TIMEOUT_MS)
     fun slowResponseTimesOut() {
-        server.enqueue(
-            MockResponse.Builder()
-                .body(completion("""{"text":"late"}"""))
-                .headersDelay(2, TimeUnit.SECONDS)
-                .build()
-        )
+        server.enqueue(streamResponse(streamed("""{"text":"late"}""")).headersDelay(2, TimeUnit.SECONDS).build())
 
-        val error = failure { cleanup(callTimeoutMs = 200).cleanup("hello", "Clean it.", "m") }
-        assertEquals("Cleanup timed out", error.message)
+        assertEquals("Cleanup timed out", failure { cleanup(stallTimeoutMs = 200).clean() }.message)
+    }
+
+    @Test(timeout = TEST_TIMEOUT_MS)
+    fun streamOfOnlyHeartbeatsTimesOut() {
+        val parts = listOf(sse(chunk("""{"text":"Hi"""))) + List(20) { ": heartbeat\n\n" }
+        // Heartbeats every 100 ms keep the socket busy (no read timeout) for 2 s.
+        server.enqueue(streamResponse("").body(paced(parts, delayMs = 100)).build())
+
+        assertEquals("Cleanup timed out", failure { cleanup(stallTimeoutMs = 300).clean() }.message)
+    }
+
+    @Test(timeout = TEST_TIMEOUT_MS)
+    fun streamThatKeepsProgressingOutlivesTheStallTimeout() = runBlocking {
+        val parts = listOf(sse(chunk("""{"text":""""))) + List(10) { sse(chunk("word ")) } + streamed(""""}""")
+        // An event every 100 ms: 1.1 s in total.
+        server.enqueue(streamResponse("").body(paced(parts, delayMs = 100)).build())
+
+        assertEquals("word ".repeat(10).trim(), cleanup(stallTimeoutMs = 500).clean())
+    }
+
+    @Test(timeout = TEST_TIMEOUT_MS)
+    fun cutOffOutputFails() {
+        respondStream(sse(chunk("""{"text":"Hel"""), chunk("lo", finishReason = "length"), "[DONE]"))
+
+        assertEquals("Cleanup output was cut off", failure { cleanup().clean() }.message)
+    }
+
+    @Test(timeout = TEST_TIMEOUT_MS)
+    fun contentFilterFails() {
+        respondStream(sse(chunk(finishReason = "content_filter"), "[DONE]"))
+
+        assertEquals("Cleanup blocked by content filter", failure { cleanup().clean() }.message)
     }
 
     @Test(timeout = TEST_TIMEOUT_MS)
     fun refusalIsTheErrorMessage() {
-        val body = buildJsonObject {
-            put("choices", buildJsonArray {
-                add(buildJsonObject {
-                    put("message", buildJsonObject {
-                        put("role", "assistant")
-                        put("content", JsonNull)
-                        put("refusal", "I can't help with that.")
-                    })
-                })
-            })
-        }.toString()
-        respond(200, body)
+        respondStream(sse(chunk(refusal = "I can't "), chunk(refusal = "help with that."), "[DONE]"))
 
-        val error = failure { cleanup().cleanup("hello", "Clean it.", "m") }
-        assertEquals("Model refused: I can't help with that.", error.message)
+        assertEquals("Model refused: I can't help with that.", failure { cleanup().clean() }.message)
     }
 
     @Test(timeout = TEST_TIMEOUT_MS)
-    fun cancellingTheCoroutineCancelsTheCall() = runBlocking {
-        server.enqueue(
-            MockResponse.Builder()
-                .body(completion("""{"text":"late"}"""))
-                .headersDelay(10, TimeUnit.SECONDS)
-                .build()
-        )
+    fun cancellingBeforeTheResponseCancelsTheCall() = runBlocking {
+        server.enqueue(streamResponse(streamed("""{"text":"late"}""")).headersDelay(10, TimeUnit.SECONDS).build())
         val cancelled = CountDownLatch(1)
-        val httpClient = OkHttpClient.Builder()
-            .eventListener(object : EventListener() {
-                override fun canceled(call: Call) = cancelled.countDown()
-            })
-            .build()
 
-        val job = launch(Dispatchers.IO) { cleanup(httpClient = httpClient).cleanup("hello", "Clean it.", "m") }
+        val job = launch(Dispatchers.IO) { cleanup(httpClient = cancelListener(cancelled)).clean() }
         server.takeRequest() // The call is in flight.
         job.cancelAndJoin()
 
@@ -219,8 +294,45 @@ class VercelGatewayCleanupTest {
     }
 
     @Test(timeout = TEST_TIMEOUT_MS)
+    fun cancellingMidStreamCancelsTheCall() = runBlocking {
+        val release = CountDownLatch(1)
+        // The first event at once, the rest only when released.
+        val parts = listOf(sse(chunk("""{"text":"Hi""")), streamed(" there", """."}"""))
+        server.enqueue(streamResponse("").body(paced(parts, release = release)).build())
+        val cancelled = CountDownLatch(1)
+        val partial = CompletableDeferred<String>()
+
+        val job = launch(Dispatchers.IO) { cleanup(httpClient = cancelListener(cancelled)).clean(partial::complete) }
+        assertEquals("Hi", partial.await())
+        job.cancelAndJoin()
+
+        assertTrue(cancelled.await(5, TimeUnit.SECONDS))
+        release.countDown()
+    }
+
+    /** A body written in [parts], each flushed; before each after the first, waits [delayMs] or for [release]. */
+    private fun paced(parts: List<String>, delayMs: Long = 0, release: CountDownLatch? = null) =
+        object : MockResponseBody {
+            override val contentLength = parts.sumOf { it.encodeUtf8().size }.toLong()
+
+            override fun writeTo(sink: BufferedSink) {
+                parts.forEachIndexed { i, part ->
+                    if (i > 0) release?.await(10, TimeUnit.SECONDS) ?: Thread.sleep(delayMs)
+                    sink.writeUtf8(part)
+                    sink.flush()
+                }
+            }
+        }
+
+    private fun cancelListener(cancelled: CountDownLatch) = OkHttpClient.Builder()
+        .eventListener(object : EventListener() {
+            override fun canceled(call: Call) = cancelled.countDown()
+        })
+        .build()
+
+    @Test(timeout = TEST_TIMEOUT_MS)
     fun missingApiKeyFailsWithoutCalling() {
-        val error = failure { cleanup(apiKey = null).cleanup("hello", "Clean it.", "m") }
+        val error = failure { cleanup(apiKey = null).clean() }
 
         assertEquals("Add your Vercel AI Gateway API key in Iris settings", error.message)
         assertEquals(0, server.requestCount)
@@ -320,14 +432,14 @@ class VercelGatewayCleanupTest {
     @Test(timeout = TEST_TIMEOUT_MS)
     fun cleanupReusesTheWarmedUpConnection() = runBlocking {
         respond(200, "")
-        respond(200, completion("""{"text":"Hi."}"""))
+        respondStream(streamed("""{"text":"Hi."}"""))
         val httpClient = OkHttpClient()
         val cleanup = cleanup(httpClient = httpClient)
 
         cleanup.warmUp()
         val warmUp = server.takeRequest()
         while (httpClient.connectionPool.idleConnectionCount() == 0) Thread.sleep(10) // Response consumed.
-        cleanup.cleanup("hi", "Clean it.", "m")
+        cleanup.clean()
 
         val request = server.takeRequest()
         assertEquals(warmUp.connectionIndex, request.connectionIndex)
@@ -350,9 +462,9 @@ class VercelGatewayCleanupTest {
 
         cleanup.warmUp()
         while (httpClient.dispatcher.runningCallsCount() > 0) Thread.sleep(10)
-        respond(200, completion("""{"text":"Hi."}"""))
+        respondStream(streamed("""{"text":"Hi."}"""))
 
-        assertEquals("Hi.", cleanup.cleanup("hi", "Clean it.", "m"))
+        assertEquals("Hi.", cleanup.clean())
     }
 
     private fun JsonObject.string(key: String) = this[key]!!.jsonPrimitive.content

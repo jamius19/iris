@@ -13,9 +13,11 @@ interface CleanupProvider {
 
     /**
      * Cleans up [text] following [systemPrompt] with [model] and returns the cleaned text (never blank).
+     * [onPartial] gets the cleaned text so far whenever it grows (display only; may differ from the result).
      * Cancel the calling coroutine to abort. Throws [CleanupException] on failures.
+     * [onPartial] runs in the caller's context.
      */
-    suspend fun cleanup(text: String, systemPrompt: String, model: String): String
+    suspend fun cleanup(text: String, systemPrompt: String, model: String, onPartial: (String) -> Unit): String
 
     /**
      * Opens a connection to the provider ahead of a [cleanup] call so that call skips the TCP/TLS setup.

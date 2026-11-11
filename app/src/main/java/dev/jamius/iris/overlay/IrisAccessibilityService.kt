@@ -51,8 +51,17 @@ class IrisAccessibilityService : AccessibilityService() {
     /** [focusedEditable] when the user tapped stop: the field the dictation is inserted into. */
     private var target: AccessibilityNodeInfo? = null
 
-    /** The final hook is running cleanup: [render] shows "Cleaning up…" for Finalizing. */
+    /** The final hook is running cleanup: for Finalizing, [render] shows [cleanupText] (or "Cleaning up…"). */
     private var cleaningUp = false
+
+    /** The cleaned text streamed so far while [cleaningUp]. */
+    private var cleanupText: String? = null
+
+    /** Shows the latest [cleanupText] once a throttle window that skipped a partial ends. */
+    private val renderCleanupText = Runnable { dictation?.let { render(it.state.value) } }
+
+    /** Cached from settings: STT warm-ups are skipped without a key (no decryption per accessibility event). */
+    private var openAiKeySet = false
 
     /** `elapsedRealtime` of the stop tap and of the final transcript, for the timing log. */
     private var stoppedAt = 0L
@@ -74,7 +83,13 @@ class IrisAccessibilityService : AccessibilityService() {
             },
             onMoved = { side, yFraction -> scope.launch { repository.setBubblePosition(side, yFraction) } }
         )
-        scope.launch { dictation.state.collect(::render) }
+        scope.launch { repository.settings.collect { openAiKeySet = it.openAiKeySet } }
+        scope.launch {
+            dictation.state.collect {
+                render(it)
+                warmUpStt() // A finished session used up the warmed connection; warm one for the next.
+            }
+        }
         scope.launch {
             val settings = repository.settings.first()
             // Only now, so nothing shows the bubble at the default position before the stored one loads.
@@ -106,6 +121,7 @@ class IrisAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         handler.removeCallbacks(hideBubble)
+        handler.removeCallbacks(renderCleanupText)
         overlay?.hide()
         overlay = null
         dictation = null
@@ -125,9 +141,18 @@ class IrisAccessibilityService : AccessibilityService() {
             handler.removeCallbacks(hideBubble)
             overlay.show()
             dictation?.let { render(it.state.value) } // Restores the panel if the bubble was hidden mid-session.
+            warmUpStt()
         } else if (!handler.hasCallbacks(hideBubble)) {
             handler.postDelayed(hideBubble, HIDE_DELAY_MS)
         }
+    }
+
+    /** Pre-warms the STT connection while the bubble is up and no session runs; the provider throttles repeats. */
+    private fun warmUpStt() {
+        val state = dictation?.state?.value ?: return
+        if (!openAiKeySet || focusedEditable == null) return
+        if (state is DictationState.Listening || state is DictationState.Finalizing) return
+        (application as IrisApp).container.speechToText.warmUp()
     }
 
     private fun render(state: DictationState) {
@@ -138,7 +163,7 @@ class IrisAccessibilityService : AccessibilityService() {
             DictationState.Idle -> overlay.hideText()
             is DictationState.Listening -> overlay.showText(state.text.ifEmpty { "Listening…" })
             is DictationState.Finalizing -> overlay.showText(
-                if (cleaningUp) "Cleaning up…" else state.text.ifEmpty { "Finishing…" }
+                if (cleaningUp) cleanupText ?: "Cleaning up…" else state.text.ifEmpty { "Finishing…" }
             )
             is DictationState.Done -> overlay.showText(state.notice ?: state.text, tail = false)
             is DictationState.Error -> overlay.showText(state.message, tail = false)
@@ -156,6 +181,7 @@ class IrisAccessibilityService : AccessibilityService() {
         var text = transcript
         var cleanupError: String? = null
         var cleanupMs: Long? = null
+        var firstTextMs: Long? = null
         var targetFocused = false
         val insertion = try {
             val container = (application as IrisApp).container
@@ -166,8 +192,20 @@ class IrisAccessibilityService : AccessibilityService() {
                 dictation?.let { render(it.state.value) }
                 val prompt = settings.activePrompt ?: Settings.DEFAULT_PROMPT
                 val cleanupStart = SystemClock.elapsedRealtime()
+                var renderedAt = 0L
                 try {
-                    text = container.cleanup.cleanup(transcript, prompt.systemPrompt, settings.cleanupModel)
+                    text = container.cleanup.cleanup(transcript, prompt.systemPrompt, settings.cleanupModel) {
+                        val now = SystemClock.elapsedRealtime()
+                        if (firstTextMs == null) firstTextMs = now - cleanupStart
+                        cleanupText = it
+                        // Deltas can come every few ms; the panel is laid out at most every PARTIAL_RENDER_MS.
+                        if (now - renderedAt >= PARTIAL_RENDER_MS) {
+                            renderedAt = now
+                            dictation?.let { dictation -> render(dictation.state.value) }
+                        } else if (!handler.hasCallbacks(renderCleanupText)) {
+                            handler.postDelayed(renderCleanupText, renderedAt + PARTIAL_RENDER_MS - now)
+                        }
+                    }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: CleanupException) {
@@ -177,6 +215,8 @@ class IrisAccessibilityService : AccessibilityService() {
                     cleanupError = "Cleanup failed"
                 } finally {
                     cleaningUp = false
+                    cleanupText = null
+                    handler.removeCallbacks(renderCleanupText)
                     cleanupMs = SystemClock.elapsedRealtime() - cleanupStart
                 }
             }
@@ -195,8 +235,10 @@ class IrisAccessibilityService : AccessibilityService() {
             copyToClipboard(this, text)
             null
         }
-        val cleanupTiming = cleanupMs?.let { "$it ms" + if (cleanupError != null) " failed" else "" }
-            ?: if (skipCleanup) "skipped" else "off"
+        val cleanupTiming = cleanupMs?.let {
+            "$it ms" + (firstTextMs?.let { first -> " (first text $first ms)" } ?: "") +
+                if (cleanupError != null) " failed" else ""
+        } ?: if (skipCleanup) "skipped" else "off"
         Log.d(
             TAG,
             "Timing: stop->transcript ${transcriptAt - stoppedAt} ms, cleanup $cleanupTiming, " +
@@ -212,6 +254,7 @@ class IrisAccessibilityService : AccessibilityService() {
     private companion object {
         const val TAG = "IrisAccessibilityService"
         const val HIDE_DELAY_MS = 300L
+        const val PARTIAL_RENDER_MS = 50L
         const val IME_CHANGES = AccessibilityEvent.WINDOWS_CHANGE_ADDED or
             AccessibilityEvent.WINDOWS_CHANGE_REMOVED or
             AccessibilityEvent.WINDOWS_CHANGE_BOUNDS

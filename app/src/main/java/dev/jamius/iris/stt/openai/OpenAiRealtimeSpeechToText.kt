@@ -5,6 +5,7 @@
 
 package dev.jamius.iris.stt.openai
 
+import android.util.Log
 import dev.jamius.iris.stt.SpeechToTextProvider
 import dev.jamius.iris.stt.SttException
 import kotlinx.coroutines.async
@@ -15,11 +16,15 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withTimeoutOrNull
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import java.io.IOException
 
 /**
  * OpenAI Realtime transcription-only session over a WebSocket. Audio is appended as it is recorded; when the
@@ -29,8 +34,17 @@ class OpenAiRealtimeSpeechToText(
     private val httpClient: OkHttpClient,
     private val apiKey: suspend () -> String?,
     private val url: String = REALTIME_URL,
+    private val warmUpUrl: String = WARM_UP_URL,
     private val finalTimeoutMs: Long = FINAL_TIMEOUT_MS,
 ) : SpeechToTextProvider {
+
+    // OkHttp connects WebSockets on `httpClient.newBuilder().protocols(listOf(HTTP_1_1))`. A pooled connection is
+    // only reused for an equal Address (protocols included), so the warm-up must use exactly that client setup.
+    private val warmUpClient = httpClient.newBuilder().protocols(listOf(Protocol.HTTP_1_1)).build()
+
+    /** `System.nanoTime()` of the last warm-up whose connection is still unused, or null. */
+    @Volatile
+    private var warmedUpAt: Long? = null
 
     override suspend fun transcribe(
         audio: Flow<ByteArray>,
@@ -40,16 +54,23 @@ class OpenAiRealtimeSpeechToText(
     ): String {
         val key = apiKey()?.takeIf { it.isNotBlank() }
             ?: throw SttException("Add your OpenAI API key in Iris settings")
+        warmedUpAt = null // The handshake takes the warmed connection (an upgraded one never returns to the pool).
         val events = Channel<RealtimeEvent>(Channel.UNLIMITED)
         val request = Request.Builder().url(url).header("Authorization", "Bearer $key").build()
-        val socket = httpClient.newWebSocket(request, Listener(events))
+        val socket = httpClient.newWebSocket(request, Listener(events, startedAt = System.nanoTime()))
         var closed = false
         try {
             val text = coroutineScope {
                 val final = async { awaitFinal(events, onPartial) }
                 // OkHttp queues messages until the handshake completes.
                 socket.send(sessionUpdate(model, language))
-                audio.collect { socket.send(appendAudio(it)) }
+                var sentBytes = 0
+                audio.collect {
+                    socket.send(appendAudio(it))
+                    sentBytes += it.size
+                }
+                // The server rejects a commit of under 100 ms of audio (e.g. an instant stop); pad it with silence.
+                if (sentBytes < MIN_COMMIT_BYTES) socket.send(appendAudio(ByteArray(MIN_COMMIT_BYTES - sentBytes)))
                 socket.send(COMMIT_AUDIO)
                 // On a slow uplink OkHttp may still be sending queued audio; only time the server once it's sent.
                 // A socket failure meanwhile fails `final`, which cancels this wait.
@@ -58,6 +79,7 @@ class OpenAiRealtimeSpeechToText(
                 withTimeoutOrNull(finalTimeoutMs) { final.await() }
                     ?: throw SttException("Timed out waiting for the transcript")
             }
+            // Doesn't wait: only enqueues the close frame, and the close handshake finishes in the background.
             socket.close(NORMAL_CLOSURE, null)
             closed = true
             return text
@@ -65,6 +87,29 @@ class OpenAiRealtimeSpeechToText(
             // Error or cancellation: drop queued audio and tear the socket down immediately.
             if (!closed) socket.cancel()
         }
+    }
+
+    /**
+     * `HEAD /v1/models` without a key: a quick 401 with an empty body, leaving an idle HTTP/1.1 connection in the
+     * pool for the next [transcribe] handshake. Skipped within [WARM_UP_WINDOW_MS] of an earlier warm-up whose
+     * connection no session has taken yet.
+     */
+    override fun warmUp() {
+        val now = System.nanoTime()
+        warmedUpAt?.let { if (now - it < WARM_UP_WINDOW_MS * 1_000_000) return }
+        warmedUpAt = now
+        val request = Request.Builder().url(warmUpUrl).head().build()
+        warmUpClient.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                Log.d(TAG, "Warm-up failed: $e")
+                // No connection was left in the pool: let the next call try again (e.g. once back online).
+                if (warmedUpAt == now) warmedUpAt = null
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                response.use { Log.d(TAG, "Warm-up: ${it.protocol} ${it.code}") }
+            }
+        })
     }
 
     private suspend fun awaitFinal(events: ReceiveChannel<RealtimeEvent>, onPartial: (String) -> Unit): String {
@@ -88,7 +133,14 @@ class OpenAiRealtimeSpeechToText(
     }
 
     /** Runs on OkHttp's threads; only forwards events to the session coroutine. */
-    private class Listener(private val events: SendChannel<RealtimeEvent>) : WebSocketListener() {
+    private class Listener(
+        private val events: SendChannel<RealtimeEvent>,
+        private val startedAt: Long,
+    ) : WebSocketListener() {
+
+        override fun onOpen(webSocket: WebSocket, response: Response) {
+            Log.d(TAG, "Timing: transcribe->ws open ${(System.nanoTime() - startedAt) / 1_000_000} ms")
+        }
 
         override fun onMessage(webSocket: WebSocket, text: String) {
             parseServerEvent(text)?.let(events::trySend)
@@ -104,9 +156,13 @@ class OpenAiRealtimeSpeechToText(
     }
 
     private companion object {
+        const val TAG = "OpenAiRealtimeStt"
         const val NORMAL_CLOSURE = 1000
         const val FINAL_TIMEOUT_MS = 10_000L
         const val DRAIN_TIMEOUT_MS = 60_000L
-        const val DRAIN_POLL_MS = 100L
+        const val DRAIN_POLL_MS = 10L
+
+        /** Inside both OkHttp's 5 min pool keep-alive and api.openai.com's 400 s idle timeout (measured). */
+        const val WARM_UP_WINDOW_MS = 180_000L
     }
 }

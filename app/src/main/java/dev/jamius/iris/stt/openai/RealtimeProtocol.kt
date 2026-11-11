@@ -26,6 +26,12 @@ import java.util.Base64
 /** Transcription intent, no `model` query param: a model in the URL would create a conversation session. */
 internal const val REALTIME_URL = "wss://api.openai.com/v1/realtime?intent=transcription"
 
+/** Warm-up target: answers a keyless `HEAD` with a quick 401 and no body. */
+internal const val WARM_UP_URL = "https://api.openai.com/v1/models"
+
+/** The least audio the server accepts in a commit: 100 ms of PCM16 mono 24 kHz. */
+internal const val MIN_COMMIT_BYTES = 24_000 * 2 / 10
+
 internal const val COMMIT_AUDIO = """{"type":"input_audio_buffer.commit"}"""
 
 /** PCM16 mono 24 kHz input, no turn detection (gpt-live-transcribe supports no VAD; we commit on stop). */

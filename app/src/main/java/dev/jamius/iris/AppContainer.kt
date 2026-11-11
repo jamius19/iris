@@ -38,7 +38,7 @@ class AppContainer(context: Context) {
 
     private val audioRecorder = AudioRecorder(context)
 
-    private val speechToText: SpeechToTextProvider = OpenAiRealtimeSpeechToText(
+    val speechToText: SpeechToTextProvider = OpenAiRealtimeSpeechToText(
         httpClient,
         apiKey = { secretStore.get(Secret.OPENAI_API_KEY) }
     )

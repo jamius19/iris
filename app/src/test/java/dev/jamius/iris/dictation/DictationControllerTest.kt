@@ -7,17 +7,22 @@ package dev.jamius.iris.dictation
 
 import androidx.datastore.preferences.core.emptyPreferences
 import dev.jamius.iris.audio.AudioCaptureException
+import dev.jamius.iris.audio.AudioChunk
 import dev.jamius.iris.data.settings.toSettings
 import dev.jamius.iris.stt.SpeechToTextProvider
 import dev.jamius.iris.stt.SttException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -57,6 +62,8 @@ class DictationControllerTest {
             audio.collect { onPartial("chunk ${++chunks}") }
             return result()
         }
+
+        override fun warmUp() = Unit
     }
 
     private fun TestScope.controller(
@@ -69,11 +76,13 @@ class DictationControllerTest {
         },
     ) = DictationController(
         scope = backgroundScope,
-        audio = audio,
+        // Virtual time is the clock: a chunk's read ends when it is emitted.
+        audio = audio.map { AudioChunk(it, currentTime) },
         stt = stt,
         settings = flowOf(emptyPreferences().toSettings(emptySet()).copy(cleanupEnabled = cleanupEnabled)),
         warmUpCleanup = { warmUps++ },
         onFinalTranscript = onFinalTranscript,
+        clock = { currentTime },
     )
 
     @Test
@@ -98,6 +107,68 @@ class DictationControllerTest {
 
         advanceTimeBy(DONE_DISPLAY_MS + 1)
         assertEquals(DictationState.Idle, controller.state.value)
+    }
+
+    @Test
+    fun audioEndsOnStopWithoutWaitingForTheMicRelease() = runTest {
+        var audioEndedAt = -1L
+        val controller = controller(
+            FakeStt {
+                audioEndedAt = currentTime
+                "Hi"
+            },
+            audio = flow {
+                try {
+                    while (true) {
+                        emit(ByteArray(2))
+                        delay(100)
+                    }
+                } finally {
+                    withContext(NonCancellable) { delay(1_000) } // A slow mic release.
+                    audioReleased = true
+                }
+            }
+        )
+
+        controller.onTap()
+        runCurrent()
+        advanceTimeBy(150)
+        controller.onTap()
+        advanceTimeBy(100)
+        // Ended right after the chunk recorded during the tap (t = 200), not after the release.
+        assertEquals(200L, audioEndedAt)
+        assertEquals(DictationState.Finalizing("chunk 3"), controller.state.value)
+
+        advanceTimeBy(1_000) // The session still waits for the release before it finishes.
+        assertTrue(audioReleased)
+        assertEquals(DictationState.Done("Hi"), controller.state.value)
+    }
+
+    @Test
+    fun chunksQueuedBeforeTheStopTapAreAllSent() = runTest {
+        var sent = 0
+        val controller = controller(object : SpeechToTextProvider {
+            override suspend fun transcribe(
+                audio: Flow<ByteArray>,
+                model: String,
+                language: String,
+                onPartial: (String) -> Unit,
+            ): String {
+                audio.collect { if (++sent == 1) delay(1_000) } // A stall: chunks queue up meanwhile.
+                return "Hi"
+            }
+
+            override fun warmUp() = Unit
+        })
+
+        controller.onTap()
+        runCurrent()
+        advanceTimeBy(950)
+        controller.onTap()
+        advanceTimeBy(100)
+        // The 10 chunks read before the tap (t = 0..900) and the one in progress (t = 1000).
+        assertEquals(11, sent)
+        assertEquals(DictationState.Done("Hi"), controller.state.value)
     }
 
     @Test

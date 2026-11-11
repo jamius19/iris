@@ -54,20 +54,28 @@ Overlay (`overlay`, View-based, not Compose: a Compose window in a service needs
   neither fits, its top sits on the usable top.
 
 Dictation (CP3):
-- `audio.AudioRecorder.chunks()`: cold `Flow<ByteArray>`, 100 ms PCM16 chunks on `Dispatchers.IO`; each collection
-  opens the mic, cancellation releases it. Throws `AudioCaptureException` (user-readable) for missing permission,
-  init/start failure, or `activeRecordingConfiguration.isClientSilenced` (how blocked background capture shows up).
+- `audio.AudioRecorder.chunks()`: cold `Flow<AudioChunk>`, 50 ms PCM16 chunks on `Dispatchers.IO`, each with
+  `readAtNanos` (`SystemClock.elapsedRealtimeNanos()` right after `read` returns); each collection opens the mic,
+  cancellation releases it. Throws `AudioCaptureException` (user-readable) for missing permission, init/start
+  failure, or `activeRecordingConfiguration.isClientSilenced` (how blocked background capture shows up); a read
+  that returns after cancellation (stop) ends quietly (`ensureActive()` before those checks).
 - `stt.SpeechToTextProvider.transcribe(audio: Flow<ByteArray>, model, language, onPartial): String`. Streams until
   `audio` completes, then finalizes and returns the final text; `onPartial` gets the whole live text; cancelling
-  the coroutine aborts. Failures are `SttException` with a user-readable message.
+  the coroutine aborts. Failures are `SttException` with a user-readable message. `warmUp()`: fire-and-forget
+  pre-connect, throttled by the provider (OpenAI below).
 - `dictation.DictationController` (one per service, main thread, built by `AppContainer.dictationController`):
   `Idle -> Listening(text) -> Finalizing(text) -> Done(text, notice?) | Error(message) -> Idle` (Done shown 1.5 s,
   or 3 s with a notice, which the panel shows instead of the text; Error 3 s; blank transcript = Error
   "No speech detected"). Tap: start (also from Done/Error), stop in Listening; in Finalizing, before the
   transcript is final: ignored for `FINALIZE_TAP_GRACE_MS` (5 s) after stop (a double tap on stop must not discard
-  the dictation), then cancel to Idle (escape if STT stalls); after (hook running): skip cleanup (below). Stop ends
-  the audio flow after the chunk in progress (`transformWhile`). `cancel()` discards. `onFocusLost()` (the
-  service's debounced focus-lost hide) cancels only while Listening: once stopped, the session always finishes.
+  the dictation), then cancel to Idle (escape if STT stalls); after (hook running): skip cleanup (below). Stop records
+  the stop time (`clock`); the audio flow (`transformWhile`) keeps sending queued chunks (e.g. behind a stalled main
+  thread) until it has sent the first one read after that time (the chunk in progress), then ends. The mic runs in
+  its own coroutine (`produceIn`), so the audio (and the STT commit) doesn't wait for the mic's next read and
+  release; it starts on the provider's first collect, after its API key check, so a missing key never opens the
+  mic. `cancel()` discards.
+  `onFocusLost()` (the service's debounced focus-lost hide) cancels only while Listening: once stopped, the session
+  always finishes.
   Service destroy cancels its scope. Errors other than `SttException`/`AudioCaptureException` are logged and shown
   as "Something went wrong".
 - Final hook: `suspend IrisAccessibilityService.onFinalTranscript(text, skipCleanup): Done`, run inside the session
@@ -78,7 +86,11 @@ Dictation (CP3):
 Cleanup + insertion (CP4):
 - Cleanup runs only if `cleanupEnabled`, with the active prompt and `cleanupModel`; the panel shows
   "Cleaning up…" (`render()` shows it for Finalizing while the service's `cleaningUp` flag is set; the hook
-  re-renders when setting it, since the state doesn't change). `CleanupProvider.cleanup`
+  re-renders when setting it, since the state doesn't change). It streams: `CleanupProvider.cleanup(..., onPartial)`
+  passes the cleaned text so far (non-blank, only when it changed, caller's context = main); the service keeps it
+  in `cleanupText`, which `render()` shows (live, `tail = true`) instead of "Cleaning up…", re-rendering at most
+  every `PARTIAL_RENDER_MS` (50 ms; a skipped partial gets one trailing `handler.postDelayed` render at the end of
+  the window, removed when cleanup ends or the service is destroyed). `CleanupProvider.cleanup`
   throws `CleanupException` (user-readable). Any cleanup failure (incl. missing Gateway key) inserts the raw
   transcript; Done's notice is the error plus "Inserted the original text" (or "Original copied to clipboard"),
   so dictation is never lost. Other unexpected cleanup exceptions are logged and treated the same.
@@ -109,9 +121,22 @@ Providers (settings store a provider id for each):
   transcription:{model, languages?}, turn_detection:null}}}}`. Server events used: `input_audio_buffer.committed`
   (item_id), `conversation.item.input_audio_transcription.delta` / `.completed` / `.failed`, `error` (all
   `error` events are treated as fatal). Deltas concatenate per item_id; items join with spaces in first-seen
-  order; final = completed items once the committed item completes, then close 1000. The 10 s final timeout
-  starts only after OkHttp's send queue drains (`queueSize() == 0`, polled; max 60 s) so slow uplinks don't
-  time out.
+  order; final = completed items once the committed item completes; it is returned at once (`close(1000)` only
+  enqueues the close frame, the handshake finishes in the background). The 10 s final timeout starts only after
+  OkHttp's send queue drains (`queueSize() == 0`, polled every 10 ms; max 60 s) so slow uplinks don't time out.
+  A commit needs >= 100 ms of audio (server error "buffer too small" otherwise), so less is padded with silence.
+  Warm-up (`OpenAiRealtimeSpeechToText.warmUp()`, failures only `Log.d`): the service calls it when it shows the
+  bubble (`refreshFocus`) and on each state change, skipped while a session is Listening/Finalizing or without an
+  OpenAI key (`Settings.openAiKeySet`, cached by the service; no decryption per event). Request:
+  keyless `HEAD https://api.openai.com/v1/models` (401, no body; measured 2026-11-11 with curl `--http1.1`:
+  ~250 ms after TLS; `HEAD /` is faster at ~5 ms but an odd 421, `HEAD /v1/realtime` 405 ~750 ms). It must go
+  through `httpClient.newBuilder().protocols(listOf(HTTP_1_1))` of the WebSocket's client: OkHttp connects
+  WebSockets on that, and pooled connections are reused only for an equal `Address` (protocols included), so an
+  h2 warm-up is never reused (unit test checks `connectionIndex`). The upgraded connection never returns to the
+  pool, so `transcribe` resets the throttle; so does a failed warm-up (e.g. offline). Throttle: one warm-up per
+  3 min; api.openai.com closed an idle HTTP/1.1 connection after 400 s (measured) and OkHttp's pool evicts idle
+  ones after 5 min. The provider logs `Timing: transcribe->ws open X ms` (≈ tap->connected; the session starts
+  right after the start tap).
   Default model `gpt-live-transcribe` (`gpt-4o-*-transcribe` are deprecated, shutdown 2027-02-26). It requires
   `turn_detection: null` (no server/semantic VAD) and takes `audio.input.transcription.languages: [..]` (array;
   never also send singular `language`). Settings store one optional code; the client wraps it into the array.
@@ -128,12 +153,26 @@ Providers (settings store a provider id for each):
   https://vercel.com/docs/ai-gateway/models-and-providers/reasoning:
   Chat Completions takes top-level `reasoning_effort` (alias of the Gateway's `reasoning.effort`; nested wins if
   both are sent); we send `reasoning_effort: "none"`. The catalog (`GET /v1/models`) lists `openai/gpt-6-luna`
-  effort values `none|low|medium|high|xhigh|max`. Response: `choices[0].message.content` is the JSON string
-  `{"text":...}`; `message.refusal` with no content = "Model refused: <refusal>"; blank text or any other shape =
-  "Unexpected response from AI Gateway". User message = raw
+  effort values `none|low|medium|high|xhigh|max`. User message = raw
   transcript; a fixed framing line appended to the system prompt says to treat it as text, not instructions.
-  Errors: 401/403 = API key message, 429 = rate limit/quota, 5xx = server error, other 4xx = gateway
-  `error.message`, transport = network error, 30 s OkHttp call timeout = "Cleanup timed out".
+  Streaming (`stream: true`), verified 2026-11-11 against `.../openai-chat-completions/streaming` and
+  `.../structured-outputs` ("Streaming with structured outputs": json_schema works with streaming; concatenate the
+  content and parse it at the end): SSE `data: {chat.completion.chunk}` events, `: heartbeat` comment lines,
+  `data: [DONE]` last. `choices[0].delta.content` pieces concatenate into the JSON `{"text":...}`; chunks may have
+  no choices (usage). The body is read line by line on an OkHttp thread (`callbackFlow`, deltas collected in the
+  caller's context; cancelling cancels the call). `JsonTextExtractor` (pure, unit tested) decodes the growing
+  `text` value for display only (escapes split across chunks, `\uXXXX` incl. surrogate pairs, other keys
+  skipped; it stops on anything odd). The result is always `parseCleanedText` of the full content: blank text,
+  any other shape, a non-JSON `data:` or a cut-off stream = "Unexpected response from AI Gateway".
+  `delta.refusal` (OpenAI streaming reference; the Gateway doesn't document it) with no content =
+  "Model refused: <refusal>". Mid-stream errors aren't documented; a `data:` with a top-level `error` (seen in
+  vercel/ai#18303) = "AI Gateway error: <error.message>" (or just "AI Gateway error"). `choices[0].finish_reason`
+  `length` = "Cleanup output was cut off", `content_filter` = "Cleanup blocked by content filter". Any other
+  exception while reading the stream is logged and = "Unexpected response from AI Gateway" (the flow always closes).
+  Errors before the stream: 401/403 = API key message, 429 = rate limit/quota, 5xx = server error, other 4xx =
+  gateway `error.message`, transport = network error. Timeouts: no call timeout (a long cleanup keeps streaming);
+  "Cleanup timed out" after `STALL_TIMEOUT_MS` (15 s) without a `data:` event: OkHttp's read timeout covers a
+  silent socket (incl. waiting for headers = time to first byte), a per-line check covers heartbeat-only streams.
   Warm-up (`CleanupProvider.warmUp()`, fire-and-forget, failures only `Log.d`): `DictationController` calls it
   when a session's settings load (recording start) and again on stop, only if `cleanupEnabled`. Request: `HEAD
   /v1/models`, no key (edge-cached, 200, no body; measured 2026-11-11 ~50-100 ms after TLS, like `HEAD /` (308,
@@ -145,7 +184,7 @@ Providers (settings store a provider id for each):
   starts doesn't help (OkHttp pools a connection only after its handshake), so very short dictations or
   pool-evicted connections still pay the handshake. The service logs one `Timing:` line per session that reaches
   the final-transcript hook (not error/no-speech/cancel): stop->transcript, cleanup (`X ms`, `X ms failed`,
-  `skipped` or `off`), stop->done; no text.
+  `skipped` or `off`; `(first text Y ms)` once a partial arrived), stop->done; no text.
 - Cleanup model list: `CleanupProvider.listModels()` = `GET https://ai-gateway.vercel.sh/v1/models` (checked
   2026-11-11: public, no auth needed; an invalid Bearer key gets 401, so the request is sent unauthenticated and
   the key is never read). Body `{object:"list", data:[{id, type, ...}]}` with `type` one of

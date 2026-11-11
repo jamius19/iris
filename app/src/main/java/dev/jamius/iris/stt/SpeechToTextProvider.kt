@@ -29,4 +29,11 @@ interface SpeechToTextProvider {
         language: String,
         onPartial: (String) -> Unit,
     ): String
+
+    /**
+     * Opens a connection to the provider ahead of a [transcribe] call so it skips the DNS/TCP/TLS setup.
+     * Fire-and-forget: returns at once, never throws, and failures are ignored. Cheap to call often: repeat calls
+     * are skipped while an earlier warm-up's connection should still be usable.
+     */
+    fun warmUp()
 }

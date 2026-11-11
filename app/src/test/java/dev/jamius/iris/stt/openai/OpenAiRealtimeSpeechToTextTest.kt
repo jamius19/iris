@@ -26,10 +26,12 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import java.util.Base64
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -48,14 +50,23 @@ class OpenAiRealtimeSpeechToTextTest {
     /** Counted down when the server sees the client close or drop the socket. */
     private val serverSawClose = CountDownLatch(1)
 
-    private fun stt(apiKey: String? = "sk-test", finalTimeoutMs: Long = 10_000) = OpenAiRealtimeSpeechToText(
-        OkHttpClient(),
+    private fun stt(
+        apiKey: String? = "sk-test",
+        finalTimeoutMs: Long = 10_000,
+        httpClient: OkHttpClient = OkHttpClient(),
+    ) = OpenAiRealtimeSpeechToText(
+        httpClient,
         apiKey = { apiKey },
         url = server.url("/v1/realtime?intent=transcription").toString(),
+        warmUpUrl = server.url("/v1/models").toString(),
         finalTimeoutMs = finalTimeoutMs
     )
 
-    private fun upgrade(onOpen: (WebSocket) -> Unit = {}, onMessage: (WebSocket, String) -> Unit = { _, _ -> }) =
+    private fun upgrade(
+        onOpen: (WebSocket) -> Unit = {},
+        closeReplyDelayMs: Long = 0,
+        onMessage: (WebSocket, String) -> Unit = { _, _ -> },
+    ) =
         server.enqueue(
             MockResponse.Builder().webSocketUpgrade(object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) = onOpen(webSocket)
@@ -66,6 +77,7 @@ class OpenAiRealtimeSpeechToTextTest {
                 }
 
                 override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                    Thread.sleep(closeReplyDelayMs)
                     webSocket.close(code, null) // Reply like a real server, so both sides finish closing.
                     serverSawClose.countDown()
                 }
@@ -111,10 +123,111 @@ class OpenAiRealtimeSpeechToTextTest {
                 "session.update",
                 "input_audio_buffer.append",
                 "input_audio_buffer.append",
+                "input_audio_buffer.append", // Silence padding up to the 100 ms minimum.
                 "input_audio_buffer.commit"
             ),
             received.map(::type)
         )
+    }
+
+    @Test(timeout = TEST_TIMEOUT_MS)
+    fun shortAudioIsPaddedWithSilenceToTheMinimumCommit() = runBlocking {
+        upgrade(onMessage = { socket, text ->
+            if (type(text) == "input_audio_buffer.commit") {
+                socket.send(COMMITTED)
+                socket.send(completed(""))
+            }
+        })
+
+        stt().transcribe(flowOf(byteArrayOf(1, 2)), "gpt-live-transcribe", "", {})
+
+        val audio = received.filter { type(it) == "input_audio_buffer.append" }.map(::appendedAudio)
+        assertEquals(listOf(2, MIN_COMMIT_BYTES - 2), audio.map { it.size })
+        assertTrue(audio[1].all { it == 0.toByte() })
+    }
+
+    @Test(timeout = TEST_TIMEOUT_MS)
+    fun fullAudioIsNotPadded() = runBlocking {
+        upgrade(onMessage = { socket, text ->
+            if (type(text) == "input_audio_buffer.commit") {
+                socket.send(COMMITTED)
+                socket.send(completed(""))
+            }
+        })
+
+        stt().transcribe(flowOf(ByteArray(MIN_COMMIT_BYTES)), "gpt-live-transcribe", "", {})
+
+        assertEquals(1, received.count { type(it) == "input_audio_buffer.append" })
+    }
+
+    @Test(timeout = TEST_TIMEOUT_MS)
+    fun returnsWithoutWaitingForTheCloseHandshake() = runBlocking {
+        upgrade(closeReplyDelayMs = 3_000, onMessage = { socket, text ->
+            if (type(text) == "input_audio_buffer.commit") {
+                socket.send(COMMITTED)
+                socket.send(completed("Hi."))
+            }
+        })
+        val start = System.nanoTime()
+
+        val text = stt().transcribe(flowOf(byteArrayOf(1, 2)), "gpt-live-transcribe", "", {})
+
+        assertEquals("Hi.", text)
+        assertTrue((System.nanoTime() - start) / 1_000_000 < 2_000) // Didn't wait for the server's close reply.
+    }
+
+    @Test(timeout = TEST_TIMEOUT_MS)
+    fun webSocketReusesTheWarmedUpConnection() = runBlocking {
+        server.enqueue(MockResponse.Builder().code(401).build())
+        upgrade(onMessage = { socket, text ->
+            if (type(text) == "input_audio_buffer.commit") {
+                socket.send(COMMITTED)
+                socket.send(completed("Hi."))
+            }
+        })
+        val httpClient = OkHttpClient()
+        val stt = stt(httpClient = httpClient)
+
+        stt.warmUp()
+        val warmUp = server.takeRequest()
+        while (httpClient.connectionPool.idleConnectionCount() == 0) Thread.sleep(10) // Response consumed.
+        stt.transcribe(flowOf(byteArrayOf(1, 2)), "gpt-live-transcribe", "", {})
+
+        assertEquals("HEAD", warmUp.method)
+        assertEquals("/v1/models", warmUp.target)
+        assertNull(warmUp.headers["Authorization"])
+        val handshake = server.takeRequest()
+        assertEquals("websocket", handshake.headers["Upgrade"])
+        assertEquals(warmUp.connectionIndex, handshake.connectionIndex)
+        assertEquals(1, handshake.exchangeIndex) // Second exchange on that connection.
+    }
+
+    @Test(timeout = TEST_TIMEOUT_MS)
+    fun warmUpIsSkippedUntilASessionTakesTheWarmedConnection() = runBlocking {
+        server.enqueue(MockResponse.Builder().code(401).build())
+        upgrade(onMessage = { socket, text ->
+            if (type(text) == "input_audio_buffer.commit") {
+                socket.send(COMMITTED)
+                socket.send(completed("Hi."))
+            }
+        })
+        server.enqueue(MockResponse.Builder().code(401).build())
+        val httpClient = OkHttpClient()
+        val stt = stt(httpClient = httpClient)
+
+        stt.warmUp()
+        stt.warmUp() // Within the window: skipped.
+        while (httpClient.connectionPool.idleConnectionCount() == 0) Thread.sleep(10)
+        // The call may still be finishing after its connection is pooled; a skipped one would add a request.
+        while (httpClient.dispatcher.runningCallsCount() > 0) Thread.sleep(10)
+        assertEquals(1, server.requestCount)
+
+        stt.transcribe(flowOf(byteArrayOf(1, 2)), "gpt-live-transcribe", "", {})
+        stt.warmUp() // The session took the warmed connection: warms a new one.
+
+        assertEquals("HEAD", server.takeRequest().method)
+        assertEquals("websocket", server.takeRequest().headers["Upgrade"])
+        assertEquals("HEAD", server.takeRequest().method)
     }
 
     @Test(timeout = TEST_TIMEOUT_MS)
@@ -164,7 +277,7 @@ class OpenAiRealtimeSpeechToTextTest {
         val deltasSeen = CompletableDeferred<Unit>()
         // Holds the commit back until both deltas have been reported.
         val audio = flow {
-            emit(byteArrayOf(1, 2))
+            emit(ByteArray(MIN_COMMIT_BYTES)) // A full commit, so no padding append triggers more deltas.
             deltasSeen.await()
         }
 
@@ -237,6 +350,9 @@ class OpenAiRealtimeSpeechToTextTest {
 
         assertEquals("Still fine.", text)
     }
+
+    private fun appendedAudio(message: String): ByteArray =
+        Base64.getDecoder().decode(Json.parseToJsonElement(message).jsonObject["audio"]!!.jsonPrimitive.content)
 
     private fun delta(text: String) =
         """{"type":"conversation.item.input_audio_transcription.delta","item_id":"item_1","delta":"$text"}"""
