@@ -84,9 +84,20 @@ Overlay (`overlay`, View-based, not Compose: a Compose window in a service needs
   faded-out panel flashed once at full opacity). Waveform: 6 horizontal bars (6 dp round caps, max 23.5 dp, dots at
   rest; centres 14 dp from the pill's ends, 10 dp apart = 4 dp gaps; at full length the outer bars stay ~6 dp
   inside the cap curve), level smoothed per frame (attack 40 ms, release 200 ms) with a small per-bar wobble; after
-  stop the bars shrink to dots as the pill retracts. Animations run only while attached; `hide()` ends only running
-  animators (`end()` on a finished one replays it). The overlay keeps the desired panel state (`panelWanted`) while
-  hidden, and `show()` restores stack and panel instantly (no replayed animations).
+  stop the bars shrink to dots as the pill retracts. Animations run only while attached; removing the stack ends
+  only running animators (`end()` on a finished one replays it). The overlay keeps the desired panel state
+  (`panelWanted`) while hidden.
+- Show/hide: `show()` adds the stack window and fades + zooms the stack's root in (alpha 0 -> 1, scale 0.6 -> 1,
+  pivot on the circle's centre, 200 ms emphasized decelerate); a wanted panel animates in with it (its own enter).
+  Status and pill are restored as they are (no replayed morph/slide). `hide()` runs the reverse (150 ms emphasized
+  accelerate), the panel takes its own 200 ms exit, and each window is removed (`removeViewImmediate`) when its
+  exit ends. `bubbleShown` = the stack window is added, so it stays true during the exit (`stackExiting`), while
+  `ownsWindow` still matches it; during the exit taps (incl. accessibility clicks) are ignored and `showText` only
+  records the text, like when hidden. `show()` during the exit turns stack and panel back from their current
+  alpha/scale (no remove/re-add); `hide()` during the enter reverses likewise; repeated calls are no-ops. Pill and
+  status changes during the exit still animate (focus loss mid-Listening: the pill retracts while fading).
+  `hide(animate = false)` (service `onDestroy`) cancels the animators and removes both windows at once. A config
+  change ends a running stack animation (fully in, or removed).
 - Bubble position persists as `Settings.bubbleSide` + `bubbleYFraction` (fraction of usable height, so it
   survives rotation). Placement math is in `BubbleGeometry.kt` (unit tested). Panel size persists as
   `Settings.panelLines` (1..6, default 3) and `panelWidthPercent` (30..90, default 50); the service collects

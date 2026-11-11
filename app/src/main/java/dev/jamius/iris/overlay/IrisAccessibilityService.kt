@@ -123,7 +123,7 @@ class IrisAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         handler.removeCallbacks(hideBubble)
-        overlay?.hide()
+        overlay?.hide(animate = false)
         overlay = null
         dictation = null
         focusedEditable = null

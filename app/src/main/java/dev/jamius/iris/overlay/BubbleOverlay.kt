@@ -64,7 +64,13 @@ class BubbleOverlay(
         addView(bubble, FrameLayout.LayoutParams(WRAP, WRAP))
     }
     private val bubbleParams = overlayParams(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
+
+    /** The stack window is added, also while it animates out ([stackExiting]); false once it is removed. */
     private var bubbleShown = false
+
+    /** [hide] is animating the stack out; it is removed at the end unless [show] brings it back first. */
+    private var stackExiting = false
+    private var stackAnimator: ValueAnimator? = null
 
     /** Display y of the button's top; the window's y differs while the pill opens up. */
     private var buttonY = 0
@@ -123,39 +129,88 @@ class BubbleOverlay(
         bubble.setOnTouchListener(dragHandler)
         @SuppressLint("ClickableViewAccessibility")
         pill.setOnTouchListener(dragHandler)
-        bubble.setOnClickListener { onButtonTap() }
-        pill.setOnClickListener { onPillTap() }
+        // Not while animating out: the bubble is going away.
+        bubble.setOnClickListener { if (!stackExiting) onButtonTap() }
+        pill.setOnClickListener { if (!stackExiting) onPillTap() }
     }
 
-    /** Shows the bubble, and the panel if it should show (see [showText]), in their current state: no animation. */
+    /**
+     * Fades and zooms the bubble in, and the panel if it should show (see [showText]), in their current state (no
+     * replayed status/pill animations). During [hide]'s exit animation, both turn back from where they are.
+     */
     fun show() {
-        if (bubbleShown) return
-        placeBubble()
-        try {
-            windowManager.addView(stack, bubbleParams)
-            bubbleShown = true
-        } catch (e: WindowManager.BadTokenException) {
-            Log.w(TAG, "Bubble not shown", e) // The service is being torn down.
+        if (bubbleShown && !stackExiting) return
+        if (!bubbleShown) {
+            placeBubble()
+            stack.alpha = 0f
+            try {
+                windowManager.addView(stack, bubbleParams)
+                bubbleShown = true
+            } catch (e: WindowManager.BadTokenException) {
+                Log.w(TAG, "Bubble not shown", e) // The service is being torn down.
+                return
+            }
         }
-        if (bubbleShown && panelWanted) {
-            placePanel()
-            // Reset here: the panel may have been removed mid-exit, with the animation's alpha/scale.
-            panel.alpha = 1f
-            panel.scaleX = 1f
-            panel.scaleY = 1f
-            if (addPanel()) setPanelText()
+        animateStack(enter = true)
+        if (panelWanted) {
+            // The panel may still be animating out (it outlasts the stack's exit), or be gone.
+            if (!panelShown) {
+                placePanel()
+                panel.alpha = 0f
+            }
+            if (panelShown || addPanel()) {
+                animatePanel(enter = true)
+                setPanelText()
+            }
         }
     }
 
-    /** Hides the bubble and the panel at once. The status and panel text are left to the owner. */
-    fun hide() {
+    /**
+     * Fades and zooms the bubble out, then removes its window; the panel animates out alongside. Until removed,
+     * [bubbleShown] stays true and taps are ignored; [showText] keeps the text for [show]. With [animate] false
+     * (teardown) both windows are removed at once. The status and panel text are left to the owner.
+     */
+    fun hide(animate: Boolean = true) {
+        if (!animate) {
+            stackAnimator?.cancel()
+            panelAnimator?.cancel()
+            removePanel()
+            removeStack()
+            return
+        }
+        if (panelShown && !panelExiting) animatePanel(enter = false)
+        if (bubbleShown && !stackExiting) animateStack(enter = false)
+    }
+
+    private fun removeStack() {
         snapAnimator?.takeIf { it.isRunning }?.end()
         revealAnimator?.takeIf { it.isRunning }?.end()
-        panelAnimator?.cancel()
-        removePanel()
+        stackExiting = false
         if (!bubbleShown) return
         windowManager.removeViewImmediate(stack) // See removePanel().
         bubbleShown = false
+    }
+
+    /** Fades and zooms the stack in or out (then removes it) around the circle's centre; continues from mid-way. */
+    private fun animateStack(enter: Boolean) {
+        stackExiting = !enter // Before the cancel below, so a cancelled exit doesn't remove the stack.
+        stackAnimator?.cancel()
+        stackAnimator = ValueAnimator.ofFloat(stack.alpha, if (enter) 1f else 0f).apply {
+            duration = if (enter) STACK_IN_MS else STACK_OUT_MS
+            interpolator = if (enter) EMPHASIZED_DECELERATE else EMPHASIZED_ACCELERATE
+            addUpdateListener {
+                val fraction = it.animatedValue as Float
+                val scale = STACK_MIN_SCALE + (1 - STACK_MIN_SCALE) * fraction
+                stack.alpha = fraction
+                stack.scaleX = scale
+                stack.scaleY = scale
+                // Set per frame: the pill may flip meanwhile, moving the button within the stack (see placeStack()).
+                stack.pivotX = bubble.sizePx / 2f
+                stack.pivotY = buttonY - bubbleParams.y + bubble.sizePx / 2f
+            }
+            if (!enter) doOnEnd { if (stackExiting) removeStack() }
+            start()
+        }
     }
 
     /** Also expands the pill while [BubbleStatus.LISTENING] and collapses it otherwise. */
@@ -215,7 +270,7 @@ class BubbleOverlay(
             panel.maxLines = panelMaxLines()
             panel.ellipsize = if (tail) null else TextUtils.TruncateAt.END
         }
-        if (!bubbleShown) return
+        if (!bubbleShown || stackExiting) return
         // Placed when added or when the max height changes; updateWindows() moves it with the bubble.
         if (!panelShown) {
             placePanel()
@@ -351,6 +406,7 @@ class BubbleOverlay(
     /** Call on rotation or screen size change: re-snaps the bubble to its edge and keeps it on screen. */
     fun onConfigurationChanged() {
         snapAnimator?.takeIf { it.isRunning }?.end()
+        stackAnimator?.takeIf { it.isRunning }?.end() // Fully in, or removed (an exit removes the stack).
         bubble.onConfigurationChanged() // Dark mode colours.
         relayout()
     }
@@ -536,6 +592,9 @@ class BubbleOverlay(
         const val PANEL_IN_MS = 250L
         const val PANEL_OUT_MS = 200L
         const val PANEL_MIN_SCALE = 0.92f
+        const val STACK_IN_MS = 200L
+        const val STACK_OUT_MS = 150L
+        const val STACK_MIN_SCALE = 0.6f
         const val WRAP = FrameLayout.LayoutParams.WRAP_CONTENT
         val EMPHASIZED_DECELERATE = PathInterpolator(0.05f, 0.7f, 0.1f, 1f)
         val EMPHASIZED_ACCELERATE = PathInterpolator(0.3f, 0f, 0.8f, 0.15f)
