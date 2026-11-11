@@ -50,12 +50,7 @@ class VercelGatewayCleanup(
         .build()
     private val stallTimeoutNanos = MILLISECONDS.toNanos(stallTimeoutMs)
 
-    override suspend fun cleanup(
-        text: String,
-        systemPrompt: String,
-        model: String,
-        onPartial: (String) -> Unit,
-    ): String {
+    override suspend fun cleanup(text: String, systemPrompt: String, model: String): String {
         val key = apiKey()?.takeIf { it.isNotBlank() }
             ?: throw CleanupException("Add your Vercel AI Gateway API key in Iris settings")
         val request = Request.Builder()
@@ -64,12 +59,7 @@ class VercelGatewayCleanup(
             .post(chatRequest(text, systemPrompt, model).toRequestBody(JSON_MEDIA_TYPE))
             .build()
         val content = StringBuilder()
-        val extractor = JsonTextExtractor()
-        contentDeltas(request).collect { delta ->
-            content.append(delta)
-            extractor.append(delta)?.takeIf { it.isNotBlank() }?.let(onPartial)
-        }
-        // The complete content is authoritative: the extractor only feeds the live display.
+        contentDeltas(request).collect { content.append(it) }
         return parseCleanedText(content.toString()) ?: throw CleanupException(UNEXPECTED_RESPONSE)
     }
 

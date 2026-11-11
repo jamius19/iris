@@ -6,7 +6,6 @@
 package dev.jamius.iris.cleanup.vercel
 
 import dev.jamius.iris.cleanup.CleanupException
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
@@ -25,6 +24,7 @@ import mockwebserver3.MockWebServer
 import okhttp3.Call
 import okhttp3.EventListener
 import okhttp3.OkHttpClient
+import okhttp3.Response
 import okio.BufferedSink
 import okio.ByteString.Companion.encodeUtf8
 import org.junit.After
@@ -61,8 +61,7 @@ class VercelGatewayCleanupTest {
         stallTimeoutMs = stallTimeoutMs
     )
 
-    private suspend fun VercelGatewayCleanup.clean(onPartial: (String) -> Unit = {}) =
-        cleanup("hello", "Clean it.", "m", onPartial)
+    private suspend fun VercelGatewayCleanup.clean() = cleanup("hello", "Clean it.", "m")
 
     private fun respond(code: Int, body: String) =
         server.enqueue(MockResponse.Builder().code(code).body(body).build())
@@ -103,7 +102,7 @@ class VercelGatewayCleanupTest {
         assertThrows(CleanupException::class.java) { runBlocking { block() } }
 
     @Test(timeout = TEST_TIMEOUT_MS)
-    fun streamsPartialsAndReturnsTheParsedText() = runBlocking {
+    fun joinsStreamedContentAndReturnsTheParsedText() = runBlocking {
         val body = sse(chunk(content = "")) + ": heartbeat\n\n" +
             sse(
                 chunk("""{"te"""),
@@ -114,11 +113,9 @@ class VercelGatewayCleanupTest {
                 "[DONE]"
             )
         respondStream(body)
-        val partials = mutableListOf<String>()
 
-        val text = cleanup().cleanup("um hello world", "Clean it.", "openai/gpt-6-luna", partials::add)
+        val text = cleanup().cleanup("um hello world", "Clean it.", "openai/gpt-6-luna")
 
-        assertEquals(listOf("  Hel", "  Hello, wo", "  Hello, world.  "), partials)
         assertEquals("Hello, world.", text)
     }
 
@@ -126,7 +123,7 @@ class VercelGatewayCleanupTest {
     fun sendsStreamingStructuredRequest() = runBlocking {
         respondStream(streamed("""{"text":"Hi."}"""))
 
-        cleanup().cleanup("um hello world", "Clean it.", "openai/gpt-6-luna") {}
+        cleanup().cleanup("um hello world", "Clean it.", "openai/gpt-6-luna")
 
         val request = server.takeRequest()
         assertEquals("POST", request.method)
@@ -154,13 +151,8 @@ class VercelGatewayCleanupTest {
         val expected = "Line\none \"q\" back\\slash café 😀"
         // One delta per character splits every escape.
         respondStream(streamed(*content.map { it.toString() }.toTypedArray()))
-        val partials = mutableListOf<String>()
 
-        val text = cleanup().clean(partials::add)
-
-        assertEquals(expected, text)
-        assertEquals(expected, partials.last())
-        partials.forEach { assertTrue(expected.startsWith(it)) }
+        assertEquals(expected, cleanup().clean())
     }
 
     @Test(timeout = TEST_TIMEOUT_MS)
@@ -178,14 +170,10 @@ class VercelGatewayCleanupTest {
     }
 
     @Test(timeout = TEST_TIMEOUT_MS)
-    fun truncatedStreamFailsAfterItsPartials() {
+    fun truncatedStreamFails() {
         respondStream(sse(chunk("""{"text":"Hel"""), chunk("lo")))
-        val partials = mutableListOf<String>()
 
-        val error = failure { cleanup().clean(partials::add) }
-
-        assertEquals("Unexpected response from AI Gateway", error.message)
-        assertEquals(listOf("Hel", "Hello"), partials)
+        assertEquals("Unexpected response from AI Gateway", failure { cleanup().clean() }.message)
     }
 
     @Test(timeout = TEST_TIMEOUT_MS)
@@ -300,10 +288,10 @@ class VercelGatewayCleanupTest {
         val parts = listOf(sse(chunk("""{"text":"Hi""")), streamed(" there", """."}"""))
         server.enqueue(streamResponse("").body(paced(parts, release = release)).build())
         val cancelled = CountDownLatch(1)
-        val partial = CompletableDeferred<String>()
+        val headersReceived = CountDownLatch(1)
 
-        val job = launch(Dispatchers.IO) { cleanup(httpClient = cancelListener(cancelled)).clean(partial::complete) }
-        assertEquals("Hi", partial.await())
+        val job = launch(Dispatchers.IO) { cleanup(httpClient = cancelListener(cancelled, headersReceived)).clean() }
+        assertTrue(headersReceived.await(5, TimeUnit.SECONDS))
         job.cancelAndJoin()
 
         assertTrue(cancelled.await(5, TimeUnit.SECONDS))
@@ -324,11 +312,16 @@ class VercelGatewayCleanupTest {
             }
         }
 
-    private fun cancelListener(cancelled: CountDownLatch) = OkHttpClient.Builder()
-        .eventListener(object : EventListener() {
-            override fun canceled(call: Call) = cancelled.countDown()
-        })
-        .build()
+    private fun cancelListener(cancelled: CountDownLatch, headersReceived: CountDownLatch? = null) =
+        OkHttpClient.Builder()
+            .eventListener(object : EventListener() {
+                override fun canceled(call: Call) = cancelled.countDown()
+
+                override fun responseHeadersEnd(call: Call, response: Response) {
+                    headersReceived?.countDown()
+                }
+            })
+            .build()
 
     @Test(timeout = TEST_TIMEOUT_MS)
     fun missingApiKeyFailsWithoutCalling() {

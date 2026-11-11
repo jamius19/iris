@@ -33,6 +33,10 @@ data class Settings(
     val bubbleSide: BubbleSide,
     /** Bubble's vertical position as a fraction (0 = top, 1 = bottom) of the usable screen height. */
     val bubbleYFraction: Float,
+    /** Lines of live text the panel shows (its last ones); notices show up to max(this, 4). */
+    val panelLines: Int,
+    /** Panel's max width as a percent of the display width. */
+    val panelWidthPercent: Int,
 ) {
     companion object {
         const val STT_PROVIDER_OPENAI = "openai"
@@ -43,6 +47,11 @@ data class Settings(
 
         val DEFAULT_BUBBLE_SIDE = BubbleSide.RIGHT
         const val DEFAULT_BUBBLE_Y_FRACTION = 0.4f
+
+        const val DEFAULT_PANEL_LINES = 3
+        val PANEL_LINES_RANGE = 1..6
+        const val DEFAULT_PANEL_WIDTH_PERCENT = 50
+        val PANEL_WIDTH_PERCENT_RANGE = 30..90
 
         val DEFAULT_PROMPT = CleanupPrompt(
             id = "default",

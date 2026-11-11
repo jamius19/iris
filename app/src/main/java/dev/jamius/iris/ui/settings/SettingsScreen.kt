@@ -68,6 +68,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -76,6 +77,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -93,6 +95,9 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -105,12 +110,14 @@ import dev.jamius.iris.cleanup.CleanupException
 import dev.jamius.iris.cleanup.CleanupProvider
 import dev.jamius.iris.data.settings.CleanupPrompt
 import dev.jamius.iris.data.settings.Secret
+import dev.jamius.iris.data.settings.Settings
 import dev.jamius.iris.data.settings.SettingsRepository
 import dev.jamius.iris.overlay.IrisAccessibilityService
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import java.util.UUID
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -269,6 +276,28 @@ fun SettingsScreen(repository: SettingsRepository, cleanup: CleanupProvider, mod
                             color = MaterialTheme.colorScheme.primary
                         )
                     }
+                }
+            }
+
+            Section("Text panel") {
+                FieldsColumn {
+                    SliderSetting(
+                        label = "Lines",
+                        value = settings.panelLines,
+                        range = Settings.PANEL_LINES_RANGE,
+                        step = 1,
+                        valueText = { "$it" },
+                        supportingText = "Notices show at least 4 lines.",
+                        onSave = { scope.launch { repository.setPanelLines(it) } }
+                    )
+                    SliderSetting(
+                        label = "Max width",
+                        value = settings.panelWidthPercent,
+                        range = Settings.PANEL_WIDTH_PERCENT_RANGE,
+                        step = 10,
+                        valueText = { "$it %" },
+                        onSave = { scope.launch { repository.setPanelWidthPercent(it) } }
+                    )
                 }
             }
         }
@@ -522,6 +551,45 @@ private fun ApiKeyField(label: String, isSet: Boolean, onSave: (String) -> Unit,
         },
         modifier = Modifier.fillMaxWidth()
     )
+}
+
+/** Integer slider over [range] in [step]s; [onSave] runs when the user lets go, with a changed value. */
+@Composable
+private fun SliderSetting(
+    label: String,
+    value: Int,
+    range: IntRange,
+    step: Int,
+    valueText: (Int) -> String,
+    onSave: (Int) -> Unit,
+    supportingText: String? = null,
+) {
+    // Keyed on the stored value, so it follows saves.
+    var position by remember(value) { mutableFloatStateOf(value.toFloat()) }
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+            Text(
+                valueText(position.roundToInt()),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        supportingText?.let {
+            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Slider(
+            value = position,
+            onValueChange = { position = it },
+            modifier = Modifier.semantics {
+                contentDescription = label
+                stateDescription = valueText(position.roundToInt())
+            },
+            valueRange = range.first.toFloat()..range.last.toFloat(),
+            steps = (range.last - range.first) / step - 1,
+            onValueChangeFinished = { position.roundToInt().takeIf { it != value }?.let(onSave) }
+        )
+    }
 }
 
 /** Text field that edits locally and writes [onSave] only when the user taps Save. */

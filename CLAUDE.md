@@ -38,23 +38,27 @@ Overlay (`overlay`, View-based, not Compose: a Compose window in a service needs
 - `BubbleOverlay` owns two `TYPE_ACCESSIBILITY_OVERLAY` windows (bubble + live-text panel), positioned in display
   coordinates. API: `onTap`/`onMoved(side, yFraction)` callbacks, `show()`, `hide()`, `setStatus(BubbleStatus)`,
   `showText(String, tail = true)`, `hideText()`, `setPosition(side, yFraction)`, `setImeTop(Int?)`,
-  `onConfigurationChanged()`, `ownsWindow(windowId)`. `addView` failures (`BadTokenException` during teardown)
-  are logged and the view stays unadded. The service renders `DictationState` onto it (`render()`, also after
-  each `show()` so a re-shown bubble restores the panel). `BubbleStatus` per state: Idle = mic; Listening = red +
-  pulse ring; Finalizing (incl. cleanup + insertion) = WORKING, a spinning arc in place of the mic, panel keeps the
-  transcript (or the streamed cleanup text, below); Done without notice = SUCCESS, green tick, panel hidden
-  (1.5 s); Done with notice or Error = FAILURE, red exclamation mark, panel shows the notice/message (3 s,
-  `ERROR_DISPLAY_MS = 2 * DONE_DISPLAY_MS`).
+  `setPanelSize(lines, widthPercent)`, `onConfigurationChanged()`, `ownsWindow(windowId)`. `addView` failures
+  (`BadTokenException` during teardown) are logged and the view stays unadded. The service renders `DictationState`
+  onto it (`render()`, also after each `show()` so a re-shown bubble restores the panel).
+  `BubbleStatus` per state: Idle = mic; Listening = red + pulse ring; Finalizing (incl. cleanup + insertion) = WORKING,
+  a spinning arc in place of the mic, panel keeps the STT transcript (fixed once transcription ends); Done without
+  notice = SUCCESS, green tick, panel hidden (1.5 s); Done with notice or Error = FAILURE, red exclamation mark, panel
+  shows the notice/message (3 s, `ERROR_DISPLAY_MS = 2 * DONE_DISPLAY_MS`).
 - Bubble position persists as `Settings.bubbleSide` + `bubbleYFraction` (fraction of usable height, so it
-  survives rotation). Placement math is in `BubbleGeometry.kt` (unit tested).
+  survives rotation). Placement math is in `BubbleGeometry.kt` (unit tested). Panel size persists as
+  `Settings.panelLines` (1..6, default 3) and `panelWidthPercent` (30..90, default 50); the service collects
+  settings and calls `setPanelSize` (also before the first show), applied live. Settings > Text panel: two sliders,
+  saved on release.
 - `BubbleView`: 40 dp circle (`circlePx`) inside a 52 dp view (`sizePx`, the touch target; 6 dp each side for the
-  pulse ring). Panel: max width half the display, 15 sp text; vertical padding makes one line exactly the circle's
-  height. Live text (`tail = true`: Listening/Finalizing) keeps its last 2 lines: `showText` trims with a
+  pulse ring). Panel: max width `panelWidthPercent` % of the display, clamped to the usable width beside the snapped
+  bubble (`panelMaxWidth`), 15 sp text; vertical padding makes one line exactly the circle's height. Live text
+  (`tail = true`: Listening/Finalizing) keeps its last `panelLines` lines: `showText` trims with a
   `StaticLayout` at the max width (simple line breaking, bounds for width on API 35+), and re-trims once from the
   TextView's own layout if that still overflows, so the newest words always show with no scrolling or ellipsis.
-  Done/Error text (`tail = false`) shows from the start, up to 4 lines, ellipsized at the end.
-  The panel sits beside the circle with its top on the circle's top and grows down; if its max height (2 or 4
-  lines) wouldn't fit above the IME/usable bottom, its bottom sits on the circle's bottom and it grows up; if
+  Done/Error text (`tail = false`) shows from the start, up to max(`panelLines`, 4) lines, ellipsized at the end.
+  The panel sits beside the circle with its top on the circle's top and grows down; if its max height (live or
+  notice lines) wouldn't fit above the IME/usable bottom, its bottom sits on the circle's bottom and it grows up; if
   neither fits, its top sits on the usable top.
 
 Dictation (CP3):
@@ -89,11 +93,7 @@ Dictation (CP3):
 
 Cleanup + insertion (CP4):
 - Cleanup runs only if `cleanupEnabled`, with the active prompt and `cleanupModel`; no separate status text: the
-  bubble spins (Finalizing) until insertion is done. It streams: `CleanupProvider.cleanup(..., onPartial)` passes
-  the cleaned text so far (non-blank, only when it changed, caller's context = main); the service keeps it in
-  `cleanupText` (null outside cleanup), which `render()` shows for Finalizing (live, `tail = true`) instead of the
-  transcript, re-rendering at most every `PARTIAL_RENDER_MS` (50 ms; a skipped partial gets one trailing
-  `handler.postDelayed` render at the end of the window, removed when cleanup ends or the service is destroyed).
+  bubble spins (Finalizing) until insertion is done. The panel keeps the transcript; the cleaned text is never shown.
   `CleanupProvider.cleanup` throws `CleanupException` (user-readable). Any cleanup failure (incl. missing Gateway
   key) inserts the raw transcript; Done's notice is the error plus "Inserted the original text" (or "Original
   copied to clipboard"), so dictation is never lost. Other unexpected cleanup exceptions are logged and treated the
@@ -164,10 +164,8 @@ Providers (settings store a provider id for each):
   content and parse it at the end): SSE `data: {chat.completion.chunk}` events, `: heartbeat` comment lines,
   `data: [DONE]` last. `choices[0].delta.content` pieces concatenate into the JSON `{"text":...}`; chunks may have
   no choices (usage). The body is read line by line on an OkHttp thread (`callbackFlow`, deltas collected in the
-  caller's context; cancelling cancels the call). `JsonTextExtractor` (pure, unit tested) decodes the growing
-  `text` value for display only (escapes split across chunks, `\uXXXX` incl. surrogate pairs, other keys
-  skipped; it stops on anything odd). The result is always `parseCleanedText` of the full content: blank text,
-  any other shape, a non-JSON `data:` or a cut-off stream = "Unexpected response from AI Gateway".
+  caller's context; cancelling cancels the call). The result is `parseCleanedText` of the joined content: blank
+  text, any other shape, a non-JSON `data:` or a cut-off stream = "Unexpected response from AI Gateway".
   `delta.refusal` (OpenAI streaming reference; the Gateway doesn't document it) with no content =
   "Model refused: <refusal>". Mid-stream errors aren't documented; a `data:` with a top-level `error` (seen in
   vercel/ai#18303) = "AI Gateway error: <error.message>" (or just "AI Gateway error"). `choices[0].finish_reason`
@@ -188,7 +186,7 @@ Providers (settings store a provider id for each):
   starts doesn't help (OkHttp pools a connection only after its handshake), so very short dictations or
   pool-evicted connections still pay the handshake. The service logs one `Timing:` line per session that reaches
   the final-transcript hook (not error/no-speech/cancel): stop->transcript, cleanup (`X ms`, `X ms failed`,
-  `skipped` or `off`; `(first text Y ms)` once a partial arrived), stop->done; no text.
+  `skipped` or `off`), stop->done; no text.
 - Cleanup model list: `CleanupProvider.listModels()` = `GET https://ai-gateway.vercel.sh/v1/models` (checked
   2026-11-11: public, no auth needed; an invalid Bearer key gets 401, so the request is sent unauthenticated and
   the key is never read). Body `{object:"list", data:[{id, type, ...}]}` with `type` one of
@@ -263,7 +261,27 @@ Not covered by unit tests; check on a real device (ideally more than one OEM) af
 - Paste fallback: a field that rejects `ACTION_SET_TEXT` gets the text via clipboard + paste.
 - Rotation mid-dictation (Listening and Finalizing): bubble re-snaps, panel follows, session isn't lost.
 - Changing field during cleanup: text is copied with "field changed"; the panel is restored if the bubble re-shows.
+- Panel size: the Lines/Max width sliders change the panel (live text and notices) in another app without
+  restarting the service; at 90 % the panel stays on screen on both sides and in landscape.
+- TalkBack reads the Text panel sliders' name and value.
 - Sideloaded APK: the accessibility toggle needs App info > ⋮ > "Allow restricted settings".
+
+### Emulator / Android MCP
+Checked 2026-11-11 on `emulator-5554` (AVD `Medium_Phone_API_37.0`, API 37, 1080x2400; SDK `K:\Android\SDK`).
+- Build + install: `./gradlew installDebug --console=plain -q`; launch: MCP `launch_app` `dev.jamius.iris`.
+- MCP tools that work: `screenshot` (`save_path`), `get_ui_tree` (text + content-desc; no stateDescription),
+  `scroll_to_element`, `tap`, `swipe` (drags Compose sliders), `adb_shell`, `clear_logs`. Raw tree:
+  `MSYS_NO_PATHCONV=1 adb shell uiautomator dump /sdcard/ui.xml` (Git Bash rewrites `/sdcard` paths otherwise).
+- Text field to test on: `adb shell am start -a android.intent.action.INSERT -t vnd.android.cursor.dir/contact`
+  (Contacts editor), tap "First name". The bubble appears ~1 s after focus; bubble window bounds via
+  `adb shell dumpsys window windows | rg "dev.jamius.iris, frame"`. Rapid frames: `adb exec-out screencap -p`.
+- Accessibility service: `adb shell settings put secure enabled_accessibility_services
+  dev.jamius.iris/dev.jamius.iris.overlay.IrisAccessibilityService` (binds at once). `am force-stop
+  dev.jamius.iris` clears that setting, so re-run it after a force-stop.
+- No speech input: the emulator mic opens (session reaches the STT, "No speech detected"), but host audio isn't
+  forwarded (host TTS played through speakers wasn't heard). Transcript/cleanup/insertion paths need a device or
+  Extended controls > Microphone > "Virtual microphone uses host audio input" plus a real voice.
+- If adb shows the device `offline` while qemu runs, kill and restart the AVD.
 
 ## Status
 Update this section as checkpoints land.

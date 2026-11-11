@@ -48,16 +48,20 @@ class BubbleOverlay(
     private val bubbleParams = overlayParams(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
     private var bubbleShown = false
 
-    // Live text is trimmed to its last PANEL_MAX_LINES lines (see lastLines()), so the panel never scrolls; other
-    // text shows from its start, up to NOTICE_MAX_LINES lines. Simple line breaking and no font padding keep its
-    // layout and height predictable.
+    // Panel size from settings (setPanelSize()); declared before the panel, which reads liveLines.
+    private var liveLines = Settings.DEFAULT_PANEL_LINES
+    private var widthPercent = Settings.DEFAULT_PANEL_WIDTH_PERCENT
+
+    // Live text is trimmed to its last liveLines lines (see lastLines()), so the panel never scrolls; other text
+    // shows from its start, up to max(liveLines, NOTICE_MIN_LINES) lines. Simple line breaking and no font padding
+    // keep its layout and height predictable.
     private val panel = TextView(context).apply {
         setTextColor(context.getColor(R.color.panel_text))
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
         includeFontPadding = false
         breakStrategy = Layout.BREAK_STRATEGY_SIMPLE
         hyphenationFrequency = Layout.HYPHENATION_FREQUENCY_NONE
-        maxLines = PANEL_MAX_LINES
+        maxLines = liveLines
         // Vertical padding makes one line exactly as tall as the bubble's circle.
         val padV = (bubble.circlePx - lineHeight).coerceAtLeast(0)
         val padH = (14 * density).roundToInt()
@@ -112,7 +116,8 @@ class BubbleOverlay(
 
     /**
      * Shows [text] in the panel beside the bubble. No-op while hidden. With [tail] (live text) it shows the last
-     * [PANEL_MAX_LINES] lines; otherwise (notices, errors) up to [NOTICE_MAX_LINES] lines from the start, ellipsized.
+     * [liveLines] lines; otherwise (notices, errors) up to max([liveLines], [NOTICE_MIN_LINES]) lines from the start,
+     * ellipsized.
      */
     fun showText(text: String, tail: Boolean = true) {
         if (!bubbleShown) return
@@ -120,7 +125,7 @@ class BubbleOverlay(
         val modeChanged = tail != panelTail
         if (modeChanged) {
             panelTail = tail
-            panel.maxLines = if (tail) PANEL_MAX_LINES else NOTICE_MAX_LINES
+            panel.maxLines = panelMaxLines()
             panel.ellipsize = if (tail) null else TextUtils.TruncateAt.END
         }
         // Placed when added or when the max height changes; updateWindows() moves it with the bubble.
@@ -149,13 +154,15 @@ class BubbleOverlay(
         // so the newest words still show. Without ellipsize, its layout holds every line despite maxLines.
         panel.doOnLayout {
             val layout = panel.layout ?: return@doOnLayout
-            if (panelTail && layout.lineCount > PANEL_MAX_LINES) {
-                panel.text = panel.text.substring(layout.getLineStart(layout.lineCount - PANEL_MAX_LINES))
+            if (panelTail && layout.lineCount > liveLines) {
+                panel.text = panel.text.substring(layout.getLineStart(layout.lineCount - liveLines))
             }
         }
     }
 
-    /** The end of [text] that fills the panel's last [PANEL_MAX_LINES] lines at its max width; older lines drop off. */
+    private fun panelMaxLines() = if (panelTail) liveLines else maxOf(liveLines, NOTICE_MIN_LINES)
+
+    /** The end of [text] that fills the panel's last [liveLines] lines at its max width; older lines drop off. */
     private fun lastLines(text: String): String {
         val width = (panel.maxWidth - panel.paddingLeft - panel.paddingRight).coerceAtLeast(1)
         val builder = StaticLayout.Builder.obtain(text, 0, text.length, panel.paint, width)
@@ -168,7 +175,7 @@ class BubbleOverlay(
         }
         val layout = builder.build()
         val lines = layout.lineCount
-        return if (lines <= PANEL_MAX_LINES) text else text.substring(layout.getLineStart(lines - PANEL_MAX_LINES))
+        return if (lines <= liveLines) text else text.substring(layout.getLineStart(lines - liveLines))
     }
 
     fun hideText() {
@@ -187,6 +194,21 @@ class BubbleOverlay(
         this.side = side
         this.yFraction = yFraction
         relayout()
+    }
+
+    /**
+     * Live text keeps its last [lines] lines (notices up to max([lines], 4)); max width is [widthPercent] % of the
+     * display.
+     */
+    fun setPanelSize(lines: Int, widthPercent: Int) {
+        if (lines == liveLines && widthPercent == this.widthPercent) return
+        liveLines = lines
+        this.widthPercent = widthPercent
+        panel.maxLines = panelMaxLines()
+        if (!panelShown) return // show() / showText() place it with the new size.
+        placePanel()
+        windowManager.updateViewLayout(panel, panelParams)
+        setPanelText() // Re-trims from the full panelText, so more lines bring older words back.
     }
 
     /** Top of the on-screen keyboard in display pixels, or null if none is shown. The bubble stays above it. */
@@ -219,7 +241,9 @@ class BubbleOverlay(
     @SuppressLint("RtlHardcoded")
     private fun placePanel() {
         val bounds = windowManager.maximumWindowMetrics.bounds
-        val maxWidth = panelMaxWidth(bounds.width())
+        val area = screenArea()
+        val gap = (4 * density).roundToInt()
+        val maxWidth = panelMaxWidth(bounds.width(), widthPercent, area, bubble.sizePx, gap)
         if (maxWidth != panel.maxWidth) {
             panel.maxWidth = maxWidth
             // Re-trim for the new width, e.g. after rotation. Before it's added, showText() sets the text.
@@ -234,8 +258,8 @@ class BubbleOverlay(
             panelMaxHeight = panel.maxLines * panel.lineHeight + panel.paddingTop + panel.paddingBottom,
             displayWidth = bounds.width(),
             displayHeight = bounds.height(),
-            visible = screenArea().aboveIme(),
-            gap = (4 * density).roundToInt(),
+            visible = area.aboveIme(),
+            gap = gap,
         )
         panelParams.gravity = (if (placement.alignRight) Gravity.RIGHT else Gravity.LEFT) or
             (if (placement.alignBottom) Gravity.BOTTOM else Gravity.TOP)
@@ -338,8 +362,7 @@ class BubbleOverlay(
 
     private companion object {
         const val TAG = "BubbleOverlay"
-        const val PANEL_MAX_LINES = 2
-        const val NOTICE_MAX_LINES = 4
+        const val NOTICE_MIN_LINES = 4
         const val SNAP_DURATION_MS = 150L
     }
 }

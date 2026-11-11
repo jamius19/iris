@@ -38,8 +38,12 @@ internal fun fractionForY(y: Int, size: Int, area: Area): Float {
     return if (range <= 0) 0f else ((y - area.top).toFloat() / range).coerceIn(0f, 1f)
 }
 
-/** The live-text panel is at most half the display width wide. */
-internal fun panelMaxWidth(displayWidth: Int): Int = displayWidth / 2
+/**
+ * The live-text panel's max width: [widthPercent] % of the display, but no wider than the usable [area] beside a
+ * bubble of [bubbleSize] snapped to either edge, less the [gap], so it stays on screen.
+ */
+internal fun panelMaxWidth(displayWidth: Int, widthPercent: Int, area: Area, bubbleSize: Int, gap: Int): Int =
+    minOf(displayWidth * widthPercent / 100, area.right - area.left - bubbleSize - gap)
 
 /**
  * Puts the panel on the bubble's side facing screen center: left of a right-edge bubble, right of a left-edge one.

@@ -11,6 +11,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
@@ -67,6 +68,14 @@ class SettingsRepository(
         }
     }
 
+    suspend fun setPanelLines(lines: Int) {
+        dataStore.edit { it[Keys.PANEL_LINES] = lines }
+    }
+
+    suspend fun setPanelWidthPercent(percent: Int) {
+        dataStore.edit { it[Keys.PANEL_WIDTH_PERCENT] = percent }
+    }
+
     suspend fun setApiKey(secret: Secret, value: String) {
         secretStore.put(secret, value.trim())
     }
@@ -91,6 +100,8 @@ internal object Keys {
     val ACTIVE_PROMPT_ID = stringPreferencesKey("cleanup_active_prompt_id")
     val BUBBLE_SIDE = stringPreferencesKey("bubble_side")
     val BUBBLE_Y_FRACTION = floatPreferencesKey("bubble_y_fraction")
+    val PANEL_LINES = intPreferencesKey("panel_lines")
+    val PANEL_WIDTH_PERCENT = intPreferencesKey("panel_width_percent")
 }
 
 private val json = Json { ignoreUnknownKeys = true }
@@ -119,5 +130,7 @@ internal fun Preferences.toSettings(storedSecrets: Set<Secret>): Settings {
         gatewayKeySet = Secret.GATEWAY_API_KEY in storedSecrets,
         bubbleSide = this[Keys.BUBBLE_SIDE]?.let(BubbleSide::valueOf) ?: Settings.DEFAULT_BUBBLE_SIDE,
         bubbleYFraction = this[Keys.BUBBLE_Y_FRACTION] ?: Settings.DEFAULT_BUBBLE_Y_FRACTION,
+        panelLines = this[Keys.PANEL_LINES] ?: Settings.DEFAULT_PANEL_LINES,
+        panelWidthPercent = this[Keys.PANEL_WIDTH_PERCENT] ?: Settings.DEFAULT_PANEL_WIDTH_PERCENT,
     )
 }

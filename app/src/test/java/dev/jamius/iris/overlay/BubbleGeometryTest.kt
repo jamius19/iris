@@ -151,8 +151,14 @@ class BubbleGeometryTest {
     }
 
     @Test
-    fun panelMaxWidthIsHalfTheDisplay() {
-        assertEquals(540, panelMaxWidth(1080))
-        assertEquals(1200, panelMaxWidth(2400))
+    fun panelMaxWidthIsThePercentOfTheDisplay() {
+        assertEquals(500, panelMaxWidth(1000, 50, area, size, gap = 10))
+        assertEquals(300, panelMaxWidth(1000, 30, area, size, gap = 10))
+    }
+
+    @Test
+    fun panelMaxWidthStaysBesideTheBubble() {
+        assertEquals(890, panelMaxWidth(1000, 90, area, size, gap = 10))
+        assertEquals(790, panelMaxWidth(1000, 90, area.copy(left = 50, right = 950), size, gap = 10))
     }
 }
