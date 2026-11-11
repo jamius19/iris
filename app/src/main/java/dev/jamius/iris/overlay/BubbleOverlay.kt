@@ -83,18 +83,19 @@ class BubbleOverlay(
     // keep its layout and height predictable.
     private val panel = TextView(context).apply {
         setTextColor(context.getColor(R.color.panel_text))
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+        lineHeight = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, 24f, resources.displayMetrics).roundToInt()
         includeFontPadding = false
         breakStrategy = Layout.BREAK_STRATEGY_SIMPLE
         hyphenationFrequency = Layout.HYPHENATION_FREQUENCY_NONE
         maxLines = liveLines
         // Vertical padding makes one line exactly as tall as the bubble's circle.
-        val padV = (bubble.circlePx - lineHeight).coerceAtLeast(0)
-        val padH = (14 * density).roundToInt()
-        setPadding(padH, padV / 2, padH, padV - padV / 2)
+        val padV = (16 * density).roundToInt()
+        val padH = (16 * density).roundToInt()
+        setPadding(padH, (padV / 1.5f).toInt(), padH, (padV / 1.5f).toInt())
         background = GradientDrawable().apply {
             setColor(context.getColor(R.color.panel_background))
-            cornerRadius = bubble.circlePx / 2f
+            cornerRadius = bubble.circlePx / 2.5f
         }
     }
     private var panelText = ""
