@@ -132,8 +132,8 @@ class IrisAccessibilityService : AccessibilityService() {
             is DictationState.Finalizing -> overlay.showText(
                 if (cleaningUp) "Cleaning up…" else state.text.ifEmpty { "Finishing…" }
             )
-            is DictationState.Done -> overlay.showText(state.notice ?: state.text)
-            is DictationState.Error -> overlay.showText(state.message)
+            is DictationState.Done -> overlay.showText(state.notice ?: state.text, tail = false)
+            is DictationState.Error -> overlay.showText(state.message, tail = false)
         }
     }
 

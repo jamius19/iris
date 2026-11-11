@@ -37,12 +37,21 @@ Overlay (`overlay`, View-based, not Compose: a Compose window in a service needs
   overlay is created only once the stored bubble position has loaded.
 - `BubbleOverlay` owns two `TYPE_ACCESSIBILITY_OVERLAY` windows (bubble + live-text panel), positioned in display
   coordinates. API: `onTap`/`onMoved(side, yFraction)` callbacks, `show()`, `hide()`, `setListening(Boolean)`,
-  `showText(String)`, `hideText()`, `setPosition(side, yFraction)`, `setImeTop(Int?)`,
+  `showText(String, tail = true)`, `hideText()`, `setPosition(side, yFraction)`, `setImeTop(Int?)`,
   `onConfigurationChanged()`, `ownsWindow(windowId)`. `addView` failures (`BadTokenException` during teardown)
   are logged and the view stays unadded. The service renders `DictationState` onto it (`render()`, also after
   each `show()` so a re-shown bubble restores the panel); the bubble pulses only while Listening.
 - Bubble position persists as `Settings.bubbleSide` + `bubbleYFraction` (fraction of usable height, so it
   survives rotation). Placement math is in `BubbleGeometry.kt` (unit tested).
+- `BubbleView`: 40 dp circle (`circlePx`) inside a 52 dp view (`sizePx`, the touch target; 6 dp each side for the
+  pulse ring). Panel: max width half the display, 15 sp text; vertical padding makes one line exactly the circle's
+  height. Live text (`tail = true`: Listening/Finalizing) keeps its last 2 lines: `showText` trims with a
+  `StaticLayout` at the max width (simple line breaking, bounds for width on API 35+), and re-trims once from the
+  TextView's own layout if that still overflows, so the newest words always show with no scrolling or ellipsis.
+  Done/Error text (`tail = false`) shows from the start, up to 4 lines, ellipsized at the end.
+  The panel sits beside the circle with its top on the circle's top and grows down; if its max height (2 or 4
+  lines) wouldn't fit above the IME/usable bottom, its bottom sits on the circle's bottom and it grows up; if
+  neither fits, its top sits on the usable top.
 
 Dictation (CP3):
 - `audio.AudioRecorder.chunks()`: cold `Flow<ByteArray>`, 100 ms PCM16 chunks on `Dispatchers.IO`; each collection

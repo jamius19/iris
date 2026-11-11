@@ -26,6 +26,10 @@ internal class BubbleView(context: Context) : View(context) {
     private val ringWidth = RING_DP * density
     val sizePx = (2 * (radius + ringWidth)).roundToInt()
 
+    /** Diameter of the visible circle, and its offset from the view's top/left edge (room for the ring). */
+    val circlePx = (2 * radius).roundToInt()
+    val circleInsetPx = (sizePx - circlePx) / 2
+
     private val idleColor = context.getColor(R.color.bubble_idle)
     private val listeningColor = context.getColor(R.color.bubble_listening)
     private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -51,7 +55,7 @@ internal class BubbleView(context: Context) : View(context) {
 
     init {
         contentDescription = context.getString(R.string.bubble_description)
-        elevation = 6 * density
+        elevation = 5 * density
         outlineProvider = object : ViewOutlineProvider() {
             override fun getOutline(view: View, outline: Outline) {
                 val center = sizePx / 2
@@ -97,8 +101,8 @@ internal class BubbleView(context: Context) : View(context) {
     }
 
     private companion object {
-        const val RADIUS_DP = 26
-        const val RING_DP = 8
-        const val ICON_DP = 26
+        const val RADIUS_DP = 20
+        const val RING_DP = 6
+        const val ICON_DP = 20
     }
 }

@@ -38,27 +38,40 @@ internal fun fractionForY(y: Int, size: Int, area: Area): Float {
     return if (range <= 0) 0f else ((y - area.top).toFloat() / range).coerceIn(0f, 1f)
 }
 
+/** The live-text panel is at most half the display width wide. */
+internal fun panelMaxWidth(displayWidth: Int): Int = displayWidth / 2
+
 /**
  * Puts the panel on the bubble's side facing screen center: left of a right-edge bubble, right of a left-edge one.
- * It is top-aligned with the bubble in the upper half of the [visible] area (screen above the IME) and
- * bottom-aligned in the lower half, so it grows away from the nearer vertical edge.
+ * A one-line panel is as tall as the bubble's circle and lines up with it. Taller panels keep the circle's top edge
+ * and grow down, unless [panelMaxHeight] wouldn't fit above the [visible] area's bottom (the IME or the usable area's
+ * bottom): then they keep the circle's bottom edge and grow up. If that wouldn't fit below [visible]'s top either,
+ * the panel's top sits on [visible]'s top and it grows down.
  */
 internal fun panelPlacement(
     side: BubbleSide,
     bubbleX: Int,
-    bubbleY: Int,
     bubbleSize: Int,
+    circleTop: Int,
+    circleSize: Int,
+    panelMaxHeight: Int,
     displayWidth: Int,
     displayHeight: Int,
     visible: Area,
     gap: Int,
 ): PanelPlacement {
     val alignRight = side == BubbleSide.RIGHT
-    val alignBottom = bubbleY + bubbleSize / 2 > (visible.top + visible.bottom) / 2
+    val circleBottom = circleTop + circleSize
+    val growsDown = circleTop + panelMaxHeight <= visible.bottom
+    val alignBottom = !growsDown && circleBottom - panelMaxHeight >= visible.top
     return PanelPlacement(
         alignRight = alignRight,
         alignBottom = alignBottom,
         x = if (alignRight) displayWidth - bubbleX + gap else bubbleX + bubbleSize + gap,
-        y = if (alignBottom) displayHeight - (bubbleY + bubbleSize) else bubbleY,
+        y = when {
+            growsDown -> circleTop
+            alignBottom -> displayHeight - circleBottom
+            else -> visible.top
+        },
     )
 }

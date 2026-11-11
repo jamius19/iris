@@ -58,29 +58,101 @@ class BubbleGeometryTest {
         assertEquals(475, yForFraction(0.5f, size, landscape))
     }
 
-    @Test
-    fun panelFacesScreenCenter() {
-        val right = panelPlacement(BubbleSide.RIGHT, 900, 300, size, 1000, 2200, area, gap = 10)
-        assertEquals(PanelPlacement(alignRight = true, alignBottom = false, x = 110, y = 300), right)
+    // Bubble view of `size` at y = 300 with an 80 px circle inset by 10; two-line panel height 130.
+    private fun placement(
+        side: BubbleSide = BubbleSide.LEFT,
+        bubbleY: Int = 300,
+        visible: Area = area,
+        panelMaxHeight: Int = 130,
+    ) = panelPlacement(
+        side = side,
+        bubbleX = if (side == BubbleSide.LEFT) 0 else 900,
+        bubbleSize = size,
+        circleTop = bubbleY + 10,
+        circleSize = 80,
+        panelMaxHeight = panelMaxHeight,
+        displayWidth = 1000,
+        displayHeight = 2200,
+        visible = visible,
+        gap = 10,
+    )
 
-        val left = panelPlacement(BubbleSide.LEFT, 0, 300, size, 1000, 2200, area, gap = 10)
-        assertEquals(PanelPlacement(alignRight = false, alignBottom = false, x = 110, y = 300), left)
+    @Test
+    fun panelFacesScreenCenterAndLinesUpWithCircleTop() {
+        // A one-line panel is as tall as the circle, so top-aligning it lines it up with the circle.
+        assertEquals(
+            PanelPlacement(alignRight = true, alignBottom = false, x = 110, y = 310),
+            placement(BubbleSide.RIGHT)
+        )
+        assertEquals(
+            PanelPlacement(alignRight = false, alignBottom = false, x = 110, y = 310),
+            placement(BubbleSide.LEFT)
+        )
     }
 
     @Test
-    fun panelGrowsUpwardInLowerHalf() {
-        val placement = panelPlacement(BubbleSide.LEFT, 0, 1800, size, 1000, 2200, area, gap = 10)
-        assertEquals(PanelPlacement(alignRight = false, alignBottom = true, x = 110, y = 300), placement)
+    fun panelGrowsDownWhileTwoLinesFitAboveAreaBottom() {
+        // Circle top 1960 + 130 = 2090 fits above the area bottom 2100.
+        assertEquals(
+            PanelPlacement(alignRight = false, alignBottom = false, x = 110, y = 1960),
+            placement(bubbleY = 1950)
+        )
     }
 
     @Test
-    fun panelDirectionUsesAreaAboveIme() {
-        // Bubble center 1050 is in the upper half of the full area, but the lower half of the area above the IME.
-        val noIme = panelPlacement(BubbleSide.LEFT, 0, 1000, size, 1000, 2200, area, gap = 10)
-        assertEquals(PanelPlacement(alignRight = false, alignBottom = false, x = 110, y = 1000), noIme)
+    fun panelGrowsDownWhenItExactlyReachesAreaBottom() {
+        // Circle top 1970 + 130 = 2100 is exactly the area bottom.
+        assertEquals(
+            PanelPlacement(alignRight = false, alignBottom = false, x = 110, y = 1970),
+            placement(bubbleY = 1960)
+        )
+    }
 
+    @Test
+    fun noticePanelUsesItsFourLineHeight() {
+        // Circle top 1910: two lines (130) fit below, four lines (250) don't, so a notice grows up (bottom 1990).
+        assertEquals(
+            PanelPlacement(alignRight = false, alignBottom = false, x = 110, y = 1910),
+            placement(bubbleY = 1900)
+        )
+        assertEquals(
+            PanelPlacement(alignRight = false, alignBottom = true, x = 110, y = 210),
+            placement(bubbleY = 1900, panelMaxHeight = 250)
+        )
+    }
+
+    @Test
+    fun panelTopClampsToVisibleTopWhenNeitherDirectionFits() {
+        // Circle 110..190, panel 130: down reaches 240 past the IME at 220, up starts at 60 above the top 100.
+        assertEquals(
+            PanelPlacement(alignRight = false, alignBottom = false, x = 110, y = 100),
+            placement(bubbleY = 100, visible = area.copy(bottom = 220))
+        )
+    }
+
+    @Test
+    fun panelGrowsUpNearAreaBottom() {
+        // Circle top 1990 + 130 overflows 2100: bottom-aligned with the circle (bottom 2070, 130 above display bottom).
+        assertEquals(
+            PanelPlacement(alignRight = false, alignBottom = true, x = 110, y = 130),
+            placement(bubbleY = 1980)
+        )
+    }
+
+    @Test
+    fun panelGrowsUpAboveIme() {
         val aboveIme = area.copy(bottom = 1200)
-        val withIme = panelPlacement(BubbleSide.LEFT, 0, 1000, size, 1000, 2200, aboveIme, gap = 10)
-        assertEquals(PanelPlacement(alignRight = false, alignBottom = true, x = 110, y = 1100), withIme)
+        // Circle top 1060 + 130 = 1190 still fits above the IME at 1200.
+        val belowFits = placement(bubbleY = 1050, visible = aboveIme)
+        assertEquals(PanelPlacement(alignRight = false, alignBottom = false, x = 110, y = 1060), belowFits)
+        // Circle top 1110 + 130 would cover the IME at 1200: bottom-aligned with the circle (bottom 1190).
+        val nearIme = placement(bubbleY = 1100, visible = aboveIme)
+        assertEquals(PanelPlacement(alignRight = false, alignBottom = true, x = 110, y = 1010), nearIme)
+    }
+
+    @Test
+    fun panelMaxWidthIsHalfTheDisplay() {
+        assertEquals(540, panelMaxWidth(1080))
+        assertEquals(1200, panelMaxWidth(2400))
     }
 }
