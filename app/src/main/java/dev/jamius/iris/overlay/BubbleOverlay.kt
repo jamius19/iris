@@ -22,8 +22,12 @@ import android.view.View
 import android.view.ViewConfiguration
 import android.view.WindowInsets
 import android.view.WindowManager
+import android.view.animation.PathInterpolator
+import android.widget.FrameLayout
 import android.widget.TextView
+import androidx.core.animation.doOnEnd
 import androidx.core.view.doOnLayout
+import androidx.core.view.updateLayoutParams
 import dev.jamius.iris.R
 import dev.jamius.iris.data.settings.BubbleSide
 import dev.jamius.iris.data.settings.Settings
@@ -33,20 +37,42 @@ import kotlin.math.roundToInt
  * The bubble and live-text panel, drawn as two `TYPE_ACCESSIBILITY_OVERLAY` windows. Must be created with an
  * AccessibilityService context and used on the main thread.
  *
- * The overlay owns no dictation logic: [onTap] reports taps, the owner drives [setStatus] and
- * [showText]/[hideText]. [onMoved] reports where the user dropped the bubble, for persisting.
+ * The bubble window is a stack: the button ([BubbleView]) and, while listening, the stop pill ([PillView]) sliding
+ * out below it, or above it if it wouldn't fit below ([pillOpensUp]). The pill is GONE when collapsed, so the
+ * WRAP_CONTENT window is just the button at rest.
+ *
+ * The overlay owns no dictation logic: [onButtonTap] and [onPillTap] report taps, the owner drives [setStatus],
+ * [setLevel] and [showText]/[hideText]. [onMoved] reports where the user dropped the bubble, for persisting.
  */
 class BubbleOverlay(
     private val context: Context,
-    private val onTap: () -> Unit,
+    private val onButtonTap: () -> Unit,
+    private val onPillTap: () -> Unit,
     private val onMoved: (side: BubbleSide, yFraction: Float) -> Unit,
 ) {
     private val windowManager = context.getSystemService(WindowManager::class.java)
     private val density = context.resources.displayMetrics.density
 
     private val bubble = BubbleView(context)
+    private val pill = PillView(context).apply { visibility = View.GONE }
+
+    /** Distance from the stack's button-side edge to the pill view: the pill view starts at the circle's centre. */
+    private val pillMargin = bubble.circleInsetPx + bubble.circlePx / 2
+    private val expandedHeight = pillMargin + pill.heightPx
+    private val stack = FrameLayout(context).apply {
+        addView(pill, FrameLayout.LayoutParams(WRAP, WRAP).apply { topMargin = pillMargin })
+        addView(bubble, FrameLayout.LayoutParams(WRAP, WRAP))
+    }
     private val bubbleParams = overlayParams(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
     private var bubbleShown = false
+
+    /** Display y of the button's top; the window's y differs while the pill opens up. */
+    private var buttonY = 0
+    private var expanded = false
+    private var revealAnimator: ValueAnimator? = null
+
+    /** The pill's direction, decided while it is visible and kept after it collapses, so the panel doesn't jump. */
+    private var pillUp = false
 
     // Panel size from settings (setPanelSize()); declared before the panel, which reads liveLines.
     private var liveLines = Settings.DEFAULT_PANEL_LINES
@@ -78,6 +104,12 @@ class BubbleOverlay(
     )
     private var panelShown = false
 
+    /** The owner wants the panel shown (kept while the bubble is hidden, so [show] restores it). */
+    private var panelWanted = false
+    private var panelExiting = false
+    private var panelAnimator: ValueAnimator? = null
+    private var panelAlignBottom = false
+
     private var side = Settings.DEFAULT_BUBBLE_SIDE
     private var yFraction = Settings.DEFAULT_BUBBLE_Y_FRACTION
     private var imeTop: Int? = null
@@ -85,63 +117,163 @@ class BubbleOverlay(
 
     init {
         // DragHandler calls performClick() on a tap.
+        val dragHandler = DragHandler()
         @SuppressLint("ClickableViewAccessibility")
-        bubble.setOnTouchListener(DragHandler())
-        bubble.setOnClickListener { onTap() }
+        bubble.setOnTouchListener(dragHandler)
+        @SuppressLint("ClickableViewAccessibility")
+        pill.setOnTouchListener(dragHandler)
+        bubble.setOnClickListener { onButtonTap() }
+        pill.setOnClickListener { onPillTap() }
     }
 
+    /** Shows the bubble, and the panel if it should show (see [showText]), in their current state: no animation. */
     fun show() {
         if (bubbleShown) return
         placeBubble()
         try {
-            windowManager.addView(bubble, bubbleParams)
+            windowManager.addView(stack, bubbleParams)
             bubbleShown = true
         } catch (e: WindowManager.BadTokenException) {
             Log.w(TAG, "Bubble not shown", e) // The service is being torn down.
         }
+        if (bubbleShown && panelWanted) {
+            placePanel()
+            // Reset here, not on removal: a change after the async removeView() would draw one more frame.
+            panel.alpha = 1f
+            panel.scaleX = 1f
+            panel.scaleY = 1f
+            if (addPanel()) setPanelText()
+        }
     }
 
-    /** Hides the bubble and the panel. The status is left to the owner. */
+    /** Hides the bubble and the panel at once. The status and panel text are left to the owner. */
     fun hide() {
-        snapAnimator?.end()
-        hideText()
+        snapAnimator?.takeIf { it.isRunning }?.end()
+        revealAnimator?.takeIf { it.isRunning }?.end()
+        panelAnimator?.cancel()
+        removePanel()
         if (!bubbleShown) return
-        windowManager.removeView(bubble)
+        windowManager.removeView(stack)
         bubbleShown = false
     }
 
+    /** Also expands the pill while [BubbleStatus.LISTENING] and collapses it otherwise. */
     fun setStatus(status: BubbleStatus) {
         bubble.status = status
+        setExpanded(status == BubbleStatus.LISTENING)
+    }
+
+    /** Loudness (0..1) for the pill's waveform. */
+    fun setLevel(level: Float) = pill.setLevel(level)
+
+    private fun setExpanded(expanded: Boolean) {
+        if (expanded == this.expanded) return
+        this.expanded = expanded
+        pill.active = expanded
+        revealAnimator?.run {
+            removeAllListeners()
+            cancel()
+        }
+        if (expanded) {
+            pill.visibility = View.VISIBLE
+            placeStack()
+            if (bubbleShown) updateWindows() // Applied in the same traversal as the window's WRAP_CONTENT growth.
+        }
+        if (!bubbleShown) {
+            pill.reveal = if (expanded) 1f else 0f
+            if (!expanded) collapsed()
+            return
+        }
+        revealAnimator = ValueAnimator.ofFloat(pill.reveal, if (expanded) 1f else 0f).apply {
+            duration = PILL_MS
+            interpolator = EASE_IN_OUT
+            addUpdateListener { pill.reveal = it.animatedValue as Float }
+            if (!expanded) doOnEnd { collapsed() }
+            start()
+        }
+    }
+
+    /** The pill is back behind the circle: shrink the window to the button. */
+    private fun collapsed() {
+        pill.visibility = View.GONE
+        placeStack()
+        updateWindows()
     }
 
     /**
-     * Shows [text] in the panel beside the bubble. No-op while hidden. With [tail] (live text) it shows the last
-     * [liveLines] lines; otherwise (notices, errors) up to max([liveLines], [NOTICE_MIN_LINES]) lines from the start,
-     * ellipsized.
+     * Shows [text] in the panel beside the bubble, animating the panel in if it isn't showing. While hidden, it is
+     * kept for [show]. With [tail] (live text) it shows the last [liveLines] lines; otherwise (notices, errors) up to
+     * max([liveLines], [NOTICE_MIN_LINES]) lines from the start, ellipsized.
      */
     fun showText(text: String, tail: Boolean = true) {
-        if (!bubbleShown) return
         panelText = text
+        panelWanted = true
         val modeChanged = tail != panelTail
         if (modeChanged) {
             panelTail = tail
             panel.maxLines = panelMaxLines()
             panel.ellipsize = if (tail) null else TextUtils.TruncateAt.END
         }
+        if (!bubbleShown) return
         // Placed when added or when the max height changes; updateWindows() moves it with the bubble.
         if (!panelShown) {
             placePanel()
-            try {
-                windowManager.addView(panel, panelParams)
-                panelShown = true
-            } catch (e: WindowManager.BadTokenException) {
-                Log.w(TAG, "Panel not shown", e) // The service is being torn down.
+            panel.alpha = 0f
+            if (!addPanel()) return
+            animatePanel(enter = true)
+        } else {
+            if (panelExiting) animatePanel(enter = true)
+            if (modeChanged) {
+                placePanel()
+                windowManager.updateViewLayout(panel, panelParams)
             }
-        } else if (modeChanged) {
-            placePanel()
-            windowManager.updateViewLayout(panel, panelParams)
         }
         setPanelText()
+    }
+
+    /** Animates the panel out (see [showText]). */
+    fun hideText() {
+        panelWanted = false
+        if (panelShown && !panelExiting) animatePanel(enter = false)
+    }
+
+    private fun addPanel(): Boolean {
+        try {
+            windowManager.addView(panel, panelParams)
+            panelShown = true
+        } catch (e: WindowManager.BadTokenException) {
+            Log.w(TAG, "Panel not shown", e) // The service is being torn down.
+        }
+        return panelShown
+    }
+
+    private fun removePanel() {
+        panelExiting = false
+        if (!panelShown) return
+        windowManager.removeView(panel)
+        panelShown = false
+    }
+
+    /** Fades and scales the panel in or out (then removes it), from the bubble's side; continues from mid-way. */
+    private fun animatePanel(enter: Boolean) {
+        panelExiting = !enter // Before the cancel below, so a cancelled exit doesn't remove the panel.
+        panelAnimator?.cancel()
+        panelAnimator = ValueAnimator.ofFloat(panel.alpha, if (enter) 1f else 0f).apply {
+            duration = if (enter) PANEL_IN_MS else PANEL_OUT_MS
+            interpolator = if (enter) EMPHASIZED_DECELERATE else EMPHASIZED_ACCELERATE
+            addUpdateListener {
+                val fraction = it.animatedValue as Float
+                val scale = PANEL_MIN_SCALE + (1 - PANEL_MIN_SCALE) * fraction
+                panel.alpha = fraction
+                panel.scaleX = scale
+                panel.scaleY = scale
+                // Set per frame: the size is known only after layout and may grow meanwhile.
+                panel.pivotX = if (side == BubbleSide.RIGHT) panel.width.toFloat() else 0f
+                panel.pivotY = if (panelAlignBottom) panel.height.toFloat() else 0f
+            }
+            if (!enter) doOnEnd { if (panelExiting) removePanel() }
+            start()
+        }
     }
 
     private fun setPanelText() {
@@ -178,14 +310,8 @@ class BubbleOverlay(
         return if (lines <= liveLines) text else text.substring(layout.getLineStart(lines - liveLines))
     }
 
-    fun hideText() {
-        if (!panelShown) return
-        windowManager.removeView(panel)
-        panelShown = false
-    }
-
     /** Whether [windowId] (an accessibility window id) is the bubble's or the panel's window. */
-    fun ownsWindow(windowId: Int): Boolean = listOf(bubble, panel).any {
+    fun ownsWindow(windowId: Int): Boolean = listOf(stack, panel).any {
         it.isAttachedToWindow && it.createAccessibilityNodeInfo().windowId == windowId
     }
 
@@ -220,7 +346,8 @@ class BubbleOverlay(
 
     /** Call on rotation or screen size change: re-snaps the bubble to its edge and keeps it on screen. */
     fun onConfigurationChanged() {
-        snapAnimator?.end()
+        snapAnimator?.takeIf { it.isRunning }?.end()
+        bubble.onConfigurationChanged() // Dark mode colours.
         relayout()
     }
 
@@ -234,7 +361,30 @@ class BubbleOverlay(
         val area = screenArea()
         val visible = area.aboveIme()
         bubbleParams.x = snappedX(side, size, area)
-        bubbleParams.y = clamp(yForFraction(yFraction, size, area), visible.top, visible.bottom, size)
+        buttonY = clamp(yForFraction(yFraction, size, area), visible.top, visible.bottom, size)
+        placeStack()
+    }
+
+    /**
+     * While the pill is visible, opens it down from the button at [buttonY], or up if it wouldn't fit above the
+     * IME/usable bottom; then lays out the stack and sets the window's y so the button stays at [buttonY].
+     */
+    private fun placeStack() {
+        val visible = pill.visibility == View.VISIBLE
+        if (visible) pillUp = pillOpensUp(buttonY, expandedHeight, screenArea().aboveIme().bottom)
+        val up = visible && pillUp
+        if (up != pill.opensUp) {
+            pill.opensUp = up
+            val gravity = if (up) Gravity.BOTTOM else Gravity.TOP
+            bubble.updateLayoutParams<FrameLayout.LayoutParams> { this.gravity = gravity }
+            pill.updateLayoutParams<FrameLayout.LayoutParams> {
+                this.gravity = gravity
+                topMargin = if (up) 0 else pillMargin
+                // The button's view also has shadow room below the circle.
+                bottomMargin = if (up) pillMargin + bubble.shadowRoomPx else 0
+            }
+        }
+        bubbleParams.y = if (up) buttonY - (expandedHeight - bubble.sizePx) else buttonY
     }
 
     // LEFT/RIGHT are deliberate: overlay coordinates are display coordinates, not layout direction.
@@ -253,22 +403,24 @@ class BubbleOverlay(
             side = side,
             bubbleX = bubbleParams.x,
             bubbleSize = bubble.sizePx,
-            circleTop = bubbleParams.y + bubble.circleInsetPx,
+            circleTop = buttonY + bubble.circleInsetPx,
             circleSize = bubble.circlePx,
             panelMaxHeight = panel.maxLines * panel.lineHeight + panel.paddingTop + panel.paddingBottom,
             displayWidth = bounds.width(),
             displayHeight = bounds.height(),
             visible = area.aboveIme(),
             gap = gap,
+            growUp = pillUp,
         )
         panelParams.gravity = (if (placement.alignRight) Gravity.RIGHT else Gravity.LEFT) or
             (if (placement.alignBottom) Gravity.BOTTOM else Gravity.TOP)
         panelParams.x = placement.x
         panelParams.y = placement.y
+        panelAlignBottom = placement.alignBottom
     }
 
     private fun updateWindows() {
-        if (bubbleShown) windowManager.updateViewLayout(bubble, bubbleParams)
+        if (bubbleShown) windowManager.updateViewLayout(stack, bubbleParams)
         if (panelShown) {
             placePanel()
             windowManager.updateViewLayout(panel, panelParams)
@@ -299,16 +451,24 @@ class BubbleOverlay(
         private var startX = 0
         private var startY = 0
         private var dragging = false
+        private var clickTarget: View? = null
 
         override fun onTouch(view: View, event: MotionEvent): Boolean {
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    snapAnimator?.end()
+                    snapAnimator?.takeIf { it.isRunning }?.end()
                     downX = event.rawX
                     downY = event.rawY
                     startX = bubbleParams.x
-                    startY = bubbleParams.y
+                    startY = buttonY
                     dragging = false
+                    // While the pill is out, the button's margin on the pill's side (the gap) counts as the pill.
+                    val inGap = if (pill.opensUp) {
+                        event.y < bubble.circleInsetPx
+                    } else {
+                        event.y > bubble.circleInsetPx + bubble.circlePx
+                    }
+                    clickTarget = if (view === bubble && expanded && inGap) pill else view
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val dx = event.rawX - downX
@@ -318,11 +478,12 @@ class BubbleOverlay(
                         val size = bubble.sizePx
                         val visible = screenArea().aboveIme()
                         bubbleParams.x = clamp(startX + dx.roundToInt(), visible.left, visible.right, size)
-                        bubbleParams.y = clamp(startY + dy.roundToInt(), visible.top, visible.bottom, size)
+                        buttonY = clamp(startY + dy.roundToInt(), visible.top, visible.bottom, size)
+                        placeStack()
                         updateWindows()
                     }
                 }
-                MotionEvent.ACTION_UP -> if (dragging) snapToEdge() else view.performClick()
+                MotionEvent.ACTION_UP -> if (dragging) snapToEdge() else clickTarget?.performClick()
                 MotionEvent.ACTION_CANCEL -> if (dragging) snapToEdge()
             }
             return true
@@ -333,7 +494,7 @@ class BubbleOverlay(
         val size = bubble.sizePx
         val area = screenArea()
         side = nearestSide(bubbleParams.x, size, area)
-        yFraction = fractionForY(bubbleParams.y, size, area)
+        yFraction = fractionForY(buttonY, size, area)
         onMoved(side, yFraction)
         snapAnimator = ValueAnimator.ofInt(bubbleParams.x, snappedX(side, size, area)).apply {
             duration = SNAP_DURATION_MS
@@ -358,11 +519,22 @@ class BubbleOverlay(
         // Position in raw display coordinates; screenArea() keeps the bubble clear of bars and cutouts.
         fitInsetsTypes = 0
         layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+        // The system would otherwise animate a move (e.g. the stack growing up from the button), sliding the
+        // already re-laid-out content from the old position. API 33 and below can't turn it off.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) setCanPlayMoveAnimation(false)
     }
 
     private companion object {
         const val TAG = "BubbleOverlay"
         const val NOTICE_MIN_LINES = 4
         const val SNAP_DURATION_MS = 150L
+        const val PILL_MS = 300L
+        const val PANEL_IN_MS = 250L
+        const val PANEL_OUT_MS = 200L
+        const val PANEL_MIN_SCALE = 0.92f
+        const val WRAP = FrameLayout.LayoutParams.WRAP_CONTENT
+        val EMPHASIZED_DECELERATE = PathInterpolator(0.05f, 0.7f, 0.1f, 1f)
+        val EMPHASIZED_ACCELERATE = PathInterpolator(0.3f, 0f, 0.8f, 0.15f)
+        val EASE_IN_OUT = PathInterpolator(0.65f, 0f, 0.35f, 1f)
     }
 }

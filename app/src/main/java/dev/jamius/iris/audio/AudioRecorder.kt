@@ -24,8 +24,11 @@ import kotlinx.coroutines.isActive
 /** A user-readable microphone failure. */
 class AudioCaptureException(message: String) : Exception(message)
 
-/** Recorded PCM [bytes]; [readAtNanos] is `SystemClock.elapsedRealtimeNanos()` when the read returned. */
-class AudioChunk(val bytes: ByteArray, val readAtNanos: Long)
+/**
+ * Recorded PCM [bytes]; [readAtNanos] is `SystemClock.elapsedRealtimeNanos()` when the read returned. [level] is the
+ * chunk's loudness, 0..1, for the waveform.
+ */
+class AudioChunk(val bytes: ByteArray, val readAtNanos: Long, val level: Float = 0f)
 
 /**
  * Records PCM16 mono 24 kHz audio. Uses `VOICE_RECOGNITION`, the source AOSP lets an accessibility service
@@ -65,7 +68,11 @@ class AudioRecorder(private val context: Context) {
                     throw AudioCaptureException("Android silenced the microphone for Iris")
                 }
                 // A blocking read returning 0 is unusual; back off briefly instead of spinning.
-                if (read > 0) emit(AudioChunk(buffer.copyOf(read), readAt)) else delay(EMPTY_READ_BACKOFF_MS)
+                if (read > 0) {
+                    emit(AudioChunk(buffer.copyOf(read), readAt, pcm16Level(buffer, read)))
+                } else {
+                    delay(EMPTY_READ_BACKOFF_MS)
+                }
             }
         } finally {
             if (record.recordingState == AudioRecord.RECORDSTATE_RECORDING) record.stop()

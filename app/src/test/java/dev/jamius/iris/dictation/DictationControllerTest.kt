@@ -70,14 +70,15 @@ class DictationControllerTest {
         stt: SpeechToTextProvider,
         audio: Flow<ByteArray> = this@DictationControllerTest.audio,
         cleanupEnabled: Boolean = false,
-        onFinalTranscript: suspend (String, Boolean) -> DictationState.Done = { text, _ ->
+        level: Float = 0f,
+        onFinalTranscript: suspend (String) -> DictationState.Done = { text ->
             finals += text
             DictationState.Done(text)
         },
     ) = DictationController(
         scope = backgroundScope,
         // Virtual time is the clock: a chunk's read ends when it is emitted.
-        audio = audio.map { AudioChunk(it, currentTime) },
+        audio = audio.map { AudioChunk(it, currentTime, level) },
         stt = stt,
         settings = flowOf(emptyPreferences().toSettings(emptySet()).copy(cleanupEnabled = cleanupEnabled)),
         warmUpCleanup = { warmUps++ },
@@ -86,19 +87,19 @@ class DictationControllerTest {
     )
 
     @Test
-    fun tapStartsThenTapFinalizesToDoneThenIdle() = runTest {
+    fun startThenStopFinalizesToDoneThenIdle() = runTest {
         val stt = FakeStt { "Hello world" }
         val controller = controller(stt)
 
-        controller.onTap()
+        controller.start()
         runCurrent()
         assertEquals(DictationState.Listening("chunk 1"), controller.state.value)
         advanceTimeBy(150)
         assertEquals(DictationState.Listening("chunk 2"), controller.state.value)
 
-        controller.onTap()
+        controller.stop()
         assertEquals(DictationState.Finalizing("chunk 2"), controller.state.value)
-        // The chunk recorded during the tap is still sent, then the audio ends.
+        // The chunk recorded during the stop is still sent, then the audio ends.
         advanceTimeBy(100)
         assertEquals(DictationState.Done("Hello world"), controller.state.value)
         assertEquals(listOf("Hello world"), finals)
@@ -130,10 +131,10 @@ class DictationControllerTest {
             }
         )
 
-        controller.onTap()
+        controller.start()
         runCurrent()
         advanceTimeBy(150)
-        controller.onTap()
+        controller.stop()
         advanceTimeBy(100)
         // Ended right after the chunk recorded during the tap (t = 200), not after the release.
         assertEquals(200L, audioEndedAt)
@@ -161,58 +162,14 @@ class DictationControllerTest {
             override fun warmUp() = Unit
         })
 
-        controller.onTap()
+        controller.start()
         runCurrent()
         advanceTimeBy(950)
-        controller.onTap()
+        controller.stop()
         advanceTimeBy(100)
         // The 10 chunks read before the tap (t = 0..900) and the one in progress (t = 1000).
         assertEquals(11, sent)
         assertEquals(DictationState.Done("Hi"), controller.state.value)
-    }
-
-    @Test
-    fun tapSoonAfterStopWhileFinalizingIsIgnored() = runTest {
-        val controller = controller(FakeStt {
-            delay(10_000)
-            "Hi"
-        })
-
-        controller.onTap()
-        runCurrent()
-        controller.onTap()
-        advanceTimeBy(150)
-        controller.onTap() // Double tap on stop.
-        assertEquals(DictationState.Finalizing("chunk 2"), controller.state.value)
-        advanceTimeBy(FINALIZE_TAP_GRACE_MS - 200)
-        controller.onTap()
-        assertEquals(DictationState.Finalizing("chunk 2"), controller.state.value)
-
-        advanceTimeBy(6_000)
-        assertEquals(DictationState.Done("Hi"), controller.state.value)
-        assertEquals(listOf("Hi"), finals)
-    }
-
-    @Test
-    fun tapWhileFinalizingStallsCancelsToIdle() = runTest {
-        val stt = FakeStt {
-            delay(60_000)
-            "discarded"
-        }
-        val controller = controller(stt)
-
-        controller.onTap()
-        runCurrent()
-        controller.onTap()
-        advanceTimeBy(FINALIZE_TAP_GRACE_MS + 1)
-        assertEquals(DictationState.Finalizing("chunk 2"), controller.state.value)
-        controller.onTap()
-        assertEquals(DictationState.Idle, controller.state.value)
-
-        advanceTimeBy(10_000)
-        assertEquals(DictationState.Idle, controller.state.value)
-        assertEquals(1, stt.calls)
-        assertTrue(finals.isEmpty())
     }
 
     @Test
@@ -222,9 +179,9 @@ class DictationControllerTest {
             "discarded"
         })
 
-        controller.onTap()
+        controller.start()
         runCurrent()
-        controller.onTap()
+        controller.stop()
         advanceTimeBy(150)
         controller.cancel()
         assertEquals(DictationState.Idle, controller.state.value)
@@ -235,17 +192,119 @@ class DictationControllerTest {
     }
 
     @Test
-    fun tapWhileDoneStartsNewSessionThatTheDisplayTimerLeavesAlone() = runTest {
+    fun startAndStopAreIgnoredWhileFinalizing() = runTest {
+        val stt = FakeStt {
+            delay(10_000)
+            "Hi"
+        }
+        val controller = controller(stt)
+
+        controller.start()
+        runCurrent()
+        controller.stop()
+        advanceTimeBy(150)
+        controller.start()
+        controller.stop()
+        runCurrent()
+        assertTrue(controller.state.value is DictationState.Finalizing)
+        assertEquals(1, stt.calls)
+
+        advanceTimeBy(10_000)
+        assertEquals(DictationState.Done("Hi"), controller.state.value)
+        assertEquals(listOf("Hi"), finals)
+    }
+
+    @Test
+    fun stopIsIgnoredUnlessListening() = runTest {
+        val controller = controller(FakeStt { "Hi" })
+
+        controller.stop()
+        runCurrent()
+        assertEquals(DictationState.Idle, controller.state.value)
+
+        controller.start()
+        runCurrent()
+        controller.stop()
+        advanceTimeBy(101)
+        assertEquals(DictationState.Done("Hi"), controller.state.value)
+        controller.stop()
+        assertEquals(DictationState.Done("Hi"), controller.state.value)
+    }
+
+    @Test
+    fun levelFollowsChunksWhileListeningAndResetsOnStop() = runTest {
+        val controller = controller(FakeStt { "Hi" }, level = 0.5f)
+
+        controller.start()
+        runCurrent()
+        assertEquals(0.5f, controller.level.value)
+        controller.stop()
+        assertEquals(0f, controller.level.value)
+        advanceTimeBy(101) // The chunk in progress at stop is sent but doesn't set the level.
+        assertEquals(DictationState.Done("Hi"), controller.state.value)
+        assertEquals(0f, controller.level.value)
+
+        controller.start()
+        runCurrent()
+        assertEquals(0.5f, controller.level.value)
+        controller.cancel()
+        assertEquals(0f, controller.level.value)
+    }
+
+    @Test
+    fun startIsIgnoredWhileListening() = runTest {
         val stt = FakeStt { "Hi" }
         val controller = controller(stt)
 
-        controller.onTap()
+        controller.start()
         runCurrent()
-        controller.onTap()
+        advanceTimeBy(150)
+        controller.start()
+        runCurrent()
+        assertEquals(DictationState.Listening("chunk 2"), controller.state.value)
+        assertEquals(1, stt.calls)
+    }
+
+    @Test
+    fun levelResetsOnSttErrorWhileListening() = runTest {
+        val controller = controller(
+            object : SpeechToTextProvider {
+                override suspend fun transcribe(
+                    audio: Flow<ByteArray>,
+                    model: String,
+                    language: String,
+                    onPartial: (String) -> Unit,
+                ): String {
+                    var chunks = 0
+                    audio.collect { if (++chunks == 2) throw SttException("OpenAI error: Boom") }
+                    return "unused"
+                }
+
+                override fun warmUp() = Unit
+            },
+            level = 0.5f
+        )
+
+        controller.start()
+        runCurrent()
+        assertEquals(0.5f, controller.level.value)
+        advanceTimeBy(101)
+        assertEquals(DictationState.Error("OpenAI error: Boom"), controller.state.value)
+        assertEquals(0f, controller.level.value)
+    }
+
+    @Test
+    fun startWhileDoneStartsNewSessionThatTheDisplayTimerLeavesAlone() = runTest {
+        val stt = FakeStt { "Hi" }
+        val controller = controller(stt)
+
+        controller.start()
+        runCurrent()
+        controller.stop()
         advanceTimeBy(101)
         assertEquals(DictationState.Done("Hi"), controller.state.value)
 
-        controller.onTap()
+        controller.start()
         runCurrent()
         assertEquals(DictationState.Listening("chunk 1"), controller.state.value)
         advanceTimeBy(DONE_DISPLAY_MS + 1)
@@ -254,17 +313,17 @@ class DictationControllerTest {
     }
 
     @Test
-    fun tapWhileErrorStartsNewSessionThatTheDisplayTimerLeavesAlone() = runTest {
+    fun startWhileErrorStartsNewSessionThatTheDisplayTimerLeavesAlone() = runTest {
         val stt = FakeStt { "" }
         val controller = controller(stt)
 
-        controller.onTap()
+        controller.start()
         runCurrent()
-        controller.onTap()
+        controller.stop()
         advanceTimeBy(101)
         assertEquals(DictationState.Error("No speech detected"), controller.state.value)
 
-        controller.onTap()
+        controller.start()
         runCurrent()
         assertEquals(DictationState.Listening("chunk 1"), controller.state.value)
         advanceTimeBy(ERROR_DISPLAY_MS + 1)
@@ -279,7 +338,7 @@ class DictationControllerTest {
             audio = flow { throw AudioCaptureException("Microphone permission is missing.") }
         )
 
-        controller.onTap()
+        controller.start()
         runCurrent()
         assertEquals(DictationState.Error("Microphone permission is missing."), controller.state.value)
 
@@ -292,9 +351,9 @@ class DictationControllerTest {
     fun providerErrorShowsMessage() = runTest {
         val controller = controller(FakeStt { throw SttException("OpenAI error: Boom") })
 
-        controller.onTap()
+        controller.start()
         runCurrent()
-        controller.onTap()
+        controller.stop()
         advanceTimeBy(101)
         assertEquals(DictationState.Error("OpenAI error: Boom"), controller.state.value)
         assertTrue(finals.isEmpty())
@@ -304,7 +363,7 @@ class DictationControllerTest {
     fun cancelWhileListeningDiscardsSession() = runTest {
         val controller = controller(FakeStt { "discarded" })
 
-        controller.onTap()
+        controller.start()
         runCurrent()
         controller.cancel()
         runCurrent()
@@ -320,12 +379,12 @@ class DictationControllerTest {
     fun finalTranscriptHookExceptionShowsGenericError() = runTest {
         val controller = controller(
             FakeStt { "Hi" },
-            onFinalTranscript = { _, _ -> throw IllegalStateException("boom") }
+            onFinalTranscript = { _ -> throw IllegalStateException("boom") }
         )
 
-        controller.onTap()
+        controller.start()
         runCurrent()
-        controller.onTap()
+        controller.stop()
         advanceTimeBy(101)
         assertEquals(DictationState.Error("Something went wrong"), controller.state.value)
     }
@@ -333,11 +392,11 @@ class DictationControllerTest {
     @Test
     fun doneWithNoticeShowsItForLonger() = runTest {
         val done = DictationState.Done("Hi", notice = "Copied to clipboard")
-        val controller = controller(FakeStt { "Hi" }, onFinalTranscript = { _, _ -> done })
+        val controller = controller(FakeStt { "Hi" }, onFinalTranscript = { _ -> done })
 
-        controller.onTap()
+        controller.start()
         runCurrent()
-        controller.onTap()
+        controller.stop()
         advanceTimeBy(101)
         assertEquals(done, controller.state.value)
 
@@ -351,7 +410,7 @@ class DictationControllerTest {
     fun focusLostWhileListeningDiscardsSession() = runTest {
         val controller = controller(FakeStt { "discarded" })
 
-        controller.onTap()
+        controller.start()
         runCurrent()
         controller.onFocusLost()
         runCurrent()
@@ -368,9 +427,9 @@ class DictationControllerTest {
             "Hi"
         })
 
-        controller.onTap()
+        controller.start()
         runCurrent()
-        controller.onTap()
+        controller.stop()
         advanceTimeBy(150)
         controller.onFocusLost()
         assertEquals(DictationState.Finalizing("chunk 2"), controller.state.value)
@@ -381,33 +440,13 @@ class DictationControllerTest {
     }
 
     @Test
-    fun tapDuringCleanupInsertsRawTranscript() = runTest {
-        val calls = mutableListOf<Pair<String, Boolean>>()
-        val controller = controller(FakeStt { "Hi" }, onFinalTranscript = { text, skipCleanup ->
-            calls += text to skipCleanup
-            if (!skipCleanup) delay(1_000) // Cleanup.
-            DictationState.Done(if (skipCleanup) text else "Cleaned")
-        })
-
-        controller.onTap()
-        runCurrent()
-        controller.onTap()
-        advanceTimeBy(150)
-        assertTrue(controller.state.value is DictationState.Finalizing)
-        controller.onTap()
-        runCurrent()
-        assertEquals(DictationState.Done("Hi"), controller.state.value)
-        assertEquals(listOf("Hi" to false, "Hi" to true), calls)
-    }
-
-    @Test
     fun cleanupIsWarmedUpOnStartAndStopWhenEnabled() = runTest {
         val controller = controller(FakeStt { "Hi" }, cleanupEnabled = true)
 
-        controller.onTap()
+        controller.start()
         runCurrent()
         assertEquals(1, warmUps)
-        controller.onTap()
+        controller.stop()
         assertEquals(2, warmUps)
         advanceTimeBy(101)
         assertEquals(DictationState.Done("Hi"), controller.state.value)
@@ -418,9 +457,9 @@ class DictationControllerTest {
     fun cleanupIsNotWarmedUpWhenDisabled() = runTest {
         val controller = controller(FakeStt { "Hi" }, cleanupEnabled = false)
 
-        controller.onTap()
+        controller.start()
         runCurrent()
-        controller.onTap()
+        controller.stop()
         advanceTimeBy(101)
         assertEquals(DictationState.Done("Hi"), controller.state.value)
         assertEquals(0, warmUps)

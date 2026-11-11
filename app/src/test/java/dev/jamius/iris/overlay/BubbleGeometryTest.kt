@@ -64,6 +64,7 @@ class BubbleGeometryTest {
         bubbleY: Int = 300,
         visible: Area = area,
         panelMaxHeight: Int = 130,
+        growUp: Boolean = false,
     ) = panelPlacement(
         side = side,
         bubbleX = if (side == BubbleSide.LEFT) 0 else 900,
@@ -75,6 +76,7 @@ class BubbleGeometryTest {
         displayHeight = 2200,
         visible = visible,
         gap = 10,
+        growUp = growUp,
     )
 
     @Test
@@ -148,6 +150,31 @@ class BubbleGeometryTest {
         // Circle top 1110 + 130 would cover the IME at 1200: bottom-aligned with the circle (bottom 1190).
         val nearIme = placement(bubbleY = 1100, visible = aboveIme)
         assertEquals(PanelPlacement(alignRight = false, alignBottom = true, x = 110, y = 1010), nearIme)
+    }
+
+    @Test
+    fun panelGrowsUpWhileThePillOpensUpEvenIfItFitsBelow() {
+        // Circle 310..390: bottom-aligned (390 - 130 = 260, 1810 above display bottom), not top-aligned at 310.
+        assertEquals(
+            PanelPlacement(alignRight = false, alignBottom = true, x = 110, y = 1810),
+            placement(growUp = true)
+        )
+    }
+
+    @Test
+    fun panelTopClampsToVisibleTopWhenThePillOpensUpAndUpDoesNotFit() {
+        // Circle 160..240, panel 130: up starts at 110 above the top 150, so its top sits on 150 (down would fit).
+        assertEquals(
+            PanelPlacement(alignRight = false, alignBottom = false, x = 110, y = 150),
+            placement(bubbleY = 150, visible = area.copy(top = 150), growUp = true)
+        )
+    }
+
+    @Test
+    fun pillOpensUpOnlyWhenTheStackWouldPassTheVisibleBottom() {
+        assertFalse(pillOpensUp(buttonTop = 1000, stackHeight = 300, visibleBottom = 2100))
+        assertFalse(pillOpensUp(buttonTop = 1800, stackHeight = 300, visibleBottom = 2100))
+        assertTrue(pillOpensUp(buttonTop = 1801, stackHeight = 300, visibleBottom = 2100))
     }
 
     @Test

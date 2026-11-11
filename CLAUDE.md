@@ -2,9 +2,11 @@
 
 Android voice dictation app (Kotlin, Jetpack Compose, single `:app` module, package `dev.jamius.iris`).
 When the user focuses a text field in any app, an AccessibilityService shows a small circular bubble overlay.
-Tap the bubble to start dictating. The partial transcript streams live in a panel beside the bubble (left of it
-if the bubble is on the right edge, right of it if on the left edge). Tap again to stop. The transcript is
-finalized, optionally cleaned up by an LLM (toggle in settings), then inserted at the cursor of the focused field.
+Tap the mic to start dictating: a red pill with a live waveform slides out below the button (above it near the
+keyboard/screen bottom), which becomes ✕ (cancel). The partial transcript streams live in a panel beside the bubble
+(left of it if the bubble is on the right edge, right of it if on the left edge). Tap the pill to stop. The
+transcript is finalized, optionally cleaned up by an LLM (toggle in settings), then inserted at the cursor of the
+focused field.
 Cloud APIs only for now. On-device models are future scope: don't build for them, but keep the provider
 interfaces so a new provider is just a new implementation.
 
@@ -35,25 +37,61 @@ Overlay (`overlay`, View-based, not Compose: a Compose window in a service needs
   `focusedEditable` as the insertion target (call `refresh()` before use). IME bounds come from `windows`
   (TYPE_INPUT_METHOD). Window-change events from Iris's own overlay windows are skipped (`ownsWindow`). The
   overlay is created only once the stored bubble position has loaded.
-- `BubbleOverlay` owns two `TYPE_ACCESSIBILITY_OVERLAY` windows (bubble + live-text panel), positioned in display
-  coordinates. API: `onTap`/`onMoved(side, yFraction)` callbacks, `show()`, `hide()`, `setStatus(BubbleStatus)`,
-  `showText(String, tail = true)`, `hideText()`, `setPosition(side, yFraction)`, `setImeTop(Int?)`,
-  `setPanelSize(lines, widthPercent)`, `onConfigurationChanged()`, `ownsWindow(windowId)`. `addView` failures
-  (`BadTokenException` during teardown) are logged and the view stays unadded. The service renders `DictationState`
-  onto it (`render()`, also after each `show()` so a re-shown bubble restores the panel).
-  `BubbleStatus` per state: Idle = mic; Listening = red + pulse ring; Finalizing (incl. cleanup + insertion) = WORKING,
-  a spinning arc in place of the mic, panel keeps the STT transcript (fixed once transcription ends); Done without
-  notice = SUCCESS, green tick, panel hidden (1.5 s); Done with notice or Error = FAILURE, red exclamation mark, panel
-  shows the notice/message (3 s, `ERROR_DISPLAY_MS = 2 * DONE_DISPLAY_MS`).
+- `BubbleOverlay` owns two `TYPE_ACCESSIBILITY_OVERLAY` windows (bubble stack + live-text panel), positioned in
+  display coordinates. API: `onButtonTap`/`onPillTap`/`onMoved(side, yFraction)` callbacks, `show()`, `hide()`,
+  `setStatus(BubbleStatus)`, `setLevel(Float)`, `showText(String, tail = true)`, `hideText()`,
+  `setPosition(side, yFraction)`, `setImeTop(Int?)`, `setPanelSize(lines, widthPercent)`, `onConfigurationChanged()`,
+  `ownsWindow(windowId)`. `addView` failures (`BadTokenException` during teardown) are logged and the view stays
+  unadded. The service renders `DictationState` onto it (`render()`, also after each `show()`).
+  `BubbleStatus` per state: Idle = purple + mic; Listening = ✕ on `bubble_control` (white circle + black ✕; black +
+  white in `values-night`, no outline) and the pill out; Finalizing (incl. cleanup + insertion) = WORKING, a spinner
+  in the control colours, pill collapsed, panel keeps the STT transcript (fixed once transcription ends); Done without
+  notice = SUCCESS, green tick, panel animates out (1.5 s); Done with notice or Error = FAILURE, red exclamation mark,
+  panel shows the notice/message (3 s, `ERROR_DISPLAY_MS = 2 * DONE_DISPLAY_MS`). No "Listening…"/"Finishing…"
+  placeholders: the panel comes in with the first words (blank text = hidden). Colours are re-read on config change
+  (dark mode).
+- Stack window = `FrameLayout` with `PillView` (z below) and `BubbleView`. The pill is GONE when collapsed, so the
+  WRAP_CONTENT window is the button view at rest (52 x 58 dp: `sizePx` plus `shadowRoomPx`, 6 dp below the margin so
+  the downward shadow isn't cut by the window edge; placement still uses `sizePx`, so the window reaches 6 dp past
+  the clamp, e.g. over the IME's top edge) and 154 dp while the pill is visible (160 dp opening up). Pill: 40 x 96
+  dp, radius 20, 6 dp gap below the circle; `PillView` (52 x 128 dp) starts at the circle's centre, so at `reveal` 0
+  the pill's cap sits exactly on the circle's lower half and the rest is clipped by the parent. Its outline (shadow)
+  is the pill's rect intersected with the view's bounds (`Outline.setPath`), so the clipped part casts no shadow
+  (it showed as a grey band cut off at the window edge). Near the bottom/IME the pill opens
+  up (`pillOpensUp(buttonTop, stackHeight, visibleBottom)`, unit tested): mirrored, the ✕ stays where the mic was
+  (button at the window's bottom, window y = `buttonY - 102 dp`). Both overlay windows set
+  `setCanPlayMoveAnimation(false)` (API 34+): otherwise the system animates the window move when the stack grows up
+  (or shrinks back), sliding the re-laid-out content from the old position (the button jumped over the IME).
+  Decided when it expands, re-evaluated on every
+  relayout while visible (IME, rotation, drag), switched instantly. `buttonY` (the button's top) is the position;
+  `yFraction` keeps its meaning. One `updateViewLayout` at expand start and collapse end, none per frame; a new
+  reveal replaces a running one (listeners removed, then cancelled) and continues from its current value. While the
+  pill opens up the panel grows up (`panelPlacement(growUp)`), kept after collapse so it doesn't jump on stop.
+  Taps: one shared `DragHandler` (a drag past touch slop never clicks); button -> `onButtonTap`, pill (and the
+  button's 6 dp margin on the pill's side, i.e. the gap) -> `onPillTap`.
+- Motion (`PathInterpolator`s, private per class): icon/colour morph 250 ms standard (0.2, 0, 0, 1): icon
+  crossfade + scale, ✕ rotates in from -90°; the new colour grows as a disc from the centre over the old one, full
+  at t = 0.8 (`REVEAL_END`) so the old colour's last ring doesn't linger (an RGB blend of e.g. red -> purple passes
+  through a muddy magenta; an alpha crossfade is the same blend). A status set back mid-morph (e.g. cancel right
+  after start) reverses the running morph from where it is (`reversed`); another status morphs on from whichever
+  dominates. A morph never draws the same status twice (a VectorDrawable drawn twice in one frame uses its last
+  alpha for both: the icon vanished). Pill slide out and back 300 ms symmetric ease-in-out (0.65, 0, 0.35, 1);
+  panel in 250 ms emphasized decelerate (0.05, 0.7, 0.1, 1) / out 200 ms emphasized accelerate (0.3, 0, 0.8, 0.15)
+  (alpha + scale 0.92, pivot on the button side and the panel's growth edge; alpha/scale are reset in `show()`, not
+  after the async `removeView`, which would draw one more full-opacity frame); snap 150 ms. Waveform: 6 horizontal bars (3 dp round caps, max 22 dp, dots at
+  rest), level smoothed per frame (attack 40 ms, release 200 ms) with a small per-bar wobble; after stop the bars
+  shrink to dots as the pill retracts. Animations run only while attached; `hide()` ends only running animators
+  (`end()` on a finished one replays it). The overlay keeps the desired panel state (`panelWanted`) while hidden,
+  and `show()` restores stack and panel instantly (no replayed animations).
 - Bubble position persists as `Settings.bubbleSide` + `bubbleYFraction` (fraction of usable height, so it
   survives rotation). Placement math is in `BubbleGeometry.kt` (unit tested). Panel size persists as
   `Settings.panelLines` (1..6, default 3) and `panelWidthPercent` (30..90, default 50); the service collects
   settings and calls `setPanelSize` (also before the first show), applied live. Settings > Text panel: two sliders,
   saved on release.
-- `BubbleView`: 40 dp circle (`circlePx`) inside a 52 dp view (`sizePx`, the touch target; 6 dp each side for the
-  pulse ring). Panel: max width `panelWidthPercent` % of the display, clamped to the usable width beside the snapped
-  bubble (`panelMaxWidth`), 15 sp text; vertical padding makes one line exactly the circle's height. Live text
-  (`tail = true`: Listening/Finalizing) keeps its last `panelLines` lines: `showText` trims with a
+- `BubbleView`: 40 dp circle (`circlePx`) inside a 52 dp view (`sizePx`, the touch target; 6 dp margin each side
+  for touch and shadow, plus `shadowRoomPx` 6 dp below). Panel: max width `panelWidthPercent` % of the display, clamped to the usable width beside
+  the snapped bubble (`panelMaxWidth`), 15 sp text; vertical padding makes one line exactly the circle's height.
+  Live text (`tail = true`: Listening/Finalizing) keeps its last `panelLines` lines: `showText` trims with a
   `StaticLayout` at the max width (simple line breaking, bounds for width on API 35+), and re-trims once from the
   TextView's own layout if that still overflows, so the newest words always show with no scrolling or ellipsis.
   Done/Error text (`tail = false`) shows from the start, up to max(`panelLines`, 4) lines, ellipsized at the end.
@@ -66,7 +104,8 @@ Dictation (CP3):
   `readAtNanos` (`SystemClock.elapsedRealtimeNanos()` right after `read` returns); each collection opens the mic,
   cancellation releases it. Throws `AudioCaptureException` (user-readable) for missing permission, init/start
   failure, or `activeRecordingConfiguration.isClientSilenced` (how blocked background capture shows up); a read
-  that returns after cancellation (stop) ends quietly (`ensureActive()` before those checks).
+  that returns after cancellation (stop) ends quietly (`ensureActive()` before those checks). Each chunk carries
+  `level` = `pcm16Level` (pure, unit tested): RMS dBFS mapped from -55..-12 dB to 0..1, then `pow 0.7`.
 - `stt.SpeechToTextProvider.transcribe(audio: Flow<ByteArray>, model, language, onPartial): String`. Streams until
   `audio` completes, then finalizes and returns the final text; `onPartial` gets the whole live text; cancelling
   the coroutine aborts. Failures are `SttException` with a user-readable message. `warmUp()`: fire-and-forget
@@ -74,22 +113,23 @@ Dictation (CP3):
 - `dictation.DictationController` (one per service, main thread, built by `AppContainer.dictationController`):
   `Idle -> Listening(text) -> Finalizing(text) -> Done(text, notice?) | Error(message) -> Idle` (Done shown 1.5 s,
   or 3 s with a notice, which the panel shows instead of the text; Error 3 s; blank transcript = Error
-  "No speech detected"). Tap: start (also from Done/Error), stop in Listening; in Finalizing, before the
-  transcript is final: ignored for `FINALIZE_TAP_GRACE_MS` (5 s) after stop (a double tap on stop must not discard
-  the dictation), then cancel to Idle (escape if STT stalls); after (hook running): skip cleanup (below). Stop records
-  the stop time (`clock`); the audio flow (`transformWhile`) keeps sending queued chunks (e.g. behind a stalled main
-  thread) until it has sent the first one read after that time (the chunk in progress), then ends. The mic runs in
-  its own coroutine (`produceIn`), so the audio (and the STT commit) doesn't wait for the mic's next read and
-  release; it starts on the provider's first collect, after its API key check, so a missing key never opens the
-  mic. `cancel()` discards.
+  "No speech detected"). `start()`: new session (also from Done/Error), ignored while Listening/Finalizing;
+  `stop()`: Listening only; `cancel()`: discards any session. The service maps the button to `cancel()` while
+  Listening, else `start()` (so the spinner ignores taps), and the pill to `stop()`. Finalizing can't be cancelled
+  by a tap: stalls end via the STT 10 s final timeout / cleanup 15 s stall. `level: StateFlow<Float>`: the latest
+  chunk's `level` while Listening (set in `transformWhile`), 0 otherwise; the service pushes it to the pill. Stop
+  records the stop time (`clock`); the audio flow (`transformWhile`) keeps sending queued chunks (e.g. behind a
+  stalled main thread) until it has sent the first one read after that time (the chunk in progress), then ends.
+  The mic runs in its own coroutine (`produceIn`), so the audio (and the STT commit) doesn't wait for the mic's
+  next read and release; it starts on the provider's first collect, after its API key check, so a missing key never
+  opens the mic.
   `onFocusLost()` (the service's debounced focus-lost hide) cancels only while Listening: once stopped, the session
   always finishes.
   Service destroy cancels its scope. Errors other than `SttException`/`AudioCaptureException` are logged and shown
   as "Something went wrong".
-- Final hook: `suspend IrisAccessibilityService.onFinalTranscript(text, skipCleanup): Done`, run inside the session
+- Final hook: `suspend IrisAccessibilityService.onFinalTranscript(text): Done`, called directly inside the session
   (state still Finalizing). It does cleanup + insertion and returns the Done to show (inserted text, plus a notice
-  on fallback). The controller runs it as a child `async`; a tap cancels that (cancelling the cleanup HTTP call)
-  and calls the hook again with `skipCleanup = true`, which inserts the raw transcript. Later taps are ignored.
+  on fallback). No retry/skip.
 
 Cleanup + insertion (CP4):
 - Cleanup runs only if `cleanupEnabled`, with the active prompt and `cleanupModel`; no separate status text: the
@@ -189,8 +229,8 @@ Providers (settings store a provider id for each):
   after 5 min, hence the stop re-warm (runs alongside STT finalization). A warm-up still connecting when cleanup
   starts doesn't help (OkHttp pools a connection only after its handshake), so very short dictations or
   pool-evicted connections still pay the handshake. The service logs one `Timing:` line per session that reaches
-  the final-transcript hook (not error/no-speech/cancel): stop->transcript, cleanup (`X ms`, `X ms failed`,
-  `skipped` or `off`), stop->done; no text.
+  the final-transcript hook (not error/no-speech/cancel): stop->transcript, cleanup (`X ms`, `X ms failed` or
+  `off`), stop->done; no text.
 - Cleanup model list: `CleanupProvider.listModels()` = `GET https://ai-gateway.vercel.sh/v1/models` (checked
   2026-11-11: public, no auth needed; an invalid Bearer key gets 401, so the request is sent unauthenticated and
   the key is never read). Body `{object:"list", data:[{id, type, ...}]}` with `type` one of
@@ -283,6 +323,12 @@ Not covered by unit tests; check on a real device (ideally more than one OEM) af
 - Panel size: the Lines/Max width sliders change the panel (live text and notices) in another app without
   restarting the service; at 90 % the panel stays on screen on both sides and in landscape.
 - TalkBack reads the Text panel sliders' name and value.
+- Recording UI: mic -> ✕ morph and pill slide are smooth on both edges; dark mode ✕ colours (toggle while it
+  shows); the waveform follows voice and settles to dots in silence; drag from the pill never stops, drag from the
+  ✕ never cancels; tapping the gap stops; near the IME/bottom the pill opens upward (✕ stays put, panel grows up)
+  and switches direction when the IME shows/hides mid-Listening without a flicker; panel enters with the first
+  words and animates out after the tick; re-show after focus loss mid-Finalizing restores spinner/panel without
+  replayed animations; TalkBack reads "Start/Cancel/Stop dictation" and double-tap works on the ✕ and the pill.
 - Sideloaded APK: the accessibility toggle needs App info > ⋮ > "Allow restricted settings".
 
 ### Emulator / Android MCP

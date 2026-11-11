@@ -15,10 +15,8 @@ import dev.jamius.iris.stt.SttException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -53,19 +51,17 @@ sealed interface DictationState {
 internal const val DONE_DISPLAY_MS = 1_500L
 internal const val ERROR_DISPLAY_MS = 2 * DONE_DISPLAY_MS
 
-/** After stop, taps are ignored this long while the transcript isn't final (e.g. a double tap on stop). */
-internal const val FINALIZE_TAP_GRACE_MS = 5_000L
-
 /**
  * Runs one dictation session at a time: Idle -> Listening -> Finalizing -> Done/Error -> Idle.
- * One instance per accessibility service; use on the main thread.
+ * One instance per accessibility service; use on the main thread. [start] begins a session (also while a result
+ * is shown), [stop] ends the recording of a listening one, [cancel] discards any; a finalizing session can't be
+ * stopped or restarted, it ends through the providers' own timeouts.
  *
  * @param audio cold flow; each collection records a new session's audio.
  * @param clock the [AudioChunk.readAtNanos] time base.
  * @param onFinalTranscript called with the final text of each successful session; returns the
  *   [DictationState.Done] to show. It runs inside the session (still Finalizing): cancelling the session cancels
- *   it, and its exceptions end in Error. A tap while it runs cancels it and calls it again with
- *   `skipCleanup = true`.
+ *   it, and its exceptions end in Error.
  * @param warmUpCleanup if cleanup is enabled, called as recording starts and again on stop, so the cleanup call
  *   finds a warm connection. Must return at once.
  */
@@ -75,11 +71,16 @@ class DictationController(
     private val stt: SpeechToTextProvider,
     private val settings: Flow<Settings>,
     private val warmUpCleanup: () -> Unit,
-    private val onFinalTranscript: suspend (transcript: String, skipCleanup: Boolean) -> DictationState.Done,
+    private val onFinalTranscript: suspend (transcript: String) -> DictationState.Done,
     private val clock: () -> Long = SystemClock::elapsedRealtimeNanos,
 ) {
     private val _state = MutableStateFlow<DictationState>(DictationState.Idle)
     val state: StateFlow<DictationState> = _state.asStateFlow()
+
+    private val _level = MutableStateFlow(0f)
+
+    /** Loudness (0..1) of the latest chunk while listening; 0 otherwise. */
+    val level: StateFlow<Float> = _level.asStateFlow()
 
     private var session: Job? = null
 
@@ -89,32 +90,14 @@ class DictationController(
     /** The session's settings have cleanup on: warm the cleanup connection on stop too. */
     private var cleanupEnabled = false
 
-    /** The first [onFinalTranscript] call of the session, once the transcript is final. */
-    private var hook: Job? = null
-
-    /** Started on stop; once complete, a tap before the transcript is final cancels the session. */
-    private var tapGrace: Job? = null
-
-    /**
-     * Bubble tap: starts a session (also while a result is shown) and stops one that is listening. While
-     * finalizing: before the transcript is final, ignored for [FINALIZE_TAP_GRACE_MS] after stop, then cancels the
-     * session (the escape if it stalls); after, skips cleanup so the raw transcript is inserted right away.
-     */
-    fun onTap() {
-        when (val state = _state.value) {
-            is DictationState.Listening -> {
-                stoppedAt = clock()
-                // A long dictation may outlive the idle connection (pool/server/NAT); runs alongside STT finalization.
-                if (cleanupEnabled) warmUpCleanup()
-                tapGrace = scope.launch { delay(FINALIZE_TAP_GRACE_MS) }
-                _state.value = DictationState.Finalizing(state.text)
-            }
-            is DictationState.Finalizing -> {
-                val hook = hook
-                if (hook != null) hook.cancel() else if (tapGrace?.isCompleted == true) cancel()
-            }
-            else -> start()
-        }
+    /** Stops recording a listening session, which then finalizes. Ignored in any other state. */
+    fun stop() {
+        val state = _state.value as? DictationState.Listening ?: return
+        stoppedAt = clock()
+        // A long dictation may outlive the idle connection (pool/server/NAT); runs alongside STT finalization.
+        if (cleanupEnabled) warmUpCleanup()
+        _level.value = 0f
+        _state.value = DictationState.Finalizing(state.text)
     }
 
     /** The field lost focus: discards a session that is still listening. One already stopped runs to the end. */
@@ -126,15 +109,17 @@ class DictationController(
     fun cancel() {
         session?.cancel()
         session = null
-        hook = null
+        _level.value = 0f
         _state.value = DictationState.Idle
     }
 
-    private fun start() {
+    /** Starts a new session, also while a result is shown. Ignored while one is listening or finalizing. */
+    fun start() {
+        if (_state.value is DictationState.Listening || _state.value is DictationState.Finalizing) return
         session?.cancel()
         stoppedAt = null
         cleanupEnabled = false
-        hook = null
+        _level.value = 0f
         _state.value = DictationState.Listening("")
         session = scope.launch {
             val result = try {
@@ -151,16 +136,13 @@ class DictationController(
                     // Sends every chunk read before the stop tap (even if queued behind a stalled main thread), then
                     // the one during which stop was tapped, so speech up to the tap is kept.
                     val chunks = recording.transformWhile {
+                        if (stoppedAt == null) _level.value = it.level
                         emit(it.bytes)
                         stoppedAt.let { stop -> stop == null || it.readAtNanos <= stop }
                     }
                     stt.transcribe(chunks, config.sttModel, config.sttLanguage, ::onPartial)
                 }
-                if (text.isBlank()) {
-                    DictationState.Error("No speech detected")
-                } else {
-                    finish(text)
-                }
+                if (text.isBlank()) DictationState.Error("No speech detected") else onFinalTranscript(text)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -171,22 +153,11 @@ class DictationController(
                     DictationState.Error(GENERIC_ERROR)
                 }
             }
+            _level.value = 0f // E.g. an STT error while listening.
             _state.value = result
             val brief = result is DictationState.Done && result.notice == null
             delay(if (brief) DONE_DISPLAY_MS else ERROR_DISPLAY_MS)
             _state.value = DictationState.Idle
-        }
-    }
-
-    /** Runs [onFinalTranscript]; if a tap cancels it (see [onTap]), runs it again with `skipCleanup = true`. */
-    private suspend fun finish(text: String): DictationState.Done = coroutineScope {
-        val first = async { onFinalTranscript(text, false) }
-        hook = first
-        try {
-            first.await()
-        } catch (e: CancellationException) {
-            ensureActive() // Rethrows if the session itself was cancelled.
-            onFinalTranscript(text, true)
         }
     }
 

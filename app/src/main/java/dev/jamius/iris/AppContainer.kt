@@ -51,7 +51,7 @@ class AppContainer(context: Context) {
     /** One per accessibility service; [scope] is the service's main-thread scope. */
     fun dictationController(
         scope: CoroutineScope,
-        onFinalTranscript: suspend (transcript: String, skipCleanup: Boolean) -> DictationState.Done,
+        onFinalTranscript: suspend (transcript: String) -> DictationState.Done,
     ) = DictationController(
         scope = scope,
         audio = audioRecorder.chunks(),

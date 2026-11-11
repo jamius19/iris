@@ -65,12 +65,16 @@ class IrisAccessibilityService : AccessibilityService() {
         this.dictation = dictation
         val overlay = BubbleOverlay(
             context = this,
-            onTap = {
+            // The ✕ cancels while listening; otherwise the button starts (a no-op while finalizing).
+            onButtonTap = {
+                if (dictation.state.value is DictationState.Listening) dictation.cancel() else dictation.start()
+            },
+            onPillTap = {
                 if (dictation.state.value is DictationState.Listening) {
                     target = focusedEditable
                     stoppedAt = SystemClock.elapsedRealtime()
+                    dictation.stop()
                 }
-                dictation.onTap()
             },
             onMoved = { side, yFraction -> scope.launch { repository.setBubblePosition(side, yFraction) } }
         )
@@ -80,6 +84,7 @@ class IrisAccessibilityService : AccessibilityService() {
                 overlay.setPanelSize(it.panelLines, it.panelWidthPercent) // Skips unchanged values.
             }
         }
+        scope.launch { dictation.level.collect { this@IrisAccessibilityService.overlay?.setLevel(it) } }
         scope.launch {
             dictation.state.collect {
                 render(it)
@@ -165,8 +170,17 @@ class IrisAccessibilityService : AccessibilityService() {
         )
         when (state) {
             DictationState.Idle -> overlay.hideText()
-            is DictationState.Listening -> overlay.showText(state.text.ifEmpty { "Listening…" })
-            is DictationState.Finalizing -> overlay.showText(state.text.ifEmpty { "Finishing…" })
+            // The panel comes in with the first words.
+            is DictationState.Listening -> if (state.text.isBlank()) {
+                overlay.hideText()
+            } else {
+                overlay.showText(state.text)
+            }
+            is DictationState.Finalizing -> if (state.text.isBlank()) {
+                overlay.hideText()
+            } else {
+                overlay.showText(state.text)
+            }
             // Inserted: the tick says it all. A notice explains the failure.
             is DictationState.Done -> if (state.notice == null) {
                 overlay.hideText()
@@ -179,12 +193,12 @@ class IrisAccessibilityService : AccessibilityService() {
 
     /**
      * Called with the final transcript of each successful session, inside the session (cancelled with it). Runs the
-     * optional LLM cleanup (unless [skipCleanup]), then inserts at the cursor of [target] if it still has focus,
-     * else copies to the clipboard. A failed cleanup inserts the original transcript, and any other failure copies
-     * the text, so the dictation is never lost.
+     * optional LLM cleanup, then inserts at the cursor of [target] if it still has focus, else copies to the
+     * clipboard. A failed cleanup inserts the original transcript, and any other failure copies the text, so the
+     * dictation is never lost.
      */
-    private suspend fun onFinalTranscript(transcript: String, skipCleanup: Boolean): DictationState.Done {
-        if (!skipCleanup) transcriptAt = SystemClock.elapsedRealtime() // The retry after a skip tap keeps it.
+    private suspend fun onFinalTranscript(transcript: String): DictationState.Done {
+        transcriptAt = SystemClock.elapsedRealtime()
         var text = transcript
         var cleanupError: String? = null
         var cleanupMs: Long? = null
@@ -192,7 +206,7 @@ class IrisAccessibilityService : AccessibilityService() {
         val insertion = try {
             val container = (application as IrisApp).container
             val settings = container.settingsRepository.settings.first()
-            if (settings.cleanupEnabled && !skipCleanup) {
+            if (settings.cleanupEnabled) {
                 val prompt = settings.activePrompt ?: Settings.DEFAULT_PROMPT
                 val cleanupStart = SystemClock.elapsedRealtime()
                 try {
@@ -228,8 +242,7 @@ class IrisAccessibilityService : AccessibilityService() {
             copyToClipboard(this, text)
             null
         }
-        val cleanupTiming = cleanupMs?.let { "$it ms" + if (cleanupError != null) " failed" else "" }
-            ?: if (skipCleanup) "skipped" else "off"
+        val cleanupTiming = cleanupMs?.let { "$it ms" + if (cleanupError != null) " failed" else "" } ?: "off"
         Log.d(
             TAG,
             "Timing: stop->transcript ${transcriptAt - stoppedAt} ms, cleanup $cleanupTiming, " +

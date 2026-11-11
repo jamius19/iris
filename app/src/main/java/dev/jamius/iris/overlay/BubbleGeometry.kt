@@ -39,6 +39,13 @@ internal fun fractionForY(y: Int, size: Int, area: Area): Float {
 }
 
 /**
+ * True if the expanded stack (button + pill) of [stackHeight], hanging down from the button's top [buttonTop], would
+ * reach past [visibleBottom] (the IME or the usable area's bottom): then the pill opens upward instead.
+ */
+internal fun pillOpensUp(buttonTop: Int, stackHeight: Int, visibleBottom: Int): Boolean =
+    buttonTop + stackHeight > visibleBottom
+
+/**
  * The live-text panel's max width: [widthPercent] % of the display, but no wider than the usable [area] beside a
  * bubble of [bubbleSize] snapped to either edge, less the [gap], so it stays on screen.
  */
@@ -50,7 +57,8 @@ internal fun panelMaxWidth(displayWidth: Int, widthPercent: Int, area: Area, bub
  * A one-line panel is as tall as the bubble's circle and lines up with it. Taller panels keep the circle's top edge
  * and grow down, unless [panelMaxHeight] wouldn't fit above the [visible] area's bottom (the IME or the usable area's
  * bottom): then they keep the circle's bottom edge and grow up. If that wouldn't fit below [visible]'s top either,
- * the panel's top sits on [visible]'s top and it grows down.
+ * the panel's top sits on [visible]'s top and it grows down. With [growUp] (the pill opens upward) the panel skips
+ * growing down: it keeps the circle's bottom edge if it fits, else its top sits on [visible]'s top.
  */
 internal fun panelPlacement(
     side: BubbleSide,
@@ -63,10 +71,11 @@ internal fun panelPlacement(
     displayHeight: Int,
     visible: Area,
     gap: Int,
+    growUp: Boolean,
 ): PanelPlacement {
     val alignRight = side == BubbleSide.RIGHT
     val circleBottom = circleTop + circleSize
-    val growsDown = circleTop + panelMaxHeight <= visible.bottom
+    val growsDown = !growUp && circleTop + panelMaxHeight <= visible.bottom
     val alignBottom = !growsDown && circleBottom - panelMaxHeight >= visible.top
     return PanelPlacement(
         alignRight = alignRight,
