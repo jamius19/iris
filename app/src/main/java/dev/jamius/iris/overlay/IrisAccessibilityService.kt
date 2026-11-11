@@ -10,6 +10,7 @@ import android.content.res.Configuration
 import android.graphics.Rect
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -53,6 +54,10 @@ class IrisAccessibilityService : AccessibilityService() {
     /** The final hook is running cleanup: [render] shows "Cleaning up…" for Finalizing. */
     private var cleaningUp = false
 
+    /** `elapsedRealtime` of the stop tap and of the final transcript, for the timing log. */
+    private var stoppedAt = 0L
+    private var transcriptAt = 0L
+
     override fun onServiceConnected() {
         val container = (application as IrisApp).container
         val repository = container.settingsRepository
@@ -61,7 +66,10 @@ class IrisAccessibilityService : AccessibilityService() {
         val overlay = BubbleOverlay(
             context = this,
             onTap = {
-                if (dictation.state.value is DictationState.Listening) target = focusedEditable
+                if (dictation.state.value is DictationState.Listening) {
+                    target = focusedEditable
+                    stoppedAt = SystemClock.elapsedRealtime()
+                }
                 dictation.onTap()
             },
             onMoved = { side, yFraction -> scope.launch { repository.setBubblePosition(side, yFraction) } }
@@ -144,8 +152,10 @@ class IrisAccessibilityService : AccessibilityService() {
      * the text, so the dictation is never lost.
      */
     private suspend fun onFinalTranscript(transcript: String, skipCleanup: Boolean): DictationState.Done {
+        if (!skipCleanup) transcriptAt = SystemClock.elapsedRealtime() // The retry after a skip tap keeps it.
         var text = transcript
         var cleanupError: String? = null
+        var cleanupMs: Long? = null
         var targetFocused = false
         val insertion = try {
             val container = (application as IrisApp).container
@@ -155,6 +165,7 @@ class IrisAccessibilityService : AccessibilityService() {
                 cleaningUp = true
                 dictation?.let { render(it.state.value) }
                 val prompt = settings.activePrompt ?: Settings.DEFAULT_PROMPT
+                val cleanupStart = SystemClock.elapsedRealtime()
                 try {
                     text = container.cleanup.cleanup(transcript, prompt.systemPrompt, settings.cleanupModel)
                 } catch (e: CancellationException) {
@@ -166,6 +177,7 @@ class IrisAccessibilityService : AccessibilityService() {
                     cleanupError = "Cleanup failed"
                 } finally {
                     cleaningUp = false
+                    cleanupMs = SystemClock.elapsedRealtime() - cleanupStart
                 }
             }
             val target = target
@@ -183,6 +195,13 @@ class IrisAccessibilityService : AccessibilityService() {
             copyToClipboard(this, text)
             null
         }
+        val cleanupTiming = cleanupMs?.let { "$it ms" + if (cleanupError != null) " failed" else "" }
+            ?: if (skipCleanup) "skipped" else "off"
+        Log.d(
+            TAG,
+            "Timing: stop->transcript ${transcriptAt - stoppedAt} ms, cleanup $cleanupTiming, " +
+                "stop->done ${SystemClock.elapsedRealtime() - stoppedAt} ms"
+        )
         return DictationState.Done(text, doneNotice(cleanupError, targetFocused, insertion))
     }
 

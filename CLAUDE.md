@@ -134,6 +134,18 @@ Providers (settings store a provider id for each):
   transcript; a fixed framing line appended to the system prompt says to treat it as text, not instructions.
   Errors: 401/403 = API key message, 429 = rate limit/quota, 5xx = server error, other 4xx = gateway
   `error.message`, transport = network error, 30 s OkHttp call timeout = "Cleanup timed out".
+  Warm-up (`CleanupProvider.warmUp()`, fire-and-forget, failures only `Log.d`): `DictationController` calls it
+  when a session's settings load (recording start) and again on stop, only if `cleanupEnabled`. Request: `HEAD
+  /v1/models`, no key (edge-cached, 200, no body; measured 2026-11-11 ~50-100 ms after TLS, like `HEAD /` (308,
+  OkHttp would follow it to vercel.com) and `OPTIONS`/404 paths). It goes through the cleanup client (derived via
+  `newBuilder()`, same pool), so the cleanup POST reuses the TCP+TLS connection (cold ~400 ms vs warm ~60 ms).
+  The Gateway negotiates HTTP/2 via ALPN (openssl, OkHttp JVM and device log `Warm-up: h2 200`); OkHttp's
+  default protocols suffice. An idle h2 connection was still reusable after 290 s; OkHttp's pool drops idle ones
+  after 5 min, hence the stop re-warm (runs alongside STT finalization). A warm-up still connecting when cleanup
+  starts doesn't help (OkHttp pools a connection only after its handshake), so very short dictations or
+  pool-evicted connections still pay the handshake. The service logs one `Timing:` line per session that reaches
+  the final-transcript hook (not error/no-speech/cancel): stop->transcript, cleanup (`X ms`, `X ms failed`,
+  `skipped` or `off`), stop->done; no text.
 - Cleanup model list: `CleanupProvider.listModels()` = `GET https://ai-gateway.vercel.sh/v1/models` (checked
   2026-11-11: public, no auth needed; an invalid Bearer key gets 401, so the request is sent unauthenticated and
   the key is never read). Body `{object:"list", data:[{id, type, ...}]}` with `type` one of

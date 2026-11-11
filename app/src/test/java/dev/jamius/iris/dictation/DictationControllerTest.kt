@@ -26,6 +26,7 @@ class DictationControllerTest {
 
     private val finals = mutableListOf<String>()
     private var audioReleased = false
+    private var warmUps = 0
 
     /** A 100 ms chunk every 100 ms until cancelled. */
     private val audio: Flow<ByteArray> = flow {
@@ -61,6 +62,7 @@ class DictationControllerTest {
     private fun TestScope.controller(
         stt: SpeechToTextProvider,
         audio: Flow<ByteArray> = this@DictationControllerTest.audio,
+        cleanupEnabled: Boolean = false,
         onFinalTranscript: suspend (String, Boolean) -> DictationState.Done = { text, _ ->
             finals += text
             DictationState.Done(text)
@@ -69,7 +71,8 @@ class DictationControllerTest {
         scope = backgroundScope,
         audio = audio,
         stt = stt,
-        settings = flowOf(emptyPreferences().toSettings(emptySet())),
+        settings = flowOf(emptyPreferences().toSettings(emptySet()).copy(cleanupEnabled = cleanupEnabled)),
+        warmUpCleanup = { warmUps++ },
         onFinalTranscript = onFinalTranscript,
     )
 
@@ -324,5 +327,31 @@ class DictationControllerTest {
         runCurrent()
         assertEquals(DictationState.Done("Hi"), controller.state.value)
         assertEquals(listOf("Hi" to false, "Hi" to true), calls)
+    }
+
+    @Test
+    fun cleanupIsWarmedUpOnStartAndStopWhenEnabled() = runTest {
+        val controller = controller(FakeStt { "Hi" }, cleanupEnabled = true)
+
+        controller.onTap()
+        runCurrent()
+        assertEquals(1, warmUps)
+        controller.onTap()
+        assertEquals(2, warmUps)
+        advanceTimeBy(101)
+        assertEquals(DictationState.Done("Hi"), controller.state.value)
+        assertEquals(2, warmUps)
+    }
+
+    @Test
+    fun cleanupIsNotWarmedUpWhenDisabled() = runTest {
+        val controller = controller(FakeStt { "Hi" }, cleanupEnabled = false)
+
+        controller.onTap()
+        runCurrent()
+        controller.onTap()
+        advanceTimeBy(101)
+        assertEquals(DictationState.Done("Hi"), controller.state.value)
+        assertEquals(0, warmUps)
     }
 }

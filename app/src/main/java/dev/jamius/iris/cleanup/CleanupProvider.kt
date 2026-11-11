@@ -17,6 +17,12 @@ interface CleanupProvider {
      */
     suspend fun cleanup(text: String, systemPrompt: String, model: String): String
 
+    /**
+     * Opens a connection to the provider ahead of a [cleanup] call so that call skips the TCP/TLS setup.
+     * Fire-and-forget: returns at once, never throws, and failures are ignored.
+     */
+    fun warmUp()
+
     /** Ids of the chat models usable for [cleanup], sorted. Throws [CleanupException] on failures. */
     suspend fun listModels(): List<String>
 }

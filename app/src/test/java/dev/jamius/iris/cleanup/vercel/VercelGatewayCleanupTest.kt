@@ -305,6 +305,56 @@ class VercelGatewayCleanupTest {
         assertEquals("Loading models timed out", error.message)
     }
 
+    @Test(timeout = TEST_TIMEOUT_MS)
+    fun warmUpSendsHeadOfModelsWithoutKey() {
+        respond(200, "")
+
+        cleanup().warmUp()
+
+        val request = server.takeRequest()
+        assertEquals("HEAD", request.method)
+        assertEquals("/v1/models", request.target)
+        assertNull(request.headers["Authorization"])
+    }
+
+    @Test(timeout = TEST_TIMEOUT_MS)
+    fun cleanupReusesTheWarmedUpConnection() = runBlocking {
+        respond(200, "")
+        respond(200, completion("""{"text":"Hi."}"""))
+        val httpClient = OkHttpClient()
+        val cleanup = cleanup(httpClient = httpClient)
+
+        cleanup.warmUp()
+        val warmUp = server.takeRequest()
+        while (httpClient.connectionPool.idleConnectionCount() == 0) Thread.sleep(10) // Response consumed.
+        cleanup.cleanup("hi", "Clean it.", "m")
+
+        val request = server.takeRequest()
+        assertEquals(warmUp.connectionIndex, request.connectionIndex)
+        assertEquals(1, request.exchangeIndex) // Second exchange on that connection.
+    }
+
+    @Test(timeout = TEST_TIMEOUT_MS)
+    fun warmUpFailureIsIgnored() = runBlocking {
+        val httpClient = OkHttpClient()
+        val closed = MockWebServer().apply { start() }
+        val closedUrl = closed.url("/v1/models").toString()
+        closed.close() // Connection refused.
+        val cleanup = VercelGatewayCleanup(
+            httpClient,
+            apiKey = { "vck-test" },
+            url = server.url("/v1/chat/completions").toString(),
+            modelsUrl = closedUrl,
+            callTimeoutMs = 10_000
+        )
+
+        cleanup.warmUp()
+        while (httpClient.dispatcher.runningCallsCount() > 0) Thread.sleep(10)
+        respond(200, completion("""{"text":"Hi."}"""))
+
+        assertEquals("Hi.", cleanup.cleanup("hi", "Clean it.", "m"))
+    }
+
     private fun JsonObject.string(key: String) = this[key]!!.jsonPrimitive.content
 
     private companion object {

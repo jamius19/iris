@@ -57,6 +57,7 @@ class AppContainer(context: Context) {
         audio = audioRecorder.chunks(),
         stt = speechToText,
         settings = settingsRepository.settings,
+        warmUpCleanup = cleanup::warmUp,
         onFinalTranscript = onFinalTranscript,
     )
 }

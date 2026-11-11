@@ -5,6 +5,7 @@
 
 package dev.jamius.iris.cleanup.vercel
 
+import android.util.Log
 import dev.jamius.iris.cleanup.CleanupException
 import dev.jamius.iris.cleanup.CleanupProvider
 import kotlinx.coroutines.Dispatchers
@@ -50,6 +51,23 @@ class VercelGatewayCleanup(
             )
     }
 
+    /**
+     * `HEAD` of the public model catalog: answered from Vercel's edge cache with no body and no key needed, so it
+     * only opens the (HTTP/2) connection that [cleanup] then reuses from the shared pool.
+     */
+    override fun warmUp() {
+        val request = Request.Builder().url(modelsUrl).head().build()
+        httpClient.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                Log.d(TAG, "Warm-up failed: $e")
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                response.use { Log.d(TAG, "Warm-up: ${it.protocol} ${it.code}") }
+            }
+        })
+    }
+
     /** The catalog is public, so no key is sent (an invalid one would get a 401). */
     override suspend fun listModels(): List<String> {
         val request = Request.Builder().url(modelsUrl).build()
@@ -85,6 +103,7 @@ class VercelGatewayCleanup(
     }
 
     private companion object {
+        const val TAG = "VercelGatewayCleanup"
         const val CALL_TIMEOUT_MS = 30_000L
         val JSON_MEDIA_TYPE = "application/json".toMediaType()
     }

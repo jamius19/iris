@@ -60,12 +60,15 @@ internal const val FINALIZE_TAP_GRACE_MS = 5_000L
  *   [DictationState.Done] to show. It runs inside the session (still Finalizing): cancelling the session cancels
  *   it, and its exceptions end in Error. A tap while it runs cancels it and calls it again with
  *   `skipCleanup = true`.
+ * @param warmUpCleanup if cleanup is enabled, called as recording starts and again on stop, so the cleanup call
+ *   finds a warm connection. Must return at once.
  */
 class DictationController(
     private val scope: CoroutineScope,
     private val audio: Flow<ByteArray>,
     private val stt: SpeechToTextProvider,
     private val settings: Flow<Settings>,
+    private val warmUpCleanup: () -> Unit,
     private val onFinalTranscript: suspend (transcript: String, skipCleanup: Boolean) -> DictationState.Done,
 ) {
     private val _state = MutableStateFlow<DictationState>(DictationState.Idle)
@@ -73,6 +76,9 @@ class DictationController(
 
     private var session: Job? = null
     private var stopRequested = false
+
+    /** The session's settings have cleanup on: warm the cleanup connection on stop too. */
+    private var cleanupEnabled = false
 
     /** The first [onFinalTranscript] call of the session, once the transcript is final. */
     private var hook: Job? = null
@@ -89,6 +95,8 @@ class DictationController(
         when (val state = _state.value) {
             is DictationState.Listening -> {
                 stopRequested = true
+                // A long dictation may outlive the idle connection (pool/server/NAT); runs alongside STT finalization.
+                if (cleanupEnabled) warmUpCleanup()
                 tapGrace = scope.launch { delay(FINALIZE_TAP_GRACE_MS) }
                 _state.value = DictationState.Finalizing(state.text)
             }
@@ -116,11 +124,14 @@ class DictationController(
     private fun start() {
         session?.cancel()
         stopRequested = false
+        cleanupEnabled = false
         hook = null
         _state.value = DictationState.Listening("")
         session = scope.launch {
             val result = try {
                 val config = settings.first()
+                cleanupEnabled = config.cleanupEnabled
+                if (cleanupEnabled) warmUpCleanup()
                 // Ends the audio after the chunk during which stop was tapped, so speech up to the tap is kept.
                 val chunks = audio.transformWhile {
                     emit(it)
