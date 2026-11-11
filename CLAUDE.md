@@ -43,9 +43,9 @@ Overlay (`overlay`, View-based, not Compose: a Compose window in a service needs
   `setPosition(side, yFraction)`, `setImeTop(Int?)`, `setPanelSize(lines, widthPercent)`, `onConfigurationChanged()`,
   `ownsWindow(windowId)`. `addView` failures (`BadTokenException` during teardown) are logged and the view stays
   unadded. The service renders `DictationState` onto it (`render()`, also after each `show()`).
-  `BubbleStatus` per state: Idle = mic on `bubble_control` (white circle + black icon; black + white in
-  `values-night`, no outline; tinted `bubble_control_icon`); Listening = ✕ in the same colours (only the icon
-  morphs) and the pill out; Finalizing (incl. cleanup + insertion) = WORKING, a spinner in the control colours, pill
+  `BubbleStatus` per state: Idle = mic on `bubble_idle` (black circle + white icon; white + black in
+  `values-night`, so it contrasts with the theme; tinted `bubble_idle_icon`); Listening = ✕ on `bubble_control`
+  (white circle + black icon; black + white in `values-night`, no outline) and the pill out; Finalizing (incl. cleanup + insertion) = WORKING, a spinner in the control colours, pill
   collapsed, panel keeps the STT transcript (fixed once transcription ends); Done without notice = SUCCESS, white tick
   on `bubble_success` `#2FF740`, panel animates out (1.5 s); Done with notice or Error = FAILURE, red exclamation mark,
   panel shows the notice/message (3 s, `ERROR_DISPLAY_MS = 2 * DONE_DISPLAY_MS`). No "Listening…"/"Finishing…"
