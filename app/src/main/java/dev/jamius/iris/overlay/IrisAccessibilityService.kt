@@ -8,9 +8,15 @@ package dev.jamius.iris.overlay
 import android.accessibilityservice.AccessibilityService
 import android.content.res.Configuration
 import android.graphics.Rect
+import android.media.AudioAttributes
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.os.VibrationAttributes
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -66,14 +72,21 @@ class IrisAccessibilityService : AccessibilityService() {
         val overlay = BubbleOverlay(
             context = this,
             // The ✕ cancels while listening; otherwise the button starts (a no-op while finalizing).
+            // Taps that act vibrate; ignored ones don't.
             onButtonTap = {
-                if (dictation.state.value is DictationState.Listening) dictation.cancel() else dictation.start()
+                when (dictation.state.value) {
+                    is DictationState.Finalizing -> return@BubbleOverlay
+                    is DictationState.Listening -> dictation.cancel()
+                    else -> dictation.start()
+                }
+                haptic()
             },
             onPillTap = {
                 if (dictation.state.value is DictationState.Listening) {
                     target = focusedEditable
                     stoppedAt = SystemClock.elapsedRealtime()
                     dictation.stop()
+                    haptic()
                 }
             },
             onMoved = { side, yFraction -> scope.launch { repository.setBubblePosition(side, yFraction) } }
@@ -249,6 +262,26 @@ class IrisAccessibilityService : AccessibilityService() {
                 "stop->done ${SystemClock.elapsedRealtime() - stoppedAt} ms"
         )
         return DictationState.Done(text, doneNotice(cleanupError, targetFocused, insertion))
+    }
+
+    /** A strong, short click; as touch feedback, so the user's touch-haptics setting applies. */
+    private fun haptic() {
+        val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            getSystemService(VibratorManager::class.java).defaultVibrator
+        } else {
+            getSystemService(Vibrator::class.java)
+        }
+        if (!vibrator.hasVibrator()) return
+        val effect = VibrationEffect.createPredefined(VibrationEffect.EFFECT_HEAVY_CLICK)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            vibrator.vibrate(effect, VibrationAttributes.createForUsage(VibrationAttributes.USAGE_TOUCH))
+        } else {
+            @Suppress("DEPRECATION")
+            vibrator.vibrate(
+                effect,
+                AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION).build()
+            )
+        }
     }
 
     private fun imeTop(): Int? = windows

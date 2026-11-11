@@ -592,7 +592,7 @@ class BubbleOverlay(
         const val PANEL_IN_MS = 250L
         const val PANEL_OUT_MS = 200L
         const val PANEL_MIN_SCALE = 0.92f
-        const val STACK_IN_MS = 200L
+        const val STACK_IN_MS = 150L
         const val STACK_OUT_MS = 150L
         const val STACK_MIN_SCALE = 0.6f
         const val WRAP = FrameLayout.LayoutParams.WRAP_CONTENT

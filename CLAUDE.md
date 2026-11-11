@@ -88,7 +88,7 @@ Overlay (`overlay`, View-based, not Compose: a Compose window in a service needs
   only running animators (`end()` on a finished one replays it). The overlay keeps the desired panel state
   (`panelWanted`) while hidden.
 - Show/hide: `show()` adds the stack window and fades + zooms the stack's root in (alpha 0 -> 1, scale 0.6 -> 1,
-  pivot on the circle's centre, 200 ms emphasized decelerate); a wanted panel animates in with it (its own enter).
+  pivot on the circle's centre, 150 ms emphasized decelerate); a wanted panel animates in with it (its own enter).
   Status and pill are restored as they are (no replayed morph/slide). `hide()` runs the reverse (150 ms emphasized
   accelerate), the panel takes its own 200 ms exit, and each window is removed (`removeViewImmediate`) when its
   exit ends. `bubbleShown` = the stack window is added, so it stays true during the exit (`stackExiting`), while
@@ -130,14 +130,16 @@ Dictation (CP3):
   or 3 s with a notice, which the panel shows instead of the text; Error 3 s; blank transcript = Error
   "No speech detected"). `start()`: new session (also from Done/Error), ignored while Listening/Finalizing;
   `stop()`: Listening only; `cancel()`: discards any session. The service maps the button to `cancel()` while
-  Listening, else `start()` (so the spinner ignores taps), and the pill to `stop()`. Finalizing can't be cancelled
-  by a tap: stalls end via the STT 10 s final timeout / cleanup 15 s stall. `level: StateFlow<Float>`: the latest
-  chunk's `level` while Listening (set in `transformWhile`), 0 otherwise; the service pushes it to the pill. Stop
-  records the stop time (`clock`); the audio flow (`transformWhile`) keeps sending queued chunks (e.g. behind a
-  stalled main thread) until it has sent the first one read after that time (the chunk in progress), then ends.
-  The mic runs in its own coroutine (`produceIn`), so the audio (and the STT commit) doesn't wait for the mic's
-  next read and release; it starts on the provider's first collect, after its API key check, so a missing key never
-  opens the mic.
+  Listening, else `start()` (so the spinner ignores taps), and the pill to `stop()`. A tap that acts (start, stop,
+  cancel; decided from the state at tap time) gets a haptic (`haptic()`: `EFFECT_HEAVY_CLICK`, touch usage, so the
+  touch-haptics setting applies; needs `VIBRATE`); ignored taps, drags and focus-loss cancels don't. Finalizing
+  can't be cancelled by a tap: stalls end via the STT 10 s final timeout / cleanup 15 s stall.
+  `level: StateFlow<Float>`: the latest chunk's `level` while Listening (set in `transformWhile`), 0 otherwise; the
+  service pushes it to the pill. Stop records the stop time (`clock`); the audio flow (`transformWhile`) keeps
+  sending queued chunks (e.g. behind a stalled main thread) until it has sent the first one read after that time
+  (the chunk in progress), then ends. The mic runs in its own coroutine (`produceIn`), so the audio (and the STT
+  commit) doesn't wait for the mic's next read and release; it starts on the provider's first collect, after its
+  API key check, so a missing key never opens the mic.
   `onFocusLost()` (the service's debounced focus-lost hide) cancels only while Listening: once stopped, the session
   always finishes.
   Service destroy cancels its scope. Errors other than `SttException`/`AudioCaptureException` are logged and shown
