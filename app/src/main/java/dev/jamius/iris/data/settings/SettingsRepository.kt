@@ -42,6 +42,11 @@ class SettingsRepository(
         dataStore.edit { it[Keys.CLEANUP_MODEL] = model.trim() }
     }
 
+    /** Null = model default, stored as "" (a missing key means the default level). */
+    suspend fun setCleanupReasoningEffort(effort: String?) {
+        dataStore.edit { it[Keys.CLEANUP_REASONING_EFFORT] = effort ?: "" }
+    }
+
     /** Adds the prompt, or replaces the existing prompt with the same id. */
     suspend fun savePrompt(prompt: CleanupPrompt) {
         dataStore.edit { prefs ->
@@ -96,6 +101,7 @@ internal object Keys {
     val CLEANUP_ENABLED = booleanPreferencesKey("cleanup_enabled")
     val CLEANUP_PROVIDER_ID = stringPreferencesKey("cleanup_provider_id")
     val CLEANUP_MODEL = stringPreferencesKey("cleanup_model")
+    val CLEANUP_REASONING_EFFORT = stringPreferencesKey("cleanup_reasoning_effort")
     val PROMPTS = stringPreferencesKey("cleanup_prompts")
     val ACTIVE_PROMPT_ID = stringPreferencesKey("cleanup_active_prompt_id")
     val BUBBLE_SIDE = stringPreferencesKey("bubble_side")
@@ -124,6 +130,11 @@ internal fun Preferences.toSettings(storedSecrets: Set<Secret>): Settings {
         cleanupEnabled = this[Keys.CLEANUP_ENABLED] ?: false,
         cleanupProviderId = this[Keys.CLEANUP_PROVIDER_ID] ?: Settings.CLEANUP_PROVIDER_VERCEL_GATEWAY,
         cleanupModel = this[Keys.CLEANUP_MODEL] ?: Settings.DEFAULT_CLEANUP_MODEL,
+        cleanupReasoningEffort = when (val effort = this[Keys.CLEANUP_REASONING_EFFORT]) {
+            null -> Settings.DEFAULT_REASONING_EFFORT
+            "" -> null
+            else -> effort
+        },
         prompts = prompts,
         activePrompt = prompts.firstOrNull { it.id == activePromptId } ?: prompts.firstOrNull(),
         openAiKeySet = Secret.OPENAI_API_KEY in storedSecrets,

@@ -6,6 +6,7 @@
 package dev.jamius.iris.cleanup.vercel
 
 import dev.jamius.iris.cleanup.CleanupException
+import dev.jamius.iris.cleanup.CleanupModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
@@ -29,6 +30,7 @@ import okio.BufferedSink
 import okio.ByteString.Companion.encodeUtf8
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -61,7 +63,7 @@ class VercelGatewayCleanupTest {
         stallTimeoutMs = stallTimeoutMs
     )
 
-    private suspend fun VercelGatewayCleanup.clean() = cleanup("hello", "Clean it.", "m")
+    private suspend fun VercelGatewayCleanup.clean() = cleanup("hello", "Clean it.", "m", "low")
 
     private fun respond(code: Int, body: String) =
         server.enqueue(MockResponse.Builder().code(code).body(body).build())
@@ -114,7 +116,7 @@ class VercelGatewayCleanupTest {
             )
         respondStream(body)
 
-        val text = cleanup().cleanup("um hello world", "Clean it.", "openai/gpt-6-luna")
+        val text = cleanup().cleanup("um hello world", "Clean it.", "openai/gpt-6-luna", "low")
 
         assertEquals("Hello, world.", text)
     }
@@ -123,7 +125,7 @@ class VercelGatewayCleanupTest {
     fun sendsStreamingStructuredRequest() = runBlocking {
         respondStream(streamed("""{"text":"Hi."}"""))
 
-        cleanup().cleanup("um hello world", "Clean it.", "openai/gpt-6-luna")
+        cleanup().cleanup("um hello world", "Clean it.", "openai/gpt-6-luna", "low")
 
         val request = server.takeRequest()
         assertEquals("POST", request.method)
@@ -132,7 +134,7 @@ class VercelGatewayCleanupTest {
         val body = Json.parseToJsonElement(request.body!!.utf8()).jsonObject
         assertEquals("openai/gpt-6-luna", body.string("model"))
         assertEquals("true", body.string("stream"))
-        assertEquals("none", body.string("reasoning_effort"))
+        assertEquals("low", body.string("reasoning_effort"))
         val messages = body["messages"]!!.jsonArray.map { it.jsonObject }
         assertEquals(listOf("system", "user"), messages.map { it.string("role") })
         assertEquals("Clean it.\n\n$TRANSCRIPT_FRAMING", messages[0].string("content"))
@@ -143,6 +145,16 @@ class VercelGatewayCleanupTest {
                "additionalProperties":false}}}"""
         )
         assertEquals(expectedFormat, body["response_format"])
+    }
+
+    @Test(timeout = TEST_TIMEOUT_MS)
+    fun omitsReasoningEffortForModelDefault() = runBlocking {
+        respondStream(streamed("""{"text":"Hi."}"""))
+
+        cleanup().cleanup("um hello world", "Clean it.", "openai/gpt-6-luna", null)
+
+        val body = Json.parseToJsonElement(server.takeRequest().body!!.utf8()).jsonObject
+        assertFalse("reasoning_effort" in body)
     }
 
     @Test(timeout = TEST_TIMEOUT_MS)
@@ -358,7 +370,7 @@ class VercelGatewayCleanupTest {
             )
         )
 
-        val ids = cleanup().listModels()
+        val ids = cleanup().listModels().map { it.id }
 
         assertEquals(listOf("acme/untyped", "anthropic/claude-haiku", "openai/gpt-6-luna"), ids)
         val request = server.takeRequest()
@@ -371,8 +383,37 @@ class VercelGatewayCleanupTest {
     fun listModelsWorksWithoutAKey() = runBlocking {
         respond(200, models("openai/gpt-6-luna" to "language"))
 
-        assertEquals(listOf("openai/gpt-6-luna"), cleanup(apiKey = null).listModels())
+        assertEquals(listOf("openai/gpt-6-luna"), cleanup(apiKey = null).listModels().map { it.id })
         assertNull(server.takeRequest().headers["Authorization"])
+    }
+
+    @Test(timeout = TEST_TIMEOUT_MS)
+    fun listModelsParsesReasoningEfforts() = runBlocking {
+        val body = """{"object":"list","data":[
+            {"id":"a/luna","type":"language","reasoning_options":[
+                {"type":"effort","values":["none","low","medium","high","xhigh","max"]}]},
+            {"id":"b/gemini","type":"language","reasoning_options":[
+                {"type":"toggle"},{"type":"effort","values":["low","high"]}]},
+            {"id":"c/no-field","type":"language"},
+            {"id":"d/null","type":"language","reasoning_options":null},
+            {"id":"e/object","type":"language","reasoning_options":{}},
+            {"id":"f/budget","type":"language","reasoning_options":[{"type":"budget_tokens","min":1024}]},
+            {"id":"g/values-string","type":"language","reasoning_options":[{"type":"effort","values":"low"}]},
+            {"id":"h/values-empty","type":"language","reasoning_options":[{"type":"effort","values":[]}]}
+        ]}"""
+        respond(200, body)
+
+        val expected = listOf(
+            CleanupModel("a/luna", listOf("none", "low", "medium", "high", "xhigh", "max")),
+            CleanupModel("b/gemini", listOf("low", "high")),
+            CleanupModel("c/no-field", null),
+            CleanupModel("d/null", null),
+            CleanupModel("e/object", null),
+            CleanupModel("f/budget", null),
+            CleanupModel("g/values-string", null),
+            CleanupModel("h/values-empty", null),
+        )
+        assertEquals(expected, cleanup().listModels())
     }
 
     @Test(timeout = TEST_TIMEOUT_MS)

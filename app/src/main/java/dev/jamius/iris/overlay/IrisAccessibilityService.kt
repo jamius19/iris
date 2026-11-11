@@ -196,7 +196,12 @@ class IrisAccessibilityService : AccessibilityService() {
                 val prompt = settings.activePrompt ?: Settings.DEFAULT_PROMPT
                 val cleanupStart = SystemClock.elapsedRealtime()
                 try {
-                    text = container.cleanup.cleanup(transcript, prompt.systemPrompt, settings.cleanupModel)
+                    text = container.cleanup.cleanup(
+                        transcript,
+                        prompt.systemPrompt,
+                        settings.cleanupModel,
+                        settings.cleanupReasoningEffort
+                    )
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: CleanupException) {

@@ -13,9 +13,10 @@ interface CleanupProvider {
 
     /**
      * Cleans up [text] following [systemPrompt] with [model] and returns the cleaned text (never blank).
+     * [reasoningEffort] null leaves it to the model's default.
      * Cancel the calling coroutine to abort. Throws [CleanupException] on failures.
      */
-    suspend fun cleanup(text: String, systemPrompt: String, model: String): String
+    suspend fun cleanup(text: String, systemPrompt: String, model: String, reasoningEffort: String?): String
 
     /**
      * Opens a connection to the provider ahead of a [cleanup] call so that call skips the TCP/TLS setup.
@@ -23,6 +24,9 @@ interface CleanupProvider {
      */
     fun warmUp()
 
-    /** Ids of the chat models usable for [cleanup], sorted. Throws [CleanupException] on failures. */
-    suspend fun listModels(): List<String>
+    /** Chat models usable for [cleanup], sorted by id. Throws [CleanupException] on failures. */
+    suspend fun listModels(): List<CleanupModel>
 }
+
+/** A catalog model. [reasoningEfforts]: the effort values the model lists; null if unknown. */
+data class CleanupModel(val id: String, val reasoningEfforts: List<String>?)

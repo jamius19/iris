@@ -107,6 +107,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import dev.jamius.iris.R
 import dev.jamius.iris.cleanup.CleanupException
+import dev.jamius.iris.cleanup.CleanupModel
 import dev.jamius.iris.cleanup.CleanupProvider
 import dev.jamius.iris.data.settings.CleanupPrompt
 import dev.jamius.iris.data.settings.Secret
@@ -125,6 +126,32 @@ fun SettingsScreen(repository: SettingsRepository, cleanup: CleanupProvider, mod
     val settings = repository.settings.collectAsState(initial = null).value
     val scope = rememberCoroutineScope()
     var editingPrompt by remember { mutableStateOf<CleanupPrompt?>(null) }
+    // The Gateway's model catalog, shared by the model field and the reasoning level; kept in memory only.
+    var models by remember { mutableStateOf<List<CleanupModel>?>(null) }
+    var modelsLoading by remember { mutableStateOf(false) }
+    var modelsError by remember { mutableStateOf<String?>(null) }
+    val modelIds = remember(models) { models?.map { it.id } }
+
+    fun loadModels() {
+        if (modelsLoading) return
+        modelsLoading = true
+        modelsError = null
+        scope.launch {
+            try {
+                models = cleanup.listModels()
+            } catch (e: CleanupException) {
+                modelsError = e.message
+            } finally {
+                modelsLoading = false
+            }
+        }
+    }
+
+    // Loads the catalog when the screen opens with cleanup on, and when cleanup is turned on before it has loaded.
+    val cleanupEnabled = settings?.cleanupEnabled == true
+    LaunchedEffect(cleanupEnabled) {
+        if (cleanupEnabled && models == null) loadModels()
+    }
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val screenColor = MaterialTheme.colorScheme.surfaceContainer
 
@@ -233,8 +260,16 @@ fun SettingsScreen(repository: SettingsRepository, cleanup: CleanupProvider, mod
                 FieldsColumn(modifier = Modifier.alpha(cleanupAlpha)) {
                     CleanupModelField(
                         value = settings.cleanupModel,
-                        listModels = cleanup::listModels,
+                        models = modelIds,
+                        loading = modelsLoading,
+                        error = modelsError,
+                        onLoad = ::loadModels,
                         onSave = { scope.launch { repository.setCleanupModel(it) } }
+                    )
+                    ReasoningEffortField(
+                        value = settings.cleanupReasoningEffort,
+                        efforts = models?.firstOrNull { it.id == settings.cleanupModel }?.reasoningEfforts,
+                        onSelect = { scope.launch { repository.setCleanupReasoningEffort(it) } }
                     )
                 }
             }
@@ -626,42 +661,32 @@ private fun SavableTextField(
 
 /**
  * Cleanup model combobox: type any model id, or pick one from the Gateway's list (filtered by what was typed).
- * The list is fetched on first open or on refresh and kept in memory only. Saves like [SavableTextField].
+ * The list ([models], [loading], [error]) is passed in; [onLoad] fetches it, on first open if not loaded yet or on
+ * refresh. Saves like [SavableTextField].
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun CleanupModelField(value: String, listModels: suspend () -> List<String>, onSave: (String) -> Unit) {
+private fun CleanupModelField(
+    value: String,
+    models: List<String>?,
+    loading: Boolean,
+    error: String?,
+    onLoad: () -> Unit,
+    onSave: (String) -> Unit,
+) {
     var input by rememberSaveable(value) { mutableStateOf(value) }
     // What the user typed to filter the list; empty shows the whole list. Cleared when the field opens the menu.
     var query by remember { mutableStateOf("") }
-    var models by remember { mutableStateOf<List<String>?>(null) }
-    var loading by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
     var menuOpen by remember { mutableStateOf(false) }
     var focused by remember { mutableStateOf(false) }
     var menuWidth by remember { mutableStateOf(0.dp) }
+    var fetchedOnOpen by remember { mutableStateOf(false) }
     val density = LocalDensity.current
-    val scope = rememberCoroutineScope()
 
     val filtered = remember(models, query) {
         models.orEmpty().filter { it.contains(query.trim(), ignoreCase = true) }
     }
     val expanded = menuOpen && filtered.isNotEmpty()
-
-    fun load() {
-        if (loading) return
-        loading = true
-        error = null
-        scope.launch {
-            try {
-                models = listModels()
-            } catch (e: CleanupException) {
-                error = e.message
-            } finally {
-                loading = false
-            }
-        }
-    }
 
     fun close() {
         menuOpen = false
@@ -670,7 +695,10 @@ private fun CleanupModelField(value: String, listModels: suspend () -> List<Stri
 
     // Auto-fetch on the first open. An effect, so a toggle undone in the same event (see below) fetches nothing.
     LaunchedEffect(menuOpen) {
-        if (menuOpen && models == null && error == null) load()
+        if (menuOpen && models == null && !loading && !fetchedOnOpen) {
+            fetchedOnOpen = true
+            onLoad()
+        }
     }
 
     // The box handles back only while it's expanded (see below), so close a menu opened by refresh here.
@@ -708,7 +736,7 @@ private fun CleanupModelField(value: String, listModels: suspend () -> List<Stri
                 label = { Text("Model") },
                 supportingText = {
                     Column {
-                        Text("Model must support structured output and reasoning effort 'none'")
+                        Text("Model must support structured output")
                         error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                     }
                 },
@@ -774,7 +802,7 @@ private fun CleanupModelField(value: String, listModels: suspend () -> List<Stri
         } else {
             IconButton(
                 onClick = {
-                    load()
+                    onLoad()
                     menuOpen = true
                 },
                 modifier = Modifier.padding(top = refreshTop)
@@ -789,6 +817,52 @@ private val MODEL_MENU_MAX_HEIGHT = 280.dp
 
 /** A one-line [DropdownMenuItem]'s height (its minimum, M3 menu list item token). */
 private val MODEL_MENU_ITEM_HEIGHT = 48.dp
+
+/**
+ * Read-only dropdown of reasoning levels: "Model default" plus [efforts] (the model's own list), or all levels the
+ * Gateway accepts if that's unknown. Saves on selection.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ReasoningEffortField(value: String?, efforts: List<String>?, onSelect: (String?) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
+        OutlinedTextField(
+            value = reasoningEffortLabel(value),
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("Reasoning level") },
+            supportingText = if (value != null && efforts != null && value !in efforts) {
+                { Text("Not listed for this model", color = MaterialTheme.colorScheme.error) }
+            } else {
+                null
+            },
+            singleLine = true,
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            (listOf(null) + (efforts ?: Settings.REASONING_EFFORTS)).forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(reasoningEffortLabel(option)) },
+                    onClick = {
+                        expanded = false
+                        if (option != value) onSelect(option)
+                    },
+                    contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding
+                )
+            }
+        }
+    }
+}
+
+private fun reasoningEffortLabel(effort: String?): String = when (effort) {
+    null -> "Model default"
+    "xhigh" -> "Extra high"
+    else -> effort.replaceFirstChar { it.uppercase() }
+}
 
 /**
  * While focused, scrolls the whole field (incl. supporting text) into view once the IME inset stops changing,

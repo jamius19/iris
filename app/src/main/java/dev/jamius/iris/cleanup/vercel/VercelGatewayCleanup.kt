@@ -7,6 +7,7 @@ package dev.jamius.iris.cleanup.vercel
 
 import android.util.Log
 import dev.jamius.iris.cleanup.CleanupException
+import dev.jamius.iris.cleanup.CleanupModel
 import dev.jamius.iris.cleanup.CleanupProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
@@ -50,13 +51,13 @@ class VercelGatewayCleanup(
         .build()
     private val stallTimeoutNanos = MILLISECONDS.toNanos(stallTimeoutMs)
 
-    override suspend fun cleanup(text: String, systemPrompt: String, model: String): String {
+    override suspend fun cleanup(text: String, systemPrompt: String, model: String, reasoningEffort: String?): String {
         val key = apiKey()?.takeIf { it.isNotBlank() }
             ?: throw CleanupException("Add your Vercel AI Gateway API key in Iris settings")
         val request = Request.Builder()
             .url(url)
             .header("Authorization", "Bearer $key")
-            .post(chatRequest(text, systemPrompt, model).toRequestBody(JSON_MEDIA_TYPE))
+            .post(chatRequest(text, systemPrompt, model, reasoningEffort).toRequestBody(JSON_MEDIA_TYPE))
             .build()
         val content = StringBuilder()
         contentDeltas(request).collect { content.append(it) }
@@ -156,7 +157,7 @@ class VercelGatewayCleanup(
     }
 
     /** The catalog is public, so no key is sent (an invalid one would get a 401). */
-    override suspend fun listModels(): List<String> {
+    override suspend fun listModels(): List<CleanupModel> {
         val request = Request.Builder().url(modelsUrl).build()
         val (code, body) = execute(request, networkError = ::modelsNetworkErrorMessage)
         if (code !in 200..299) throw CleanupException(httpErrorMessage(code, body))

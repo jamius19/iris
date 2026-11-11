@@ -46,6 +46,7 @@ class SettingsMappingTest {
         assertFalse(settings.cleanupEnabled)
         assertEquals(Settings.CLEANUP_PROVIDER_VERCEL_GATEWAY, settings.cleanupProviderId)
         assertEquals(Settings.DEFAULT_CLEANUP_MODEL, settings.cleanupModel)
+        assertEquals(Settings.DEFAULT_REASONING_EFFORT, settings.cleanupReasoningEffort)
         assertEquals(listOf(Settings.DEFAULT_PROMPT), settings.prompts)
         assertEquals(Settings.DEFAULT_PROMPT, settings.activePrompt)
         assertFalse(settings.openAiKeySet)
@@ -63,6 +64,7 @@ class SettingsMappingTest {
             Keys.STT_LANGUAGE to "fr",
             Keys.CLEANUP_ENABLED to true,
             Keys.CLEANUP_MODEL to "google/gemini-2.5-flash",
+            Keys.CLEANUP_REASONING_EFFORT to "high",
             Keys.PROMPTS to encodePrompts(prompts),
             Keys.ACTIVE_PROMPT_ID to "b",
             Keys.BUBBLE_SIDE to "LEFT",
@@ -77,6 +79,7 @@ class SettingsMappingTest {
         assertEquals("fr", settings.sttLanguage)
         assertTrue(settings.cleanupEnabled)
         assertEquals("google/gemini-2.5-flash", settings.cleanupModel)
+        assertEquals("high", settings.cleanupReasoningEffort)
         assertEquals(prompts, settings.prompts)
         assertEquals(prompts[1], settings.activePrompt)
         assertFalse(settings.openAiKeySet)
@@ -85,6 +88,13 @@ class SettingsMappingTest {
         assertEquals(0.75f, settings.bubbleYFraction)
         assertEquals(5, settings.panelLines)
         assertEquals(70, settings.panelWidthPercent)
+    }
+
+    @Test
+    fun emptyReasoningEffortIsModelDefault() {
+        val settings = mutablePreferencesOf(Keys.CLEANUP_REASONING_EFFORT to "").toSettings(emptySet())
+
+        assertNull(settings.cleanupReasoningEffort)
     }
 
     @Test

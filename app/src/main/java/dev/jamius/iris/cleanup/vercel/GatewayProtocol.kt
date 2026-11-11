@@ -5,6 +5,7 @@
 
 package dev.jamius.iris.cleanup.vercel
 
+import dev.jamius.iris.cleanup.CleanupModel
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -39,11 +40,16 @@ internal const val TRANSCRIPT_FRAMING = "The user message is dictated text to cl
 
 /**
  * Streaming chat completion (SSE) with the transcript as the user message and a strict `{ "text": string }`
- * JSON schema; the content deltas concatenate into that JSON. `reasoning_effort: "none"` (the standard Chat
- * Completions field, an alias of the Gateway's `reasoning.effort`) turns reasoning off on reasoning models for low
- * latency.
+ * JSON schema; the content deltas concatenate into that JSON. Sends the user's [reasoningEffort] as
+ * `reasoning_effort` (the standard Chat Completions field, an alias of the Gateway's `reasoning.effort`), or omits it
+ * when null so the provider's default applies.
  */
-internal fun chatRequest(text: String, systemPrompt: String, model: String): String = buildJsonObject {
+internal fun chatRequest(
+    text: String,
+    systemPrompt: String,
+    model: String,
+    reasoningEffort: String?,
+): String = buildJsonObject {
     put("model", model)
     put("stream", true)
     putJsonArray("messages") {
@@ -56,7 +62,7 @@ internal fun chatRequest(text: String, systemPrompt: String, model: String): Str
             put("content", text)
         }
     }
-    put("reasoning_effort", "none")
+    reasoningEffort?.let { put("reasoning_effort", it) }
     putJsonObject("response_format") {
         put("type", "json_schema")
         putJsonObject("json_schema") {
@@ -105,18 +111,29 @@ internal fun parseStreamChunk(data: String): StreamChunk? {
 }
 
 /**
- * Sorted model ids from a `GET /v1/models` body (`{ "data": [{ "id": ..., "type": "language" | "embedding" |
- * "image" | ... }] }`), keeping only language models (or entries without a `type`), since cleanup uses chat
- * completions. Null if the body isn't that shape.
+ * Models sorted by id from a `GET /v1/models` body (`{ "data": [{ "id": ..., "type": "language" | "embedding" |
+ * "image" | ..., "reasoning_options": [...] }] }`), keeping only language models (or entries without a `type`),
+ * since cleanup uses chat completions. Each model's efforts come from its `reasoning_options`. Null if the body isn't
+ * that shape.
  */
-internal fun parseModelsResponse(body: String): List<String>? {
+internal fun parseModelsResponse(body: String): List<CleanupModel>? {
     val data = parseObject(body)?.get("data") as? JsonArray ?: return null
     return data.mapNotNull { entry ->
         val model = entry as? JsonObject ?: return@mapNotNull null
         val type = model.string("type")
-        model.string("id")?.takeIf { it.isNotBlank() && (type == null || type == LANGUAGE_MODEL_TYPE) }
-    }.sorted()
+        model.string("id")
+            ?.takeIf { it.isNotBlank() && (type == null || type == LANGUAGE_MODEL_TYPE) }
+            ?.let { CleanupModel(it, model.reasoningEfforts()) }
+    }.sortedBy { it.id }
 }
+
+/** `reasoning_options[type=effort].values`; null if missing, not that shape or empty. */
+private fun JsonObject.reasoningEfforts(): List<String>? =
+    ((this["reasoning_options"] as? JsonArray)
+        ?.firstOrNull { (it as? JsonObject)?.string("type") == "effort" } as? JsonObject)
+        ?.let { it["values"] as? JsonArray }
+        ?.mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content }
+        ?.takeIf { it.isNotEmpty() }
 
 private const val LANGUAGE_MODEL_TYPE = "language"
 

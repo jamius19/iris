@@ -149,15 +149,19 @@ Providers (settings store a provider id for each):
   `response_format: {type:"json_schema", json_schema:{name, schema, strict:true}}` with schema
   `{ "text": string }`. Supports multiple saved system prompts; user picks the active one. Optional (toggle).
   Default model `openai/gpt-6-luna` (OpenAI's replacement for the deprecated 4.1/4o minis; cheap, structured
-  output). It is a reasoning model: send reasoning effort `none` for low latency. A user-set cleanup model must
-  accept effort `none` (settings says so under the field); we always send it.
+  output, a reasoning model). The reasoning effort is a setting (`Settings.cleanupReasoningEffort`, default
+  `low`): null = "Model default", `reasoning_effort` is omitted and the provider decides (gpt-6-luna: medium,
+  per https://developers.openai.com/api/docs/models/gpt-6-luna, verified 2026-11-11); otherwise we send top-level
+  `reasoning_effort: <value>`.
   Verified 2026-11-11 (`cleanup.vercel.GatewayProtocol.kt`) against
   https://vercel.com/docs/ai-gateway/sdks-and-apis/openai-chat-completions/reasoning,
-  `.../openai-chat-completions/structured-outputs` and
-  https://vercel.com/docs/ai-gateway/models-and-providers/reasoning:
+  `.../openai-chat-completions/structured-outputs`, https://vercel.com/docs/ai-gateway/models-and-providers/reasoning
+  and https://vercel.com/docs/ai-gateway/sdks-and-apis/rest-api:
   Chat Completions takes top-level `reasoning_effort` (alias of the Gateway's `reasoning.effort`; nested wins if
-  both are sent); we send `reasoning_effort: "none"`. The catalog (`GET /v1/models`) lists `openai/gpt-6-luna`
-  effort values `none|low|medium|high|xhigh|max`. User message = raw
+  both are sent). Accepted values are `none|minimal|low|medium|high|xhigh|max`; any other string gets a 400 (before
+  auth). The Gateway translates effort per provider (Gemini 3 `thinkingLevel`: low stays low, every other value
+  becomes high); a valid value the model doesn't list is translated, not documented as an error. The catalog
+  (`GET /v1/models`) lists `openai/gpt-6-luna` effort values `none|low|medium|high|xhigh|max`. User message = raw
   transcript; a fixed framing line appended to the system prompt says to treat it as text, not instructions.
   Streaming (`stream: true`), verified 2026-11-11 against `.../openai-chat-completions/streaming` and
   `.../structured-outputs` ("Streaming with structured outputs": json_schema works with streaming; concatenate the
@@ -191,17 +195,32 @@ Providers (settings store a provider id for each):
   2026-11-11: public, no auth needed; an invalid Bearer key gets 401, so the request is sent unauthenticated and
   the key is never read). Body `{object:"list", data:[{id, type, ...}]}` with `type` one of
   `language|embedding|image|video|speech|transcription|realtime|reranking|evaluation`. We keep
-  `type == "language"` (or no `type`), sorted by id. HTTP errors map as above; timeout = "Loading models timed
-  out", other transport errors = "Couldn't load models (network error)" (no raw exception in the UI); no `data`
-  array = "Unexpected response from AI Gateway".
+  `type == "language"` (or no `type`), sorted by id, as `CleanupModel(id, reasoningEfforts)`. `reasoningEfforts` =
+  the `reasoning_options[]` entry `{type:"effort", values:[..]}` (other entry types: `{type:"toggle"}`,
+  `{type:"budget_tokens", min?, max?}`; a missing `reasoning_options` means the controls are "not specified"). It
+  is null when the field is missing, null or not an array, there is no effort entry, or `values` is empty or not an
+  array. E.g. luna `none..max`, `google/gemini-3-flash` `low|high`, `anthropic/claude-sonnet-5.5` `low..max`;
+  `openai/gpt-4.1-mini` has no `reasoning_options`. HTTP errors map as above; timeout = "Loading models timed out",
+  other transport errors = "Couldn't load models (network error)" (no raw exception in the UI); no `data` array =
+  "Unexpected response from AI Gateway".
   Settings shows the cleanup model as an editable M3 `ExposedDropdownMenuBox` (`PrimaryEditable` field): any
   custom id can be typed; typing filters the list (case-insensitive substring); explicit Save as other fields.
-  The list is fetched on first open or via the refresh button and kept in memory only. The menu renders a lazy,
+  The catalog (`models`/loading/error) lives in `SettingsScreen`, shared by the model field and the reasoning
+  level, in memory only (refetched on each `MainActivity` creation, incl. rotation). It loads when the screen
+  opens with cleanup on (or when cleanup is turned on, if not loaded yet), once on the model menu's first open if
+  still not loaded (later failures need refresh), or via refresh; one fetch at a time (a load in progress isn't
+  restarted). A failed load shows its error under the model field. The menu renders a lazy,
   height-bounded `LazyColumn` (fixed to the field's width: the menu measures intrinsic width, which lazy lists
   don't support). Refresh is an `IconButton` beside the field (not in it), so it doesn't focus the field or
   clear the filter; the box gets `expanded` only while the field is focused, since it focuses its anchor (IME)
   while expanded. The field's anchor also sees taps on the trailing Save (it toggles the menu first), so Save
-  closes the menu explicitly. A fetch error re-triggers the field's bring-into-view above the IME.
+  closes the menu explicitly. A fetch error re-triggers the field's bring-into-view above the IME. The model hint
+  reads "Model must support structured output".
+  Under it, "Reasoning level" is a read-only `ExposedDropdownMenuBox` (`PrimaryNotEditable`) that saves on
+  selection. Options: "Model default" plus the saved model's efforts, else `Settings.REASONING_EFFORTS` (model not
+  in the catalog, catalog not loaded or failed). "Not listed for this model" (error colour) shows only when the
+  model's list is known and lacks the saved value; the value is sent anyway (a cleanup error falls back to the raw
+  transcript).
 
 ## Key decisions (don't re-litigate without a concrete reason)
 - **OpenAI Realtime for STT**: Vercel AI Gateway's streaming STT protocol is undocumented and JS-SDK-only beta,

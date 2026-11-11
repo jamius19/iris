@@ -24,6 +24,8 @@ data class Settings(
     val cleanupEnabled: Boolean,
     val cleanupProviderId: String,
     val cleanupModel: String,
+    /** Gateway `reasoning_effort`; null = model default (not sent). */
+    val cleanupReasoningEffort: String?,
     val prompts: List<CleanupPrompt>,
     /** The selected prompt, falling back to the first one if the selection no longer exists. */
     val activePrompt: CleanupPrompt?,
@@ -44,6 +46,11 @@ data class Settings(
 
         const val DEFAULT_STT_MODEL = "gpt-live-transcribe"
         const val DEFAULT_CLEANUP_MODEL = "openai/gpt-6-luna"
+
+        const val DEFAULT_REASONING_EFFORT = "low"
+
+        /** The values the Gateway accepts, for when a model's own list is unknown. */
+        val REASONING_EFFORTS = listOf("none", "minimal", "low", "medium", "high", "xhigh", "max")
 
         val DEFAULT_BUBBLE_SIDE = BubbleSide.RIGHT
         const val DEFAULT_BUBBLE_Y_FRACTION = 0.4f
