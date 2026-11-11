@@ -163,8 +163,8 @@ Cleanup + insertion (CP4):
   `post_process_timeout_secs`); `onFinalTranscript` wraps the cleanup call in `withTimeoutOrNull` (not
   `withTimeout`: its `TimeoutCancellationException` is a `CancellationException` and would be rethrown, losing the
   dictation). Cancelling cancels the OkHttp call (`awaitClose`). On timeout the raw transcript is inserted with the
-  error "Cleanup took longer than N s" as the notice's first line (then "Inserted the original text", or the
-  clipboard variants).
+  notice "Cleanup timeout. Pasted original text." (if it was copied instead: "Cleanup timeout." plus the clipboard
+  line from `doneNotice`).
 - Target: the service snapshots `focusedEditable` when the user taps stop. At insertion, if it still equals
   `focusedEditable` (`AccessibilityNodeInfo.equals`) the text is inserted there; else it is copied to the
   clipboard ("Copied to clipboard — field changed"; the bubble may already be hidden). Any other hook failure

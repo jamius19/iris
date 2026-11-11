@@ -243,7 +243,7 @@ class IrisAccessibilityService : AccessibilityService() {
                         text = cleaned
                     } else {
                         cleanupTimedOut = true
-                        cleanupError = "Cleanup took longer than ${settings.cleanupTimeoutSeconds} s"
+                        cleanupError = "Cleanup timeout."
                     }
                 } catch (e: CancellationException) {
                     throw e
@@ -282,7 +282,13 @@ class IrisAccessibilityService : AccessibilityService() {
             "Timing: stop->transcript ${transcriptAt - stoppedAt} ms, cleanup $cleanupTiming, " +
                 "stop->done ${SystemClock.elapsedRealtime() - stoppedAt} ms"
         )
-        return DictationState.Done(text, doneNotice(cleanupError, targetFocused, insertion))
+        val inserted = targetFocused && insertion != null && insertion != Insertion.COPIED
+        val notice = if (cleanupTimedOut && inserted) {
+            "Cleanup timeout. Pasted original text."
+        } else {
+            doneNotice(cleanupError, targetFocused, insertion)
+        }
+        return DictationState.Done(text, notice)
     }
 
     /** A strong, short click; as touch feedback, so the user's touch-haptics setting applies. */
