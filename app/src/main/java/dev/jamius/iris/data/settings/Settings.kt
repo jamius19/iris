@@ -29,6 +29,8 @@ data class Settings(
     val cleanupModel: String,
     /** Gateway `reasoning_effort`; null = model default (not sent). */
     val cleanupReasoningEffort: String?,
+    /** Overall cleanup deadline; past it the original transcript is inserted. */
+    val cleanupTimeoutSeconds: Int,
     val prompts: List<CleanupPrompt>,
     /** The selected prompt, falling back to the first one if the selection no longer exists. */
     val activePrompt: CleanupPrompt?,
@@ -65,6 +67,9 @@ data class Settings(
 
         /** The values the Gateway accepts, for when a model's own list is unknown. */
         val REASONING_EFFORTS = listOf("none", "minimal", "low", "medium", "high", "xhigh", "max")
+
+        const val DEFAULT_CLEANUP_TIMEOUT_SECONDS = 5
+        val CLEANUP_TIMEOUT_RANGE = 1..30
 
         val DEFAULT_BUBBLE_SIDE = BubbleSide.RIGHT
         const val DEFAULT_BUBBLE_Y_FRACTION = 0.4f

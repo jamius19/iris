@@ -32,6 +32,7 @@ import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Shows the bubble overlay while an editable, non-password field in another app has input focus.
@@ -212,14 +213,15 @@ class IrisAccessibilityService : AccessibilityService() {
     /**
      * Called with the final transcript of each successful session, inside the session (cancelled with it). Runs the
      * optional LLM cleanup, then inserts at the cursor of [target] if it still has focus, else copies to the
-     * clipboard. A failed cleanup inserts the original transcript, and any other failure copies the text, so the
-     * dictation is never lost.
+     * clipboard. A failed or timed-out cleanup inserts the original transcript, and any other failure copies the
+     * text, so the dictation is never lost.
      */
     private suspend fun onFinalTranscript(transcript: String): DictationState.Done {
         transcriptAt = SystemClock.elapsedRealtime()
         var text = transcript
         var cleanupError: String? = null
         var cleanupMs: Long? = null
+        var cleanupTimedOut = false
         var targetFocused = false
         val insertion = try {
             val container = (application as IrisApp).container
@@ -228,12 +230,21 @@ class IrisAccessibilityService : AccessibilityService() {
                 val prompt = settings.activePrompt ?: Settings.DEFAULT_PROMPT
                 val cleanupStart = SystemClock.elapsedRealtime()
                 try {
-                    text = container.cleanup.cleanup(
-                        transcript,
-                        prompt.systemPrompt,
-                        settings.cleanupModel,
-                        settings.cleanupReasoningEffort
-                    )
+                    // OrNull: a plain withTimeout's exception is a CancellationException and would be rethrown.
+                    val cleaned = withTimeoutOrNull(settings.cleanupTimeoutSeconds * 1000L) {
+                        container.cleanup.cleanup(
+                            transcript,
+                            prompt.systemPrompt,
+                            settings.cleanupModel,
+                            settings.cleanupReasoningEffort
+                        )
+                    }
+                    if (cleaned != null) {
+                        text = cleaned
+                    } else {
+                        cleanupTimedOut = true
+                        cleanupError = "Cleanup took longer than ${settings.cleanupTimeoutSeconds} s"
+                    }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: CleanupException) {
@@ -260,7 +271,12 @@ class IrisAccessibilityService : AccessibilityService() {
             copyToClipboard(this, text)
             null
         }
-        val cleanupTiming = cleanupMs?.let { "$it ms" + if (cleanupError != null) " failed" else "" } ?: "off"
+        val cleanupOutcome = when {
+            cleanupTimedOut -> " timed out"
+            cleanupError != null -> " failed"
+            else -> ""
+        }
+        val cleanupTiming = cleanupMs?.let { "$it ms$cleanupOutcome" } ?: "off"
         Log.d(
             TAG,
             "Timing: stop->transcript ${transcriptAt - stoppedAt} ms, cleanup $cleanupTiming, " +

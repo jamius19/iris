@@ -74,6 +74,10 @@ class SettingsRepository(
         dataStore.edit { it[Keys.ACTIVE_PROMPT_ID] = id }
     }
 
+    suspend fun setCleanupTimeoutSeconds(seconds: Int) {
+        dataStore.edit { it[Keys.CLEANUP_TIMEOUT_SECONDS] = seconds }
+    }
+
     suspend fun setBubblePosition(side: BubbleSide, yFraction: Float) {
         dataStore.edit {
             it[Keys.BUBBLE_SIDE] = side.name
@@ -111,6 +115,7 @@ internal object Keys {
     val CLEANUP_PROVIDER_ID = stringPreferencesKey("cleanup_provider_id")
     val CLEANUP_MODEL = stringPreferencesKey("cleanup_model")
     val CLEANUP_REASONING_EFFORT = stringPreferencesKey("cleanup_reasoning_effort")
+    val CLEANUP_TIMEOUT_SECONDS = intPreferencesKey("cleanup_timeout_seconds")
     val PROMPTS = stringPreferencesKey("cleanup_prompts")
     val ACTIVE_PROMPT_ID = stringPreferencesKey("cleanup_active_prompt_id")
     val BUBBLE_SIDE = stringPreferencesKey("bubble_side")
@@ -145,6 +150,7 @@ internal fun Preferences.toSettings(storedSecrets: Set<Secret>): Settings {
             "" -> null
             else -> effort
         },
+        cleanupTimeoutSeconds = this[Keys.CLEANUP_TIMEOUT_SECONDS] ?: Settings.DEFAULT_CLEANUP_TIMEOUT_SECONDS,
         prompts = prompts,
         activePrompt = prompts.firstOrNull { it.id == activePromptId } ?: prompts.firstOrNull(),
         openAiKeySet = Secret.OPENAI_API_KEY in storedSecrets,

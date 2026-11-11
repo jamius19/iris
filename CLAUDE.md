@@ -159,7 +159,12 @@ Cleanup + insertion (CP4):
   `CleanupProvider.cleanup` throws `CleanupException` (user-readable). Any cleanup failure (incl. missing Gateway
   key) inserts the raw transcript; Done's notice is the error plus "Inserted the original text" (or "Original
   copied to clipboard"), so dictation is never lost. Other unexpected cleanup exceptions are logged and treated the
-  same.
+  same. Overall deadline: `Settings.cleanupTimeoutSeconds` (1..30, default 5, like Handy's
+  `post_process_timeout_secs`); `onFinalTranscript` wraps the cleanup call in `withTimeoutOrNull` (not
+  `withTimeout`: its `TimeoutCancellationException` is a `CancellationException` and would be rethrown, losing the
+  dictation). Cancelling cancels the OkHttp call (`awaitClose`). On timeout the raw transcript is inserted with the
+  error "Cleanup took longer than N s" as the notice's first line (then "Inserted the original text", or the
+  clipboard variants).
 - Target: the service snapshots `focusedEditable` when the user taps stop. At insertion, if it still equals
   `focusedEditable` (`AccessibilityNodeInfo.equals`) the text is inserted there; else it is copied to the
   clipboard ("Copied to clipboard — field changed"; the bubble may already be hidden). Any other hook failure
@@ -298,9 +303,10 @@ Providers (settings store a provider id for each):
   `length` = "Cleanup output was cut off", `content_filter` = "Cleanup blocked by content filter". Any other
   exception while reading the stream is logged and = "Unexpected response from AI Gateway" (the flow always closes).
   Errors before the stream: 401/403 = API key message, 429 = rate limit/quota, 5xx = server error, other 4xx =
-  gateway `error.message`, transport = network error. Timeouts: no call timeout (a long cleanup keeps streaming);
-  "Cleanup timed out" after `STALL_TIMEOUT_MS` (15 s) without a `data:` event: OkHttp's read timeout covers a
-  silent socket (incl. waiting for headers = time to first byte), a per-line check covers heartbeat-only streams.
+  gateway `error.message`, transport = network error. Timeouts: no call timeout in the provider (the service's
+  overall `cleanupTimeoutSeconds` deadline, at most 30 s, usually wins); "Cleanup timed out" after
+  `STALL_TIMEOUT_MS` (15 s) without a `data:` event: OkHttp's read timeout covers a silent socket (incl. waiting
+  for headers = time to first byte), a per-line check covers heartbeat-only streams.
   Warm-up (`CleanupProvider.warmUp()`, fire-and-forget, failures only `Log.d`): `DictationController` calls it
   when a session's settings load (recording start) and again on stop, only if `cleanupEnabled`. Request: `HEAD
   /v1/models`, no key (edge-cached, 200, no body; measured 2026-11-11 ~50-100 ms after TLS, like `HEAD /` (308,
@@ -311,8 +317,8 @@ Providers (settings store a provider id for each):
   after 5 min, hence the stop re-warm (runs alongside STT finalization). A warm-up still connecting when cleanup
   starts doesn't help (OkHttp pools a connection only after its handshake), so very short dictations or
   pool-evicted connections still pay the handshake. The service logs one `Timing:` line per session that reaches
-  the final-transcript hook (not error/no-speech/cancel): stop->transcript, cleanup (`X ms`, `X ms failed` or
-  `off`), stop->done; no text.
+  the final-transcript hook (not error/no-speech/cancel): stop->transcript, cleanup (`X ms`, `X ms failed`,
+  `X ms timed out` or `off`), stop->done; no text.
 - Model catalog: `CleanupProvider.listModels()` = `GET https://ai-gateway.vercel.sh/v1/models` (checked
   2026-11-11: public, no auth needed; an invalid Bearer key gets 401, so the request is sent unauthenticated and
   the key is never read). Body `{object:"list", data:[{id, type, ...}]}` with `type` one of
@@ -352,7 +358,8 @@ Providers (settings store a provider id for each):
   selection. Options: "Model default" plus the saved model's efforts, else `Settings.REASONING_EFFORTS` (model not
   in the catalog, catalog not loaded or failed). "Not listed for this model" (error colour) shows only when the
   model's list is known and lacks the saved value; the value is sent anyway (a cleanup error falls back to the raw
-  transcript).
+  transcript). Under that, a "Timeout" `SliderSetting` (1..30 s, step 1) for `cleanupTimeoutSeconds`, hint "If
+  cleanup takes longer, the original text is inserted."
 
 ## Key decisions (don't re-litigate without a concrete reason)
 - **STT providers**: OpenAI Realtime (direct) stays the default. Vercel AI Gateway's streaming transcription

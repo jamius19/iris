@@ -50,6 +50,7 @@ class SettingsMappingTest {
         assertEquals(Settings.CLEANUP_PROVIDER_VERCEL_GATEWAY, settings.cleanupProviderId)
         assertEquals(Settings.DEFAULT_CLEANUP_MODEL, settings.cleanupModel)
         assertEquals(Settings.DEFAULT_REASONING_EFFORT, settings.cleanupReasoningEffort)
+        assertEquals(Settings.DEFAULT_CLEANUP_TIMEOUT_SECONDS, settings.cleanupTimeoutSeconds)
         assertEquals(listOf(Settings.DEFAULT_PROMPT), settings.prompts)
         assertEquals(Settings.DEFAULT_PROMPT, settings.activePrompt)
         assertFalse(settings.openAiKeySet)
@@ -70,6 +71,7 @@ class SettingsMappingTest {
             Keys.CLEANUP_ENABLED to true,
             Keys.CLEANUP_MODEL to "google/gemini-2.5-flash",
             Keys.CLEANUP_REASONING_EFFORT to "high",
+            Keys.CLEANUP_TIMEOUT_SECONDS to 12,
             Keys.PROMPTS to encodePrompts(prompts),
             Keys.ACTIVE_PROMPT_ID to "b",
             Keys.BUBBLE_SIDE to "LEFT",
@@ -87,6 +89,7 @@ class SettingsMappingTest {
         assertTrue(settings.cleanupEnabled)
         assertEquals("google/gemini-2.5-flash", settings.cleanupModel)
         assertEquals("high", settings.cleanupReasoningEffort)
+        assertEquals(12, settings.cleanupTimeoutSeconds)
         assertEquals(prompts, settings.prompts)
         assertEquals(prompts[1], settings.activePrompt)
         assertFalse(settings.openAiKeySet)

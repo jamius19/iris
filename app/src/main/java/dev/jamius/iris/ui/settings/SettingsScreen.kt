@@ -304,6 +304,15 @@ fun SettingsScreen(repository: SettingsRepository, cleanup: CleanupProvider, mod
                         efforts = models?.firstOrNull { it.id == settings.cleanupModel }?.reasoningEfforts,
                         onSelect = { scope.launch { repository.setCleanupReasoningEffort(it) } }
                     )
+                    SliderSetting(
+                        label = "Timeout",
+                        value = settings.cleanupTimeoutSeconds,
+                        range = Settings.CLEANUP_TIMEOUT_RANGE,
+                        step = 1,
+                        valueText = { "$it s" },
+                        supportingText = "If cleanup takes longer, the original text is inserted.",
+                        onSave = { scope.launch { repository.setCleanupTimeoutSeconds(it) } }
+                    )
                 }
             }
 
