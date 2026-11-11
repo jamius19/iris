@@ -7,11 +7,10 @@
     <color name="teal_700">#FF018786</color>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
-    <color name="bubble_idle">#FF6650A4</color>
-    <!-- Cancel (✕) and spinner circle; night values in values-night. -->
+    <!-- Idle (mic), cancel (✕) and spinner circle; night values in values-night. -->
     <color name="bubble_control">#FFFFFFFF</color>
     <color name="bubble_control_icon">#FF000000</color>
-    <color name="bubble_success">#FF2E7D32</color>
+    <color name="bubble_success">#FF2FF740</color>
     <color name="bubble_failure">#FFD32F2F</color>
     <color name="pill_background">#FFD32F2F</color>
     <color name="pill_bar">#FFFFFFFF</color>

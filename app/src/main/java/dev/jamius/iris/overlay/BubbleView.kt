@@ -22,7 +22,7 @@ import kotlin.math.roundToInt
 
 /** What the bubble shows. */
 enum class BubbleStatus {
-    /** Purple, with a mic. */
+    /** Control circle with a mic. */
     IDLE,
 
     /** Control circle with a ✕ (cancel); the overlay shows the pill below it. */
@@ -56,7 +56,6 @@ internal class BubbleView(context: Context) : View(context) {
     val circlePx = (2 * radius).roundToInt()
     val circleInsetPx = (sizePx - circlePx) / 2
 
-    private var idleColor = 0
     private var controlColor = 0
     private var successColor = 0
     private var failureColor = 0
@@ -157,13 +156,13 @@ internal class BubbleView(context: Context) : View(context) {
     }
 
     private fun loadColors() {
-        idleColor = context.getColor(R.color.bubble_idle)
         controlColor = context.getColor(R.color.bubble_control)
         successColor = context.getColor(R.color.bubble_success)
         failureColor = context.getColor(R.color.bubble_failure)
         val controlIcon = context.getColor(R.color.bubble_control_icon)
         spinnerPaint.color = controlIcon
         close.setTint(controlIcon)
+        mic.setTint(controlIcon)
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
@@ -217,8 +216,7 @@ internal class BubbleView(context: Context) : View(context) {
     }
 
     private fun fill(status: BubbleStatus) = when (status) {
-        BubbleStatus.IDLE -> idleColor
-        BubbleStatus.LISTENING, BubbleStatus.WORKING -> controlColor
+        BubbleStatus.IDLE, BubbleStatus.LISTENING, BubbleStatus.WORKING -> controlColor
         BubbleStatus.SUCCESS -> successColor
         BubbleStatus.FAILURE -> failureColor
     }

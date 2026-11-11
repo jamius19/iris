@@ -43,23 +43,24 @@ Overlay (`overlay`, View-based, not Compose: a Compose window in a service needs
   `setPosition(side, yFraction)`, `setImeTop(Int?)`, `setPanelSize(lines, widthPercent)`, `onConfigurationChanged()`,
   `ownsWindow(windowId)`. `addView` failures (`BadTokenException` during teardown) are logged and the view stays
   unadded. The service renders `DictationState` onto it (`render()`, also after each `show()`).
-  `BubbleStatus` per state: Idle = purple + mic; Listening = ✕ on `bubble_control` (white circle + black ✕; black +
-  white in `values-night`, no outline) and the pill out; Finalizing (incl. cleanup + insertion) = WORKING, a spinner
-  in the control colours, pill collapsed, panel keeps the STT transcript (fixed once transcription ends); Done without
-  notice = SUCCESS, green tick, panel animates out (1.5 s); Done with notice or Error = FAILURE, red exclamation mark,
+  `BubbleStatus` per state: Idle = mic on `bubble_control` (white circle + black icon; black + white in
+  `values-night`, no outline; tinted `bubble_control_icon`); Listening = ✕ in the same colours (only the icon
+  morphs) and the pill out; Finalizing (incl. cleanup + insertion) = WORKING, a spinner in the control colours, pill
+  collapsed, panel keeps the STT transcript (fixed once transcription ends); Done without notice = SUCCESS, white tick
+  on `bubble_success` `#2FF740`, panel animates out (1.5 s); Done with notice or Error = FAILURE, red exclamation mark,
   panel shows the notice/message (3 s, `ERROR_DISPLAY_MS = 2 * DONE_DISPLAY_MS`). No "Listening…"/"Finishing…"
   placeholders: the panel comes in with the first words (blank text = hidden). Colours are re-read on config change
   (dark mode).
 - Stack window = `FrameLayout` with `PillView` (z below) and `BubbleView`. The pill is GONE when collapsed, so the
   WRAP_CONTENT window is the button view at rest (52 x 58 dp: `sizePx` plus `shadowRoomPx`, 6 dp below the margin so
   the downward shadow isn't cut by the window edge; placement still uses `sizePx`, so the window reaches 6 dp past
-  the clamp, e.g. over the IME's top edge) and 154 dp while the pill is visible (160 dp opening up). Pill: 40 x 96
-  dp, radius 20, 6 dp gap below the circle; `PillView` (52 x 128 dp) starts at the circle's centre, so at `reveal` 0
+  the clamp, e.g. over the IME's top edge) and 136 dp while the pill is visible (142 dp opening up). Pill: 40 x 78
+  dp, radius 20, 6 dp gap below the circle; `PillView` (52 x 110 dp) starts at the circle's centre, so at `reveal` 0
   the pill's cap sits exactly on the circle's lower half and the rest is clipped by the parent. Its outline (shadow)
   is the pill's rect intersected with the view's bounds (`Outline.setPath`), so the clipped part casts no shadow
   (it showed as a grey band cut off at the window edge). Near the bottom/IME the pill opens
   up (`pillOpensUp(buttonTop, stackHeight, visibleBottom)`, unit tested): mirrored, the ✕ stays where the mic was
-  (button at the window's bottom, window y = `buttonY - 102 dp`). Both overlay windows set
+  (button at the window's bottom, window y = `buttonY - 84 dp`). Both overlay windows set
   `setCanPlayMoveAnimation(false)` (API 34+): otherwise the system animates the window move when the stack grows up
   (or shrinks back), sliding the re-laid-out content from the old position (the button jumped over the IME).
   Decided when it expands, re-evaluated on every
@@ -71,8 +72,8 @@ Overlay (`overlay`, View-based, not Compose: a Compose window in a service needs
   button's 6 dp margin on the pill's side, i.e. the gap) -> `onPillTap`.
 - Motion (`PathInterpolator`s, private per class): icon/colour morph 250 ms standard (0.2, 0, 0, 1): icon
   crossfade + scale, ✕ rotates in from -90°; the new colour grows as a disc from the centre over the old one, full
-  at t = 0.8 (`REVEAL_END`) so the old colour's last ring doesn't linger (an RGB blend of e.g. red -> purple passes
-  through a muddy magenta; an alpha crossfade is the same blend). A status set back mid-morph (e.g. cancel right
+  at t = 0.8 (`REVEAL_END`) so the old colour's last ring doesn't linger (an RGB blend of e.g. red -> white passes
+  through a washed-out pink; an alpha crossfade is the same blend). A status set back mid-morph (e.g. cancel right
   after start) reverses the running morph from where it is (`reversed`); another status morphs on from whichever
   dominates. A morph never draws the same status twice (a VectorDrawable drawn twice in one frame uses its last
   alpha for both: the icon vanished). Pill slide out and back 300 ms symmetric ease-in-out (0.65, 0, 0.35, 1);
@@ -80,11 +81,12 @@ Overlay (`overlay`, View-based, not Compose: a Compose window in a service needs
   (alpha + scale 0.92, pivot on the button side and the panel's growth edge; alpha/scale are reset in `show()`);
   snap 150 ms. Both windows are removed with `removeViewImmediate`: on Android 13-16 the async `removeView` frees the
   hardware renderer before the already scheduled frame, which then draws in software without alpha/scale/shadows (the
-  faded-out panel flashed once at full opacity). Waveform: 6 horizontal bars (4.5 dp round caps, max 23.5 dp, dots at
-  rest), level smoothed per frame (attack 40 ms, release 200 ms) with a small per-bar wobble; after stop the bars
-  shrink to dots as the pill retracts. Animations run only while attached; `hide()` ends only running animators
-  (`end()` on a finished one replays it). The overlay keeps the desired panel state (`panelWanted`) while hidden,
-  and `show()` restores stack and panel instantly (no replayed animations).
+  faded-out panel flashed once at full opacity). Waveform: 6 horizontal bars (6 dp round caps, max 23.5 dp, dots at
+  rest; centres 14 dp from the pill's ends, 10 dp apart = 4 dp gaps; at full length the outer bars stay ~6 dp
+  inside the cap curve), level smoothed per frame (attack 40 ms, release 200 ms) with a small per-bar wobble; after
+  stop the bars shrink to dots as the pill retracts. Animations run only while attached; `hide()` ends only running
+  animators (`end()` on a finished one replays it). The overlay keeps the desired panel state (`panelWanted`) while
+  hidden, and `show()` restores stack and panel instantly (no replayed animations).
 - Bubble position persists as `Settings.bubbleSide` + `bubbleYFraction` (fraction of usable height, so it
   survives rotation). Placement math is in `BubbleGeometry.kt` (unit tested). Panel size persists as
   `Settings.panelLines` (1..6, default 3) and `panelWidthPercent` (30..90, default 50); the service collects
