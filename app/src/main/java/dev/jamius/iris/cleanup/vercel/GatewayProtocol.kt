@@ -5,7 +5,7 @@
 
 package dev.jamius.iris.cleanup.vercel
 
-import dev.jamius.iris.cleanup.CleanupModel
+import dev.jamius.iris.cleanup.GatewayModel
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -111,21 +111,26 @@ internal fun parseStreamChunk(data: String): StreamChunk? {
 }
 
 /**
- * Models sorted by id from a `GET /v1/models` body (`{ "data": [{ "id": ..., "type": "language" | "embedding" |
- * "image" | ..., "reasoning_options": [...] }] }`), keeping only language models (or entries without a `type`),
- * since cleanup uses chat completions. Each model's efforts come from its `reasoning_options`. Null if the body isn't
- * that shape.
+ * Every model with an id, sorted by id, from a `GET /v1/models` body (`{ "data": [{ "id": ..., "type": "language" |
+ * "embedding" | "transcription" | ..., "tags": [...], "reasoning_options": [...] }] }`). Each model's efforts come
+ * from its `reasoning_options`. Null if the body isn't that shape.
  */
-internal fun parseModelsResponse(body: String): List<CleanupModel>? {
+internal fun parseModelsResponse(body: String): List<GatewayModel>? {
     val data = parseObject(body)?.get("data") as? JsonArray ?: return null
     return data.mapNotNull { entry ->
         val model = entry as? JsonObject ?: return@mapNotNull null
-        val type = model.string("type")
         model.string("id")
-            ?.takeIf { it.isNotBlank() && (type == null || type == LANGUAGE_MODEL_TYPE) }
-            ?.let { CleanupModel(it, model.reasoningEfforts()) }
+            ?.takeIf { it.isNotBlank() }
+            ?.let { GatewayModel(it, model.string("type"), model.tags(), model.reasoningEfforts()) }
     }.sortedBy { it.id }
 }
+
+/** Language models (or entries without a `type`): cleanup uses chat completions. */
+internal fun isChatModel(model: GatewayModel): Boolean = model.type == null || model.type == LANGUAGE_MODEL_TYPE
+
+/** The string entries of `tags`; empty if missing or not an array. */
+private fun JsonObject.tags(): List<String> =
+    (this["tags"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content }.orEmpty()
 
 /** `reasoning_options[type=effort].values`; null if missing, not that shape or empty. */
 private fun JsonObject.reasoningEfforts(): List<String>? =

@@ -26,6 +26,7 @@ import dev.jamius.iris.cleanup.CleanupException
 import dev.jamius.iris.data.settings.Settings
 import dev.jamius.iris.dictation.DictationController
 import dev.jamius.iris.dictation.DictationState
+import dev.jamius.iris.stt.SpeechToTextProvider
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
@@ -57,8 +58,11 @@ class IrisAccessibilityService : AccessibilityService() {
     /** [focusedEditable] when the user tapped stop: the field the dictation is inserted into. */
     private var target: AccessibilityNodeInfo? = null
 
-    /** Cached from settings: STT warm-ups are skipped without a key (no decryption per accessibility event). */
-    private var openAiKeySet = false
+    /**
+     * Cached from settings: the selected STT provider, or null without its key, so warm-ups are skipped (no
+     * decryption per accessibility event).
+     */
+    private var sttWarmUp: SpeechToTextProvider? = null
 
     /** `elapsedRealtime` of the stop tap and of the final transcript, for the timing log. */
     private var stoppedAt = 0L
@@ -93,7 +97,7 @@ class IrisAccessibilityService : AccessibilityService() {
         )
         scope.launch {
             repository.settings.collect {
-                openAiKeySet = it.openAiKeySet
+                sttWarmUp = if (it.sttKeySet) container.speechToText(it) else null
                 overlay.setPanelSize(it.panelLines, it.panelWidthPercent) // Skips unchanged values.
             }
         }
@@ -164,9 +168,10 @@ class IrisAccessibilityService : AccessibilityService() {
     /** Pre-warms the STT connection while the bubble is up and no session runs; the provider throttles repeats. */
     private fun warmUpStt() {
         val state = dictation?.state?.value ?: return
-        if (!openAiKeySet || focusedEditable == null) return
+        val stt = sttWarmUp ?: return
+        if (focusedEditable == null) return
         if (state is DictationState.Listening || state is DictationState.Finalizing) return
-        (application as IrisApp).container.speechToText.warmUp()
+        stt.warmUp()
     }
 
     private fun render(state: DictationState) {

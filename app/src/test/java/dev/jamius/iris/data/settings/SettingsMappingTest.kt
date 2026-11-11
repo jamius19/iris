@@ -42,6 +42,9 @@ class SettingsMappingTest {
 
         assertEquals(Settings.STT_PROVIDER_OPENAI, settings.sttProviderId)
         assertEquals(Settings.DEFAULT_STT_MODEL, settings.sttModel)
+        assertEquals(Settings.DEFAULT_GATEWAY_STT_MODEL, settings.gatewaySttModel)
+        assertFalse(settings.sttGateway)
+        assertEquals(Settings.DEFAULT_STT_MODEL, settings.activeSttModel)
         assertEquals("", settings.sttLanguage)
         assertFalse(settings.cleanupEnabled)
         assertEquals(Settings.CLEANUP_PROVIDER_VERCEL_GATEWAY, settings.cleanupProviderId)
@@ -60,7 +63,9 @@ class SettingsMappingTest {
     @Test
     fun storedValuesAreMapped() {
         val prefs = mutablePreferencesOf(
+            Keys.STT_PROVIDER_ID to Settings.STT_PROVIDER_VERCEL_GATEWAY,
             Keys.STT_MODEL to "gpt-transcribe",
+            Keys.GATEWAY_STT_MODEL to "google/gemini-3.5-transcribe-live",
             Keys.STT_LANGUAGE to "fr",
             Keys.CLEANUP_ENABLED to true,
             Keys.CLEANUP_MODEL to "google/gemini-2.5-flash",
@@ -75,7 +80,9 @@ class SettingsMappingTest {
 
         val settings = prefs.toSettings(setOf(Secret.GATEWAY_API_KEY))
 
+        assertEquals(Settings.STT_PROVIDER_VERCEL_GATEWAY, settings.sttProviderId)
         assertEquals("gpt-transcribe", settings.sttModel)
+        assertEquals("google/gemini-3.5-transcribe-live", settings.gatewaySttModel)
         assertEquals("fr", settings.sttLanguage)
         assertTrue(settings.cleanupEnabled)
         assertEquals("google/gemini-2.5-flash", settings.cleanupModel)
@@ -88,6 +95,26 @@ class SettingsMappingTest {
         assertEquals(0.75f, settings.bubbleYFraction)
         assertEquals(5, settings.panelLines)
         assertEquals(70, settings.panelWidthPercent)
+    }
+
+    @Test
+    fun activeSttModelAndKeyFollowTheProvider() {
+        val prefs = mutablePreferencesOf(
+            Keys.STT_MODEL to "gpt-transcribe",
+            Keys.GATEWAY_STT_MODEL to "spacexai/grok-stt",
+        )
+
+        val openAi = prefs.toSettings(setOf(Secret.OPENAI_API_KEY))
+        assertFalse(openAi.sttGateway)
+        assertEquals("gpt-transcribe", openAi.activeSttModel)
+        assertTrue(openAi.sttKeySet)
+
+        prefs[Keys.STT_PROVIDER_ID] = Settings.STT_PROVIDER_VERCEL_GATEWAY
+        val gateway = prefs.toSettings(setOf(Secret.OPENAI_API_KEY))
+        assertTrue(gateway.sttGateway)
+        assertEquals("spacexai/grok-stt", gateway.activeSttModel)
+        assertFalse(gateway.sttKeySet)
+        assertTrue(prefs.toSettings(setOf(Secret.GATEWAY_API_KEY)).sttKeySet)
     }
 
     @Test

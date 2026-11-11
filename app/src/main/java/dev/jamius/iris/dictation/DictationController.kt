@@ -57,7 +57,8 @@ internal const val ERROR_DISPLAY_MS = 2 * DONE_DISPLAY_MS
  * is shown), [stop] ends the recording of a listening one, [cancel] discards any; a finalizing session can't be
  * stopped or restarted, it ends through the providers' own timeouts.
  *
- * @param audio cold flow; each collection records a new session's audio.
+ * @param audio cold flow at the given sample rate (Hz); each collection records a new session's audio.
+ * @param stt the speech-to-text provider for a session's settings; picked once per session.
  * @param clock the [AudioChunk.readAtNanos] time base.
  * @param onFinalTranscript called with the final text of each successful session; returns the
  *   [DictationState.Done] to show. It runs inside the session (still Finalizing): cancelling the session cancels
@@ -67,8 +68,8 @@ internal const val ERROR_DISPLAY_MS = 2 * DONE_DISPLAY_MS
  */
 class DictationController(
     private val scope: CoroutineScope,
-    private val audio: Flow<AudioChunk>,
-    private val stt: SpeechToTextProvider,
+    private val audio: (sampleRate: Int) -> Flow<AudioChunk>,
+    private val stt: (Settings) -> SpeechToTextProvider,
     private val settings: Flow<Settings>,
     private val warmUpCleanup: () -> Unit,
     private val onFinalTranscript: suspend (transcript: String) -> DictationState.Done,
@@ -126,13 +127,15 @@ class DictationController(
                 val config = settings.first()
                 cleanupEnabled = config.cleanupEnabled
                 if (cleanupEnabled) warmUpCleanup()
+                val stt = stt(config)
+                val model = config.activeSttModel
                 val text = coroutineScope {
                     val sessionScope = this
                     // Recording runs in its own coroutine, so the audio ends (and STT commits) without waiting for
                     // the mic's next read and its release; the scope still waits for both before returning. It
                     // starts on the provider's first collect, after its API key check, so a missing key never
                     // opens the mic.
-                    val recording = flow { emitAll(audio.produceIn(sessionScope)) }
+                    val recording = flow { emitAll(audio(stt.sampleRate(model)).produceIn(sessionScope)) }
                     // Sends every chunk read before the stop tap (even if queued behind a stalled main thread), then
                     // the one during which stop was tapped, so speech up to the tap is kept.
                     val chunks = recording.transformWhile {
@@ -140,7 +143,7 @@ class DictationController(
                         emit(it.bytes)
                         stoppedAt.let { stop -> stop == null || it.readAtNanos <= stop }
                     }
-                    stt.transcribe(chunks, config.sttModel, config.sttLanguage, ::onPartial)
+                    stt.transcribe(chunks, model, config.sttLanguage, ::onPartial)
                 }
                 if (text.isBlank()) DictationState.Error("No speech detected") else onFinalTranscript(text)
             } catch (e: CancellationException) {

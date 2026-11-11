@@ -25,8 +25,8 @@ interfaces so a new provider is just a new implementation.
 | (root) | `IrisApp` (Application), `AppContainer` (manual DI), `MainActivity` (hosts settings UI) |
 | `data.settings` | Settings model, `SettingsRepository` (DataStore), `SecretStore` (Keystore crypto) |
 | `ui.settings` | Settings screen (Compose) |
-| `audio` | PCM16 mono 24 kHz recorder emitting chunks |
-| `stt` | `SpeechToTextProvider` interface; `stt.openai` realtime implementation |
+| `audio` | PCM16 mono recorder (rate per session) emitting chunks |
+| `stt` | `SpeechToTextProvider` interface; `stt.openai` realtime and `stt.vercel` AI Gateway implementations |
 | `cleanup` | `CleanupProvider` interface; `cleanup.vercel` gateway implementation |
 | `dictation` | Session state machine/controller: audio -> STT -> cleanup -> insertion |
 | `overlay` | AccessibilityService, bubble overlay view, live-text panel |
@@ -115,17 +115,21 @@ Overlay (`overlay`, View-based, not Compose: a Compose window in a service needs
   neither fits, its top sits on the usable top.
 
 Dictation (CP3):
-- `audio.AudioRecorder.chunks()`: cold `Flow<AudioChunk>`, 50 ms PCM16 chunks on `Dispatchers.IO`, each with
-  `readAtNanos` (`SystemClock.elapsedRealtimeNanos()` right after `read` returns); each collection opens the mic,
-  cancellation releases it. Throws `AudioCaptureException` (user-readable) for missing permission, init/start
-  failure, or `activeRecordingConfiguration.isClientSilenced` (how blocked background capture shows up); a read
-  that returns after cancellation (stop) ends quietly (`ensureActive()` before those checks). Each chunk carries
-  `level` = `pcm16Level` (pure, unit tested): RMS dBFS mapped from -55..-12 dB to 0..1, then `pow 0.7`.
+- `audio.AudioRecorder.chunks(sampleRate)`: cold `Flow<AudioChunk>`, 50 ms PCM16 mono chunks at `sampleRate` (the
+  session's `SpeechToTextProvider.sampleRate(model)`; Android resamples if the hardware doesn't run at it) on
+  `Dispatchers.IO`, each with `readAtNanos` (`SystemClock.elapsedRealtimeNanos()` right after `read` returns); each
+  collection opens the mic, cancellation releases it. Throws `AudioCaptureException` (user-readable) for missing
+  permission, init/start failure, or `activeRecordingConfiguration.isClientSilenced` (how blocked background capture
+  shows up); a read that returns after cancellation (stop) ends quietly (`ensureActive()` before those checks). Each
+  chunk carries `level` = `pcm16Level` (pure, unit tested): RMS dBFS mapped from -55..-12 dB to 0..1, then `pow 0.7`.
 - `stt.SpeechToTextProvider.transcribe(audio: Flow<ByteArray>, model, language, onPartial): String`. Streams until
   `audio` completes, then finalizes and returns the final text; `onPartial` gets the whole live text; cancelling
   the coroutine aborts. Failures are `SttException` with a user-readable message. `warmUp()`: fire-and-forget
-  pre-connect, throttled by the provider (OpenAI below).
-- `dictation.DictationController` (one per service, main thread, built by `AppContainer.dictationController`):
+  pre-connect, throttled by the provider (below). `sampleRate(model)`: the rate `audio` must have (default
+  24 000; the Gateway provider overrides it).
+- `dictation.DictationController` (one per service, main thread, built by `AppContainer.dictationController`;
+  `audio: (sampleRate) -> Flow<AudioChunk>` = `audioRecorder::chunks`, `stt: (Settings) -> SpeechToTextProvider` =
+  `AppContainer::speechToText`, picked once per session after the settings load, with `Settings.activeSttModel`):
   `Idle -> Listening(text) -> Finalizing(text) -> Done(text, notice?) | Error(message) -> Idle` (Done shown 1.5 s,
   or 3 s with a notice, which the panel shows instead of the text; Error 3 s; blank transcript = Error
   "No speech detected"). `start()`: new session (also from Done/Error), ignored while Listening/Finalizing;
@@ -133,7 +137,8 @@ Dictation (CP3):
   Listening, else `start()` (so the spinner ignores taps), and the pill to `stop()`. A tap that acts (start, stop,
   cancel; decided from the state at tap time) gets a haptic (`haptic()`: `EFFECT_HEAVY_CLICK`, touch usage, so the
   touch-haptics setting applies; needs `VIBRATE`); ignored taps, drags and focus-loss cancels don't. Finalizing
-  can't be cancelled by a tap: stalls end via the STT 10 s final timeout / cleanup 15 s stall.
+  can't be cancelled by a tap: stalls end via the STT final timeout (OpenAI 10 s; Gateway: 60 s drain, 15 s stall,
+  one reconnect within its budget, then 15 s stall again) / cleanup 15 s stall.
   `level: StateFlow<Float>`: the latest chunk's `level` while Listening (set in `transformWhile`), 0 otherwise; the
   service pushes it to the pill. Stop records the stop time (`clock`); the audio flow (`transformWhile`) keeps
   sending queued chunks (e.g. behind a stalled main thread) until it has sent the first one read after that time
@@ -170,9 +175,13 @@ Cleanup + insertion (CP4):
   No/stale node or paste fails: text left on the clipboard, notice "Copied to clipboard".
 
 Providers (settings store a provider id for each):
-- STT: OpenAI Realtime API, transcription-only session over WebSocket. Audio is PCM16 mono 24 kHz, sent as
-  base64 chunks via `input_audio_buffer.append`. On stop: commit the buffer, wait for the final transcript.
-  Verify event names and session config against current OpenAI docs before changing protocol code.
+- STT provider: `Settings.sttProviderId` (`stt_provider_id`): `openai` (default) = OpenAI (direct), or
+  `vercel-gateway` = Vercel AI Gateway. Each has its own model setting (`sttModel`, `gatewaySttModel`, default
+  `openai/gpt-live-transcribe`); `activeSttModel` / `sttKeySet` follow the selection; the language setting is
+  shared. `AppContainer` builds both providers; `speechToText(settings)` picks one.
+- STT, OpenAI (direct): OpenAI Realtime API, transcription-only session over WebSocket. Audio is PCM16 mono
+  24 kHz, sent as base64 chunks via `input_audio_buffer.append`. On stop: commit the buffer, wait for the final
+  transcript. Verify event names and session config against current OpenAI docs before changing protocol code.
   Verified 2026-11-11 (`stt.openai.RealtimeProtocol.kt`) against
   https://developers.openai.com/api/docs/guides/realtime-transcription and
   https://developers.openai.com/api/reference/resources/realtime/client-events (`/server-events`):
@@ -187,8 +196,9 @@ Providers (settings store a provider id for each):
   OkHttp's send queue drains (`queueSize() == 0`, polled every 10 ms; max 60 s) so slow uplinks don't time out.
   A commit needs >= 100 ms of audio (server error "buffer too small" otherwise), so less is padded with silence.
   Warm-up (`OpenAiRealtimeSpeechToText.warmUp()`, failures only `Log.d`): the service calls it when it shows the
-  bubble (`refreshFocus`) and on each state change, skipped while a session is Listening/Finalizing or without an
-  OpenAI key (`Settings.openAiKeySet`, cached by the service; no decryption per event). Request:
+  bubble (`refreshFocus`) and on each state change, skipped while a session is Listening/Finalizing or without the
+  selected provider's key (the service caches `sttWarmUp` = `speechToText(settings)` if `Settings.sttKeySet`;
+  no decryption per event). Request:
   keyless `HEAD https://api.openai.com/v1/models` (401, no body; measured 2026-11-11 with curl `--http1.1`:
   ~250 ms after TLS; `HEAD /` is faster at ~5 ms but an odd 421, `HEAD /v1/realtime` 405 ~750 ms). It must go
   through `httpClient.newBuilder().protocols(listOf(HTTP_1_1))` of the WebSocket's client: OkHttp connects
@@ -201,6 +211,61 @@ Providers (settings store a provider id for each):
   Default model `gpt-live-transcribe` (`gpt-4o-*-transcribe` are deprecated, shutdown 2027-02-26). It requires
   `turn_detection: null` (no server/semantic VAD) and takes `audio.input.transcription.languages: [..]` (array;
   never also send singular `language`). Settings store one optional code; the client wraps it into the array.
+- STT, Vercel AI Gateway (`stt.vercel`): streaming transcription WebSocket, beta (launched 2026-07-22); the only
+  official client is the AI SDK's `experimental_streamTranscribe`, with no public protocol docs. Verified
+  2026-11-12 (`stt.vercel.GatewayTranscriptionProtocol.kt`) against the source of `@ai-sdk/gateway` 4.0.143
+  (`gateway-transcription-model.ts` `doStream`, `gateway-realtime-auth.ts`, `gateway-provider.ts`) and
+  `@ai-sdk/provider-utils` (`transcription-stream-envelope.ts`), and Handy's `vercel_live_transcription.rs` /
+  `vercel_transcription.rs`; a live emulator session (header auth, `finish`, an unknown model's 404 message) worked
+  2026-11-12. Re-check those before changing protocol code.
+  Connect `wss://ai-gateway.vercel.sh/v4/ai/transcription-model?ai-model-id=<id>` (`/` encoded) with headers
+  `Authorization: Bearer <key>`, `ai-gateway-protocol-version: 0.0.1`, `ai-gateway-auth-method: api-key`,
+  `ai-transcription-model-specification-version: 4`, `ai-model-id: <id>` and `Sec-WebSocket-Protocol:
+  ai-gateway-transcription.v1` (marker only; the AI SDK also offers `ai-gateway-auth.<key>` for browsers, which
+  the server turns into the same Bearer auth; we keep the key out of a subprotocol the server may echo. If header
+  auth ever gets a 401, adding it is a one-line change in `transcribe`). A model id OkHttp can't send as a header =
+  "Invalid model id: <id>", no request. First frame (text) `{type:"transcription-stream.start",
+  inputAudioFormat:{type:"audio/pcm", rate}, providerOptions?}`; then raw PCM16 LE mono binary frames (each 50 ms
+  chunk is one frame, far under the 64 KiB per-frame rule); end with `{type:"transcription-stream.audio-done"}`.
+  Rate: `openai/*` 24 kHz, others 16 kHz (Handy's working setup; accepted rates are undocumented server policy).
+  providerOptions by id prefix, only for a non-blank language: `openai`/`mistral` `{language}`, `elevenlabs`
+  `{languageCode}`, `google` `{languageCodes:[..]}`, others none; `xai/*` and `spacexai/*` always get
+  `{streaming:{interimResults:true}}` under both `xai` and `spacexai`.
+  Server text frames are one JSON part each (unknown/malformed/missing required field = ignored, binary ignored):
+  `stream-start {warnings}` (each logged with `Log.w`: unsupported options show up there), `transcript-delta
+  {delta}`, `transcript-partial {text, startSecond?, durationInSeconds?}`, `transcript-final {text}`, `finish
+  {text}` (we don't require `segments`; blank text = the live text), `error {error: {name,message} | string}` =
+  "AI Gateway error: <message>". Close or socket failure without `finish` = failure. Live text = `LiveTranscript`
+  (ported from Handy, unit tested): settled finals + the current segment's deltas/partials (Gemini's partial
+  repeats the deltas, MAI's follows them, Grok's ~3 s chunks advance when a partial starts where the last ended);
+  `onPartial` skips text that only cuts words off the end (`onlyTrims`), finals always show; CJK joins unspaced.
+  One loop over a `Channel` fed by the audio collector, each socket's listener (tagged with an attempt number, so
+  a replaced socket's late events are ignored) and the drain wait. Reconnect once: a failure after connecting (or
+  a connect failure without an HTTP response, or the 15 s stall below) cancels the socket, opens a new one, sends
+  the start frame, resends every chunk sent so far (all kept in memory: 48 KB/s at 24 kHz) waiting while OkHttp's
+  queue holds > 1 MiB (OkHttp closes a socket over 16 MiB queued), then `audio-done` if already stopped; logs a
+  `Log.w` with the seconds resent. Every `error` part is retried once (error names can't be told apart; the cost is
+  one resend). The reconnect has one deadline, set at the failure: 10 s + resent bytes / 200 KB/s (1 min of audio
+  ~24 s, 2 min ~39 s). It covers handshake retries, the resend and, if already stopped, the new socket's drain;
+  expiry = "Reconnecting to AI Gateway timed out". If a reconnect handshake fails without an HTTP response
+  (DNS/connect error, e.g. still offline; `Listener.opened` is false), it is tried again (with a resend) every 1 s
+  until the deadline, so a network drop of up to ~10 s recovers. An HTTP rejection of the handshake is never
+  retried and maps like cleanup (`httpErrorMessage`: 401/403 key, 429 quota, 5xx server, else
+  `AI Gateway error: <error.message>`, e.g. an unknown model); its body is read in `onFailure`. Any other failure
+  after the reconnect = `SttException`. After a reconnect the panel keeps the old text (only prefix shrinks are
+  hidden), so it may jump back once while the new stream catches up. Under 100 ms of audio is padded with silence
+  before `audio-done`. After `audio-done`: wait for OkHttp's queue to drain (max 60 s, "Timed out sending audio to
+  AI Gateway"; terminal on purpose: a slow/stuck uplink won't improve with a full resend, which would push
+  Finalizing past ~90 s), then a stall timer: 15 s without a server part reconnects (above; a silently dead socket
+  only shows up here), a second stall = "Timed out waiting for the transcript" (a timer, not a total, so a
+  reconnected stream re-transcribing a long recording isn't cut off). Worst-case Finalizing without server parts:
+  60 s drain + 15 s stall + reconnect budget + 15 s stall. A `finish` before `audio-done` is accepted (text so far,
+  `Log.w`). A model id without `/` counts as `openai/` for the rate and options (the Gateway qualifies it so). On
+  `finish`: `close(1000)` and return.
+  Warm-up: like OpenAI's (keyless `HEAD https://ai-gateway.vercel.sh/v1/models` through the HTTP/1.1 client, 3 min
+  throttle, reset by `transcribe` and by a failure; emulator log `Warm-up: http/1.1 200`; the Gateway's HTTP/1.1
+  idle timeout is unmeasured). Logs `Timing: transcribe->ws open X ms` and `Timing: audio-done->finish X ms`.
+  Uses the Gateway API key (shared with cleanup).
 - Cleanup: Vercel AI Gateway, OpenAI-compatible `POST https://ai-gateway.vercel.sh/v1/chat/completions`,
   `Authorization: Bearer <key>`. Structured output via
   `response_format: {type:"json_schema", json_schema:{name, schema, strict:true}}` with schema
@@ -248,11 +313,16 @@ Providers (settings store a provider id for each):
   pool-evicted connections still pay the handshake. The service logs one `Timing:` line per session that reaches
   the final-transcript hook (not error/no-speech/cancel): stop->transcript, cleanup (`X ms`, `X ms failed` or
   `off`), stop->done; no text.
-- Cleanup model list: `CleanupProvider.listModels()` = `GET https://ai-gateway.vercel.sh/v1/models` (checked
+- Model catalog: `CleanupProvider.listModels()` = `GET https://ai-gateway.vercel.sh/v1/models` (checked
   2026-11-11: public, no auth needed; an invalid Bearer key gets 401, so the request is sent unauthenticated and
   the key is never read). Body `{object:"list", data:[{id, type, ...}]}` with `type` one of
-  `language|embedding|image|video|speech|transcription|realtime|reranking|evaluation`. We keep
-  `type == "language"` (or no `type`), sorted by id, as `CleanupModel(id, reasoningEfforts)`. `reasoningEfforts` =
+  `language|embedding|image|video|speech|transcription|realtime|reranking|evaluation`. It returns every entry with
+  an id, sorted by id, as `GatewayModel(id, type, tags, reasoningEfforts)` (`tags` = the string entries of `tags`,
+  e.g. `websocket-transcription`, `open-weights`); callers filter: cleanup with `isChatModel` (`type ==
+  "language"` or no `type`), Gateway STT with `isStreamingTranscriptionModel` (`type == "transcription"` and
+  `websocket-transcription` in `tags`; 2026-11-12: elevenlabs/scribe-v2-realtime, google/gemini-3.5-transcribe-live,
+  microsoft/mai-transcribe-2-streaming, openai/gpt-live-transcribe, openai/gpt-realtime-whisper,
+  openai/gpt-transcribe, spacexai/grok-stt). `reasoningEfforts` =
   the `reasoning_options[]` entry `{type:"effort", values:[..]}` (other entry types: `{type:"toggle"}`,
   `{type:"budget_tokens", min?, max?}`; a missing `reasoning_options` means the controls are "not specified"). It
   is null when the field is missing, null or not an array, there is no effort entry, or `values` is empty or not an
@@ -260,11 +330,16 @@ Providers (settings store a provider id for each):
   `openai/gpt-4.1-mini` has no `reasoning_options`. HTTP errors map as above; timeout = "Loading models timed out",
   other transport errors = "Couldn't load models (network error)" (no raw exception in the UI); no `data` array =
   "Unexpected response from AI Gateway".
-  Settings shows the cleanup model as an editable M3 `ExposedDropdownMenuBox` (`PrimaryEditable` field): any
+  Settings > Transcription: two radio rows (OpenAI (direct) / Vercel AI Gateway, each naming its key; the selected
+  one appends " · not set" in the error colour without its key), then the OpenAI model text field or the Gateway
+  model combobox (below, hint "Streaming transcription models"), then the shared language field.
+  Settings shows the cleanup model (and the Gateway STT model: `GatewayModelField`) as an editable M3
+  `ExposedDropdownMenuBox` (`PrimaryEditable` field): any
   custom id can be typed; typing filters the list (case-insensitive substring); explicit Save as other fields.
-  The catalog (`models`/loading/error) lives in `SettingsScreen`, shared by the model field and the reasoning
+  The catalog (`models`/loading/error) lives in `SettingsScreen`, shared by both model fields and the reasoning
   level, in memory only (refetched on each `MainActivity` creation, incl. rotation). It loads when the screen
-  opens with cleanup on (or when cleanup is turned on, if not loaded yet), once on the model menu's first open if
+  opens with cleanup or Gateway STT on (or when either is turned on, if not loaded yet), once on a model menu's
+  first open if
   still not loaded (later failures need refresh), or via refresh; one fetch at a time (a load in progress isn't
   restarted). A failed load shows its error under the model field. The menu renders a lazy,
   height-bounded `LazyColumn` (fixed to the field's width: the menu measures intrinsic width, which lazy lists
@@ -280,8 +355,9 @@ Providers (settings store a provider id for each):
   transcript).
 
 ## Key decisions (don't re-litigate without a concrete reason)
-- **OpenAI Realtime for STT**: Vercel AI Gateway's streaming STT protocol is undocumented and JS-SDK-only beta,
-  so it was dropped for STT. The Gateway is used for cleanup only.
+- **STT providers**: OpenAI Realtime (direct) stays the default. Vercel AI Gateway's streaming transcription
+  (beta, protocol taken from the AI SDK source and Handy, see Providers) is offered as a second provider for model
+  choice and one shared key. Recording rate is per session (`sampleRate(model)`), not resampled in Kotlin.
 - **API keys are user-entered** in Settings and encrypted with an Android Keystore AES/GCM key; ciphertext is
   persisted in DataStore. Do NOT use the deprecated `androidx.security:security-crypto`.
 - **Insertion at cursor via accessibility actions**: merge with existing text using `ACTION_SET_TEXT` + set
@@ -292,7 +368,8 @@ Providers (settings store a provider id for each):
   `AudioPolicyService` also allows capture by an accessibility service with `AudioSource.VOICE_RECOGNITION`:
   CP3 must record with that source. Still unverified on real devices/OEMs. Fallback if capture is silenced:
   start a `microphone` FGS from the bubble tap. Android 17 (target 37) background-audio rules cover playback/focus.
-- **Only two abstractions**: `SpeechToTextProvider` and `CleanupProvider`. No others without a reason.
+- **Only two abstractions**: `SpeechToTextProvider` and `CleanupProvider`. No others without a reason (provider
+  choice is a `(Settings) -> SpeechToTextProvider` lambda, not a router provider).
 
 ## Commands
 Run from repo root in Git Bash on Windows:
@@ -347,6 +424,10 @@ Not covered by unit tests; check on a real device (ideally more than one OEM) af
   words and animates out after the tick; re-show after focus loss mid-Finalizing restores spinner/panel without
   replayed animations; TalkBack reads "Start/Cancel/Stop dictation" and double-tap works on the ✕ and the pill.
 - Sideloaded APK: the accessibility toggle needs App info > ⋮ > "Allow restricted settings".
+- Gateway STT with a real voice: live text streams and the final is inserted (default model, plus a 16 kHz one:
+  Grok chunks don't flicker/duplicate, MAI/Gemini partials don't double); `en` with `openai/gpt-live-transcribe`
+  logs no `Stream warning`; a bad key shows the key message; a brief network drop mid-dictation (airplane mode up
+  to ~10 s) logs the reconnect warning(s) and still gives a complete transcript, a second drop shows an error.
 
 ### Emulator / Android MCP
 Checked 2026-11-11 on `emulator-5554` (AVD `Medium_Phone_API_37.0`, API 37, 1080x2400; SDK `K:\Android\SDK`).
@@ -375,3 +456,4 @@ Update this section as checkpoints land.
 | CP3 | Audio capture + OpenAI Realtime STT | Done |
 | CP4 | Text insertion + LLM cleanup | Done |
 | CP5 | Polish | Done |
+| CP6 | Vercel AI Gateway STT provider | Done (real-voice device check pending) |

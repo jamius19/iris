@@ -8,6 +8,7 @@ package dev.jamius.iris.dictation
 import androidx.datastore.preferences.core.emptyPreferences
 import dev.jamius.iris.audio.AudioCaptureException
 import dev.jamius.iris.audio.AudioChunk
+import dev.jamius.iris.data.settings.Settings
 import dev.jamius.iris.data.settings.toSettings
 import dev.jamius.iris.stt.SpeechToTextProvider
 import dev.jamius.iris.stt.SttException
@@ -32,6 +33,7 @@ class DictationControllerTest {
     private val finals = mutableListOf<String>()
     private var audioReleased = false
     private var warmUps = 0
+    private var recordedRate = 0
 
     /** A 100 ms chunk every 100 ms until cancelled. */
     private val audio: Flow<ByteArray> = flow {
@@ -46,9 +48,14 @@ class DictationControllerTest {
     }
 
     /** Reports "chunk N" for each chunk, then returns [result] once the audio ends. */
-    private class FakeStt(private val result: suspend () -> String) : SpeechToTextProvider {
+    private class FakeStt(
+        private val rate: Int = 24_000,
+        private val result: suspend () -> String,
+    ) : SpeechToTextProvider {
         var calls = 0
         var model = ""
+
+        override fun sampleRate(model: String) = rate
 
         override suspend fun transcribe(
             audio: Flow<ByteArray>,
@@ -71,6 +78,7 @@ class DictationControllerTest {
         audio: Flow<ByteArray> = this@DictationControllerTest.audio,
         cleanupEnabled: Boolean = false,
         level: Float = 0f,
+        settings: Settings = emptyPreferences().toSettings(emptySet()).copy(cleanupEnabled = cleanupEnabled),
         onFinalTranscript: suspend (String) -> DictationState.Done = { text ->
             finals += text
             DictationState.Done(text)
@@ -78,9 +86,12 @@ class DictationControllerTest {
     ) = DictationController(
         scope = backgroundScope,
         // Virtual time is the clock: a chunk's read ends when it is emitted.
-        audio = audio.map { AudioChunk(it, currentTime, level) },
-        stt = stt,
-        settings = flowOf(emptyPreferences().toSettings(emptySet()).copy(cleanupEnabled = cleanupEnabled)),
+        audio = { rate ->
+            recordedRate = rate
+            audio.map { AudioChunk(it, currentTime, level) }
+        },
+        stt = { stt },
+        settings = flowOf(settings),
         warmUpCleanup = { warmUps++ },
         onFinalTranscript = onFinalTranscript,
         clock = { currentTime },
@@ -108,6 +119,25 @@ class DictationControllerTest {
 
         advanceTimeBy(DONE_DISPLAY_MS + 1)
         assertEquals(DictationState.Idle, controller.state.value)
+    }
+
+    @Test
+    fun sessionRecordsAtTheProvidersRateForTheActiveModel() = runTest {
+        val stt = FakeStt(rate = 16_000) { "Hi" }
+        val settings = emptyPreferences().toSettings(emptySet()).copy(
+            sttProviderId = Settings.STT_PROVIDER_VERCEL_GATEWAY,
+            gatewaySttModel = "google/gemini-3.5-transcribe-live"
+        )
+        val controller = controller(stt, settings = settings)
+
+        controller.start()
+        runCurrent()
+        controller.stop()
+        advanceTimeBy(101) // The chunk recorded during the stop ends the audio.
+
+        assertEquals(DictationState.Done("Hi"), controller.state.value)
+        assertEquals(16_000, recordedRate)
+        assertEquals("google/gemini-3.5-transcribe-live", stt.model)
     }
 
     @Test

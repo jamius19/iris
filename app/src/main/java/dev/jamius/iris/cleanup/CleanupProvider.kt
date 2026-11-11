@@ -24,9 +24,20 @@ interface CleanupProvider {
      */
     fun warmUp()
 
-    /** Chat models usable for [cleanup], sorted by id. Throws [CleanupException] on failures. */
-    suspend fun listModels(): List<CleanupModel>
+    /**
+     * The provider's model catalog (all model kinds, also used for speech-to-text), sorted by id; callers filter.
+     * Throws [CleanupException] on failures.
+     */
+    suspend fun listModels(): List<GatewayModel>
 }
 
-/** A catalog model. [reasoningEfforts]: the effort values the model lists; null if unknown. */
-data class CleanupModel(val id: String, val reasoningEfforts: List<String>?)
+/**
+ * A catalog model. [type]: its kind (e.g. `language`, `transcription`), null if not given; [tags]: e.g.
+ * `websocket-transcription`; [reasoningEfforts]: the effort values the model lists, null if unknown.
+ */
+data class GatewayModel(
+    val id: String,
+    val type: String?,
+    val tags: List<String>,
+    val reasoningEfforts: List<String>?,
+)

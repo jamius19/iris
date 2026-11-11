@@ -7,8 +7,8 @@ package dev.jamius.iris.cleanup.vercel
 
 import android.util.Log
 import dev.jamius.iris.cleanup.CleanupException
-import dev.jamius.iris.cleanup.CleanupModel
 import dev.jamius.iris.cleanup.CleanupProvider
+import dev.jamius.iris.cleanup.GatewayModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.channels.trySendBlocking
@@ -157,7 +157,7 @@ class VercelGatewayCleanup(
     }
 
     /** The catalog is public, so no key is sent (an invalid one would get a 401). */
-    override suspend fun listModels(): List<CleanupModel> {
+    override suspend fun listModels(): List<GatewayModel> {
         val request = Request.Builder().url(modelsUrl).build()
         val (code, body) = execute(request, networkError = ::modelsNetworkErrorMessage)
         if (code !in 200..299) throw CleanupException(httpErrorMessage(code, body))

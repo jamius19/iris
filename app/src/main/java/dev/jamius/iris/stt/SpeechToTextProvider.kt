@@ -13,10 +13,13 @@ class SttException(message: String) : Exception(message)
 /** Streaming speech-to-text. A new provider is just a new implementation. */
 interface SpeechToTextProvider {
 
+    /** The rate (Hz) [transcribe] takes [model]'s audio at. */
+    fun sampleRate(model: String): Int = 24_000
+
     /**
-     * Streams [audio] (PCM16 mono 24 kHz chunks) to the service and reports the whole live transcript through
-     * [onPartial] whenever it changes. Once [audio] completes, finalizes and returns the final transcript.
-     * Cancel the calling coroutine to abort and discard the session.
+     * Streams [audio] (PCM16 mono chunks at [sampleRate] of [model]) to the service and reports the whole live
+     * transcript through [onPartial] whenever it changes. Once [audio] completes, finalizes and returns the final
+     * transcript. Cancel the calling coroutine to abort and discard the session.
      *
      * Throws [SttException] on provider failures; exceptions from [audio] propagate unchanged.
      * [onPartial] runs in the caller's context.

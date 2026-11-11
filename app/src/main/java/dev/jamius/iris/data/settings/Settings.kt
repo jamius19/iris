@@ -18,7 +18,10 @@ enum class BubbleSide { LEFT, RIGHT }
 
 data class Settings(
     val sttProviderId: String,
+    /** The OpenAI (direct) model. */
     val sttModel: String,
+    /** The Vercel AI Gateway streaming transcription model. */
+    val gatewaySttModel: String,
     /** ISO-639-1 code; blank means auto-detect. */
     val sttLanguage: String,
     val cleanupEnabled: Boolean,
@@ -40,11 +43,22 @@ data class Settings(
     /** Panel's max width as a percent of the display width. */
     val panelWidthPercent: Int,
 ) {
+    /** Speech-to-text goes through Vercel AI Gateway (else OpenAI direct). */
+    val sttGateway: Boolean get() = sttProviderId == STT_PROVIDER_VERCEL_GATEWAY
+
+    /** The selected provider's model. */
+    val activeSttModel: String get() = if (sttGateway) gatewaySttModel else sttModel
+
+    /** The selected speech-to-text provider's API key is set. */
+    val sttKeySet: Boolean get() = if (sttGateway) gatewayKeySet else openAiKeySet
+
     companion object {
         const val STT_PROVIDER_OPENAI = "openai"
+        const val STT_PROVIDER_VERCEL_GATEWAY = "vercel-gateway"
         const val CLEANUP_PROVIDER_VERCEL_GATEWAY = "vercel-gateway"
 
         const val DEFAULT_STT_MODEL = "gpt-live-transcribe"
+        const val DEFAULT_GATEWAY_STT_MODEL = "openai/gpt-live-transcribe"
         const val DEFAULT_CLEANUP_MODEL = "openai/gpt-6-luna"
 
         const val DEFAULT_REASONING_EFFORT = "low"

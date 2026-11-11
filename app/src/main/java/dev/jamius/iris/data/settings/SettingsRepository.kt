@@ -26,8 +26,16 @@ class SettingsRepository(
         prefs.toSettings(secrets)
     }
 
+    suspend fun setSttProvider(id: String) {
+        dataStore.edit { it[Keys.STT_PROVIDER_ID] = id }
+    }
+
     suspend fun setSttModel(model: String) {
         dataStore.edit { it[Keys.STT_MODEL] = model.trim() }
+    }
+
+    suspend fun setGatewaySttModel(model: String) {
+        dataStore.edit { it[Keys.GATEWAY_STT_MODEL] = model.trim() }
     }
 
     suspend fun setSttLanguage(language: String) {
@@ -97,6 +105,7 @@ class SettingsRepository(
 internal object Keys {
     val STT_PROVIDER_ID = stringPreferencesKey("stt_provider_id")
     val STT_MODEL = stringPreferencesKey("stt_model")
+    val GATEWAY_STT_MODEL = stringPreferencesKey("gateway_stt_model")
     val STT_LANGUAGE = stringPreferencesKey("stt_language")
     val CLEANUP_ENABLED = booleanPreferencesKey("cleanup_enabled")
     val CLEANUP_PROVIDER_ID = stringPreferencesKey("cleanup_provider_id")
@@ -126,6 +135,7 @@ internal fun Preferences.toSettings(storedSecrets: Set<Secret>): Settings {
     return Settings(
         sttProviderId = this[Keys.STT_PROVIDER_ID] ?: Settings.STT_PROVIDER_OPENAI,
         sttModel = this[Keys.STT_MODEL] ?: Settings.DEFAULT_STT_MODEL,
+        gatewaySttModel = this[Keys.GATEWAY_STT_MODEL] ?: Settings.DEFAULT_GATEWAY_STT_MODEL,
         sttLanguage = this[Keys.STT_LANGUAGE] ?: "",
         cleanupEnabled = this[Keys.CLEANUP_ENABLED] ?: false,
         cleanupProviderId = this[Keys.CLEANUP_PROVIDER_ID] ?: Settings.CLEANUP_PROVIDER_VERCEL_GATEWAY,

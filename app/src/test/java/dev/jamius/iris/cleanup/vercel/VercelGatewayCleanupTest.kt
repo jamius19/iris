@@ -6,7 +6,7 @@
 package dev.jamius.iris.cleanup.vercel
 
 import dev.jamius.iris.cleanup.CleanupException
-import dev.jamius.iris.cleanup.CleanupModel
+import dev.jamius.iris.cleanup.GatewayModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
@@ -358,7 +358,7 @@ class VercelGatewayCleanupTest {
     }.toString()
 
     @Test(timeout = TEST_TIMEOUT_MS)
-    fun listModelsKeepsLanguageModelsSortedAndSendsNoKey() = runBlocking {
+    fun listModelsReturnsTheWholeCatalogSortedAndSendsNoKey() = runBlocking {
         respond(
             200,
             models(
@@ -370,9 +370,23 @@ class VercelGatewayCleanupTest {
             )
         )
 
-        val ids = cleanup().listModels().map { it.id }
+        val models = cleanup().listModels()
 
-        assertEquals(listOf("acme/untyped", "anthropic/claude-haiku", "openai/gpt-6-luna"), ids)
+        assertEquals(
+            listOf(
+                "acme/untyped",
+                "anthropic/claude-haiku",
+                "bfl/flux-pro-1.1",
+                "openai/gpt-6-luna",
+                "openai/text-embedding-3-small"
+            ),
+            models.map { it.id }
+        )
+        assertEquals(listOf(null, "language", "image", "language", "embedding"), models.map { it.type })
+        assertEquals(
+            listOf("acme/untyped", "anthropic/claude-haiku", "openai/gpt-6-luna"),
+            models.filter(::isChatModel).map { it.id }
+        )
         val request = server.takeRequest()
         assertEquals("GET", request.method)
         assertEquals("/v1/models", request.target)
@@ -404,16 +418,45 @@ class VercelGatewayCleanupTest {
         respond(200, body)
 
         val expected = listOf(
-            CleanupModel("a/luna", listOf("none", "low", "medium", "high", "xhigh", "max")),
-            CleanupModel("b/gemini", listOf("low", "high")),
-            CleanupModel("c/no-field", null),
-            CleanupModel("d/null", null),
-            CleanupModel("e/object", null),
-            CleanupModel("f/budget", null),
-            CleanupModel("g/values-string", null),
-            CleanupModel("h/values-empty", null),
+            "a/luna" to listOf("none", "low", "medium", "high", "xhigh", "max"),
+            "b/gemini" to listOf("low", "high"),
+            "c/no-field" to null,
+            "d/null" to null,
+            "e/object" to null,
+            "f/budget" to null,
+            "g/values-string" to null,
+            "h/values-empty" to null,
         )
-        assertEquals(expected, cleanup().listModels())
+        assertEquals(expected, cleanup().listModels().map { it.id to it.reasoningEfforts })
+    }
+
+    @Test(timeout = TEST_TIMEOUT_MS)
+    fun listModelsParsesTypeAndTags() = runBlocking {
+        respond(200, CATALOG)
+
+        assertEquals(
+            listOf(
+                GatewayModel("elevenlabs/scribe-v2", "transcription", emptyList(), null),
+                GatewayModel("openai/gpt-6-luna", "language", listOf("reasoning"), listOf("none", "low")),
+                GatewayModel("openai/gpt-live-transcribe", "transcription", listOf("websocket-transcription"), null),
+                GatewayModel(
+                    "openai/gpt-realtime-whisper",
+                    "transcription",
+                    listOf("websocket-realtime", "websocket-transcription"),
+                    null
+                ),
+                GatewayModel("openai/whisper-1", "transcription", listOf("open-weights"), null),
+                GatewayModel("x/odd-tags", "transcription", listOf("websocket-transcription"), null),
+            ),
+            cleanup().listModels()
+        )
+    }
+
+    @Test(timeout = TEST_TIMEOUT_MS)
+    fun chatModelFilterKeepsOnlyLanguageModels() = runBlocking {
+        respond(200, CATALOG)
+
+        assertEquals(listOf("openai/gpt-6-luna"), cleanup().listModels().filter(::isChatModel).map { it.id })
     }
 
     @Test(timeout = TEST_TIMEOUT_MS)
@@ -504,6 +547,18 @@ class VercelGatewayCleanupTest {
     private fun JsonObject.string(key: String) = this[key]!!.jsonPrimitive.content
 
     private companion object {
+        /** A trimmed `/v1/models` snapshot. */
+        const val CATALOG = """{"object":"list","data":[
+            {"id":"openai/gpt-6-luna","type":"language","tags":["reasoning"],
+             "reasoning_options":[{"type":"effort","values":["none","low"]}]},
+            {"id":"openai/whisper-1","type":"transcription","tags":["open-weights"]},
+            {"id":"openai/gpt-realtime-whisper","type":"transcription",
+             "tags":["websocket-realtime","websocket-transcription"]},
+            {"id":"openai/gpt-live-transcribe","type":"transcription","tags":["websocket-transcription"]},
+            {"id":"elevenlabs/scribe-v2","type":"transcription"},
+            {"id":"x/odd-tags","type":"transcription","tags":[1,"websocket-transcription",null]}
+        ]}"""
+
         const val TEST_TIMEOUT_MS = 15_000L
     }
 }

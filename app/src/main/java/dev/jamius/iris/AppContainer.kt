@@ -13,11 +13,13 @@ import dev.jamius.iris.cleanup.CleanupProvider
 import dev.jamius.iris.cleanup.vercel.VercelGatewayCleanup
 import dev.jamius.iris.data.settings.Secret
 import dev.jamius.iris.data.settings.SecretStore
+import dev.jamius.iris.data.settings.Settings
 import dev.jamius.iris.data.settings.SettingsRepository
 import dev.jamius.iris.dictation.DictationController
 import dev.jamius.iris.dictation.DictationState
 import dev.jamius.iris.stt.SpeechToTextProvider
 import dev.jamius.iris.stt.openai.OpenAiRealtimeSpeechToText
+import dev.jamius.iris.stt.vercel.VercelGatewaySpeechToText
 import kotlinx.coroutines.CoroutineScope
 import okhttp3.OkHttpClient
 
@@ -38,10 +40,19 @@ class AppContainer(context: Context) {
 
     private val audioRecorder = AudioRecorder(context)
 
-    val speechToText: SpeechToTextProvider = OpenAiRealtimeSpeechToText(
+    private val openAiStt = OpenAiRealtimeSpeechToText(
         httpClient,
         apiKey = { secretStore.get(Secret.OPENAI_API_KEY) }
     )
+
+    // Shares the API key with cleanup.
+    private val gatewayStt = VercelGatewaySpeechToText(
+        httpClient,
+        apiKey = { secretStore.get(Secret.GATEWAY_API_KEY) }
+    )
+
+    /** The speech-to-text provider [settings] select. */
+    fun speechToText(settings: Settings): SpeechToTextProvider = if (settings.sttGateway) gatewayStt else openAiStt
 
     val cleanup: CleanupProvider = VercelGatewayCleanup(
         httpClient,
@@ -54,8 +65,8 @@ class AppContainer(context: Context) {
         onFinalTranscript: suspend (transcript: String) -> DictationState.Done,
     ) = DictationController(
         scope = scope,
-        audio = audioRecorder.chunks(),
-        stt = speechToText,
+        audio = audioRecorder::chunks,
+        stt = ::speechToText,
         settings = settingsRepository.settings,
         warmUpCleanup = cleanup::warmUp,
         onFinalTranscript = onFinalTranscript,

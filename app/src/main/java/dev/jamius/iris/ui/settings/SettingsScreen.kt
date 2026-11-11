@@ -98,22 +98,27 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import dev.jamius.iris.R
 import dev.jamius.iris.cleanup.CleanupException
-import dev.jamius.iris.cleanup.CleanupModel
 import dev.jamius.iris.cleanup.CleanupProvider
+import dev.jamius.iris.cleanup.GatewayModel
+import dev.jamius.iris.cleanup.vercel.isChatModel
 import dev.jamius.iris.data.settings.CleanupPrompt
 import dev.jamius.iris.data.settings.Secret
 import dev.jamius.iris.data.settings.Settings
 import dev.jamius.iris.data.settings.SettingsRepository
 import dev.jamius.iris.overlay.IrisAccessibilityService
+import dev.jamius.iris.stt.vercel.isStreamingTranscriptionModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -126,11 +131,13 @@ fun SettingsScreen(repository: SettingsRepository, cleanup: CleanupProvider, mod
     val settings = repository.settings.collectAsState(initial = null).value
     val scope = rememberCoroutineScope()
     var editingPrompt by remember { mutableStateOf<CleanupPrompt?>(null) }
-    // The Gateway's model catalog, shared by the model field and the reasoning level; kept in memory only.
-    var models by remember { mutableStateOf<List<CleanupModel>?>(null) }
+    // The Gateway's model catalog, shared by the cleanup and transcription model fields and the reasoning level;
+    // kept in memory only.
+    var models by remember { mutableStateOf<List<GatewayModel>?>(null) }
     var modelsLoading by remember { mutableStateOf(false) }
     var modelsError by remember { mutableStateOf<String?>(null) }
-    val modelIds = remember(models) { models?.map { it.id } }
+    val chatModelIds = remember(models) { models?.filter(::isChatModel)?.map { it.id } }
+    val sttModelIds = remember(models) { models?.filter(::isStreamingTranscriptionModel)?.map { it.id } }
 
     fun loadModels() {
         if (modelsLoading) return
@@ -147,10 +154,12 @@ fun SettingsScreen(repository: SettingsRepository, cleanup: CleanupProvider, mod
         }
     }
 
-    // Loads the catalog when the screen opens with cleanup on, and when cleanup is turned on before it has loaded.
+    // Loads the catalog when the screen opens with cleanup or Gateway transcription on, and when either is turned
+    // on before it has loaded.
     val cleanupEnabled = settings?.cleanupEnabled == true
-    LaunchedEffect(cleanupEnabled) {
-        if (cleanupEnabled && models == null) loadModels()
+    val sttGateway = settings?.sttGateway == true
+    LaunchedEffect(cleanupEnabled, sttGateway) {
+        if ((cleanupEnabled || sttGateway) && models == null) loadModels()
     }
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val screenColor = MaterialTheme.colorScheme.surfaceContainer
@@ -209,20 +218,43 @@ fun SettingsScreen(repository: SettingsRepository, cleanup: CleanupProvider, mod
             }
 
             Section("Transcription") {
-                LabeledRow(
-                    icon = R.drawable.ic_mic,
-                    title = "OpenAI Realtime",
-                    subtitle = "Speech-to-text provider",
-                    badge = false,
-                    modifier = Modifier.padding(16.dp)
-                )
+                Column(modifier = Modifier.padding(vertical = 8.dp)) {
+                    ProviderRow(
+                        title = "OpenAI (direct)",
+                        subtitle = "Uses the OpenAI API key",
+                        selected = !settings.sttGateway,
+                        keyMissing = !settings.openAiKeySet,
+                        onSelect = { scope.launch { repository.setSttProvider(Settings.STT_PROVIDER_OPENAI) } }
+                    )
+                    ProviderRow(
+                        title = "Vercel AI Gateway",
+                        subtitle = "Uses the AI Gateway API key (shared with cleanup)",
+                        selected = settings.sttGateway,
+                        keyMissing = !settings.gatewayKeySet,
+                        onSelect = {
+                            scope.launch { repository.setSttProvider(Settings.STT_PROVIDER_VERCEL_GATEWAY) }
+                        }
+                    )
+                }
                 CardDivider()
                 FieldsColumn {
-                    SavableTextField(
-                        label = "Model",
-                        value = settings.sttModel,
-                        onSave = { scope.launch { repository.setSttModel(it) } }
-                    )
+                    if (settings.sttGateway) {
+                        GatewayModelField(
+                            value = settings.gatewaySttModel,
+                            models = sttModelIds,
+                            loading = modelsLoading,
+                            error = modelsError,
+                            supportingText = "Streaming transcription models",
+                            onLoad = ::loadModels,
+                            onSave = { scope.launch { repository.setGatewaySttModel(it) } }
+                        )
+                    } else {
+                        SavableTextField(
+                            label = "Model",
+                            value = settings.sttModel,
+                            onSave = { scope.launch { repository.setSttModel(it) } }
+                        )
+                    }
                     SavableTextField(
                         label = "Language code (optional, e.g. en)",
                         value = settings.sttLanguage,
@@ -258,11 +290,12 @@ fun SettingsScreen(repository: SettingsRepository, cleanup: CleanupProvider, mod
                 }
                 CardDivider()
                 FieldsColumn(modifier = Modifier.alpha(cleanupAlpha)) {
-                    CleanupModelField(
+                    GatewayModelField(
                         value = settings.cleanupModel,
-                        models = modelIds,
+                        models = chatModelIds,
                         loading = modelsLoading,
                         error = modelsError,
+                        supportingText = "Model must support structured output",
                         onLoad = ::loadModels,
                         onSave = { scope.launch { repository.setCleanupModel(it) } }
                     )
@@ -455,30 +488,16 @@ private fun IconBadge(@DrawableRes icon: Int) {
     }
 }
 
-/**
- * Icon with a title and a secondary line. [badge] puts the icon on the tinted circle used by interactive rows;
- * without it the icon is plain (same 40 dp column) so a static label doesn't look tappable.
- */
+/** Icon (on the tinted circle used by interactive rows) with a title and a secondary line. */
 @Composable
 private fun LabeledRow(
     @DrawableRes icon: Int,
     title: String,
     subtitle: String,
     modifier: Modifier = Modifier,
-    badge: Boolean = true,
 ) {
     Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
-        if (badge) {
-            IconBadge(icon)
-        } else {
-            Box(modifier = Modifier.size(40.dp), contentAlignment = Alignment.Center) {
-                Icon(
-                    painterResource(icon),
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
+        IconBadge(icon)
         Spacer(Modifier.width(16.dp))
         Column {
             Text(title, style = MaterialTheme.typography.bodyLarge)
@@ -660,17 +679,18 @@ private fun SavableTextField(
 }
 
 /**
- * Cleanup model combobox: type any model id, or pick one from the Gateway's list (filtered by what was typed).
+ * Gateway model combobox: type any model id, or pick one from the Gateway's list (filtered by what was typed).
  * The list ([models], [loading], [error]) is passed in; [onLoad] fetches it, on first open if not loaded yet or on
  * refresh. Saves like [SavableTextField].
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun CleanupModelField(
+private fun GatewayModelField(
     value: String,
     models: List<String>?,
     loading: Boolean,
     error: String?,
+    supportingText: String,
     onLoad: () -> Unit,
     onSave: (String) -> Unit,
 ) {
@@ -736,7 +756,7 @@ private fun CleanupModelField(
                 label = { Text("Model") },
                 supportingText = {
                     Column {
-                        Text("Model must support structured output")
+                        Text(supportingText)
                         error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                     }
                 },
@@ -887,6 +907,39 @@ private fun Modifier.bringIntoViewAboveIme(contentKey: Any? = null): Modifier {
 }
 
 private const val IME_SETTLE_MS = 100L
+
+/** A speech-to-text provider choice; if selected, it flags its key as not set when [keyMissing]. */
+@Composable
+private fun ProviderRow(
+    title: String,
+    subtitle: String,
+    selected: Boolean,
+    keyMissing: Boolean,
+    onSelect: () -> Unit,
+) {
+    val errorColor = MaterialTheme.colorScheme.error
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onSelect)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        RadioButton(selected = selected, onClick = null)
+        Spacer(Modifier.width(16.dp))
+        Column {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                buildAnnotatedString {
+                    append(subtitle)
+                    if (selected && keyMissing) withStyle(SpanStyle(color = errorColor)) { append(" · not set") }
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
 
 @Composable
 private fun PromptRow(
