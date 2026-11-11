@@ -51,7 +51,7 @@ sealed interface DictationState {
 }
 
 internal const val DONE_DISPLAY_MS = 1_500L
-internal const val ERROR_DISPLAY_MS = 3_000L
+internal const val ERROR_DISPLAY_MS = 2 * DONE_DISPLAY_MS
 
 /** After stop, taps are ignored this long while the transcript isn't final (e.g. a double tap on stop). */
 internal const val FINALIZE_TAP_GRACE_MS = 5_000L

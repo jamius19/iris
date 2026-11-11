@@ -9,6 +9,8 @@
     <color name="white">#FFFFFFFF</color>
     <color name="bubble_idle">#FF6650A4</color>
     <color name="bubble_listening">#FFD32F2F</color>
+    <color name="bubble_success">#FF2E7D32</color>
+    <color name="bubble_failure">#FFD32F2F</color>
     <color name="panel_background">#E6212121</color>
     <color name="panel_text">#FFFFFFFF</color>
 </resources>

@@ -33,7 +33,7 @@ import kotlin.math.roundToInt
  * The bubble and live-text panel, drawn as two `TYPE_ACCESSIBILITY_OVERLAY` windows. Must be created with an
  * AccessibilityService context and used on the main thread.
  *
- * The overlay owns no dictation logic: [onTap] reports taps, the owner drives [setListening] and
+ * The overlay owns no dictation logic: [onTap] reports taps, the owner drives [setStatus] and
  * [showText]/[hideText]. [onMoved] reports where the user dropped the bubble, for persisting.
  */
 class BubbleOverlay(
@@ -97,7 +97,7 @@ class BubbleOverlay(
         }
     }
 
-    /** Hides the bubble and the panel. Listening state is left to the owner. */
+    /** Hides the bubble and the panel. The status is left to the owner. */
     fun hide() {
         snapAnimator?.end()
         hideText()
@@ -106,8 +106,8 @@ class BubbleOverlay(
         bubbleShown = false
     }
 
-    fun setListening(listening: Boolean) {
-        bubble.listening = listening
+    fun setStatus(status: BubbleStatus) {
+        bubble.status = status
     }
 
     /**

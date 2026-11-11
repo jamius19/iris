@@ -51,10 +51,7 @@ class IrisAccessibilityService : AccessibilityService() {
     /** [focusedEditable] when the user tapped stop: the field the dictation is inserted into. */
     private var target: AccessibilityNodeInfo? = null
 
-    /** The final hook is running cleanup: for Finalizing, [render] shows [cleanupText] (or "Cleaning up…"). */
-    private var cleaningUp = false
-
-    /** The cleaned text streamed so far while [cleaningUp]. */
+    /** The cleaned text streamed so far while the final hook runs cleanup: [render] shows it for Finalizing. */
     private var cleanupText: String? = null
 
     /** Shows the latest [cleanupText] once a throttle window that skipped a partial ends. */
@@ -157,15 +154,26 @@ class IrisAccessibilityService : AccessibilityService() {
 
     private fun render(state: DictationState) {
         val overlay = overlay ?: return
-        // Finalizing stops the pulse while keeping the text, so it reads as "working on it".
-        overlay.setListening(state is DictationState.Listening)
+        // Done with a notice (cleanup failed, or only copied to the clipboard) counts as a failure.
+        overlay.setStatus(
+            when (state) {
+                DictationState.Idle -> BubbleStatus.IDLE
+                is DictationState.Listening -> BubbleStatus.LISTENING
+                is DictationState.Finalizing -> BubbleStatus.WORKING
+                is DictationState.Done -> if (state.notice == null) BubbleStatus.SUCCESS else BubbleStatus.FAILURE
+                is DictationState.Error -> BubbleStatus.FAILURE
+            }
+        )
         when (state) {
             DictationState.Idle -> overlay.hideText()
             is DictationState.Listening -> overlay.showText(state.text.ifEmpty { "Listening…" })
-            is DictationState.Finalizing -> overlay.showText(
-                if (cleaningUp) cleanupText ?: "Cleaning up…" else state.text.ifEmpty { "Finishing…" }
-            )
-            is DictationState.Done -> overlay.showText(state.notice ?: state.text, tail = false)
+            is DictationState.Finalizing -> overlay.showText(cleanupText ?: state.text.ifEmpty { "Finishing…" })
+            // Inserted: the tick says it all. A notice explains the failure.
+            is DictationState.Done -> if (state.notice == null) {
+                overlay.hideText()
+            } else {
+                overlay.showText(state.notice, tail = false)
+            }
             is DictationState.Error -> overlay.showText(state.message, tail = false)
         }
     }
@@ -187,9 +195,6 @@ class IrisAccessibilityService : AccessibilityService() {
             val container = (application as IrisApp).container
             val settings = container.settingsRepository.settings.first()
             if (settings.cleanupEnabled && !skipCleanup) {
-                // State stays Finalizing (nothing re-renders on its own) until this returns, so the status stays up.
-                cleaningUp = true
-                dictation?.let { render(it.state.value) }
                 val prompt = settings.activePrompt ?: Settings.DEFAULT_PROMPT
                 val cleanupStart = SystemClock.elapsedRealtime()
                 var renderedAt = 0L
@@ -214,7 +219,6 @@ class IrisAccessibilityService : AccessibilityService() {
                     Log.e(TAG, "Cleanup failed", e)
                     cleanupError = "Cleanup failed"
                 } finally {
-                    cleaningUp = false
                     cleanupText = null
                     handler.removeCallbacks(renderCleanupText)
                     cleanupMs = SystemClock.elapsedRealtime() - cleanupStart

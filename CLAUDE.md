@@ -36,11 +36,15 @@ Overlay (`overlay`, View-based, not Compose: a Compose window in a service needs
   (TYPE_INPUT_METHOD). Window-change events from Iris's own overlay windows are skipped (`ownsWindow`). The
   overlay is created only once the stored bubble position has loaded.
 - `BubbleOverlay` owns two `TYPE_ACCESSIBILITY_OVERLAY` windows (bubble + live-text panel), positioned in display
-  coordinates. API: `onTap`/`onMoved(side, yFraction)` callbacks, `show()`, `hide()`, `setListening(Boolean)`,
+  coordinates. API: `onTap`/`onMoved(side, yFraction)` callbacks, `show()`, `hide()`, `setStatus(BubbleStatus)`,
   `showText(String, tail = true)`, `hideText()`, `setPosition(side, yFraction)`, `setImeTop(Int?)`,
   `onConfigurationChanged()`, `ownsWindow(windowId)`. `addView` failures (`BadTokenException` during teardown)
   are logged and the view stays unadded. The service renders `DictationState` onto it (`render()`, also after
-  each `show()` so a re-shown bubble restores the panel); the bubble pulses only while Listening.
+  each `show()` so a re-shown bubble restores the panel). `BubbleStatus` per state: Idle = mic; Listening = red +
+  pulse ring; Finalizing (incl. cleanup + insertion) = WORKING, a spinning arc in place of the mic, panel keeps the
+  transcript (or the streamed cleanup text, below); Done without notice = SUCCESS, green tick, panel hidden
+  (1.5 s); Done with notice or Error = FAILURE, red exclamation mark, panel shows the notice/message (3 s,
+  `ERROR_DISPLAY_MS = 2 * DONE_DISPLAY_MS`).
 - Bubble position persists as `Settings.bubbleSide` + `bubbleYFraction` (fraction of usable height, so it
   survives rotation). Placement math is in `BubbleGeometry.kt` (unit tested).
 - `BubbleView`: 40 dp circle (`circlePx`) inside a 52 dp view (`sizePx`, the touch target; 6 dp each side for the
@@ -84,16 +88,16 @@ Dictation (CP3):
   and calls the hook again with `skipCleanup = true`, which inserts the raw transcript. Later taps are ignored.
 
 Cleanup + insertion (CP4):
-- Cleanup runs only if `cleanupEnabled`, with the active prompt and `cleanupModel`; the panel shows
-  "Cleaning up…" (`render()` shows it for Finalizing while the service's `cleaningUp` flag is set; the hook
-  re-renders when setting it, since the state doesn't change). It streams: `CleanupProvider.cleanup(..., onPartial)`
-  passes the cleaned text so far (non-blank, only when it changed, caller's context = main); the service keeps it
-  in `cleanupText`, which `render()` shows (live, `tail = true`) instead of "Cleaning up…", re-rendering at most
-  every `PARTIAL_RENDER_MS` (50 ms; a skipped partial gets one trailing `handler.postDelayed` render at the end of
-  the window, removed when cleanup ends or the service is destroyed). `CleanupProvider.cleanup`
-  throws `CleanupException` (user-readable). Any cleanup failure (incl. missing Gateway key) inserts the raw
-  transcript; Done's notice is the error plus "Inserted the original text" (or "Original copied to clipboard"),
-  so dictation is never lost. Other unexpected cleanup exceptions are logged and treated the same.
+- Cleanup runs only if `cleanupEnabled`, with the active prompt and `cleanupModel`; no separate status text: the
+  bubble spins (Finalizing) until insertion is done. It streams: `CleanupProvider.cleanup(..., onPartial)` passes
+  the cleaned text so far (non-blank, only when it changed, caller's context = main); the service keeps it in
+  `cleanupText` (null outside cleanup), which `render()` shows for Finalizing (live, `tail = true`) instead of the
+  transcript, re-rendering at most every `PARTIAL_RENDER_MS` (50 ms; a skipped partial gets one trailing
+  `handler.postDelayed` render at the end of the window, removed when cleanup ends or the service is destroyed).
+  `CleanupProvider.cleanup` throws `CleanupException` (user-readable). Any cleanup failure (incl. missing Gateway
+  key) inserts the raw transcript; Done's notice is the error plus "Inserted the original text" (or "Original
+  copied to clipboard"), so dictation is never lost. Other unexpected cleanup exceptions are logged and treated the
+  same.
 - Target: the service snapshots `focusedEditable` when the user taps stop. At insertion, if it still equals
   `focusedEditable` (`AccessibilityNodeInfo.equals`) the text is inserted there; else it is copied to the
   clipboard ("Copied to clipboard — field changed"; the bubble may already be hidden). Any other hook failure
