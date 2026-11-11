@@ -77,8 +77,10 @@ Overlay (`overlay`, View-based, not Compose: a Compose window in a service needs
   dominates. A morph never draws the same status twice (a VectorDrawable drawn twice in one frame uses its last
   alpha for both: the icon vanished). Pill slide out and back 300 ms symmetric ease-in-out (0.65, 0, 0.35, 1);
   panel in 250 ms emphasized decelerate (0.05, 0.7, 0.1, 1) / out 200 ms emphasized accelerate (0.3, 0, 0.8, 0.15)
-  (alpha + scale 0.92, pivot on the button side and the panel's growth edge; alpha/scale are reset in `show()`, not
-  after the async `removeView`, which would draw one more full-opacity frame); snap 150 ms. Waveform: 6 horizontal bars (3 dp round caps, max 22 dp, dots at
+  (alpha + scale 0.92, pivot on the button side and the panel's growth edge; alpha/scale are reset in `show()`);
+  snap 150 ms. Both windows are removed with `removeViewImmediate`: on Android 13-16 the async `removeView` frees the
+  hardware renderer before the already scheduled frame, which then draws in software without alpha/scale/shadows (the
+  faded-out panel flashed once at full opacity). Waveform: 6 horizontal bars (4.5 dp round caps, max 23.5 dp, dots at
   rest), level smoothed per frame (attack 40 ms, release 200 ms) with a small per-bar wobble; after stop the bars
   shrink to dots as the pill retracts. Animations run only while attached; `hide()` ends only running animators
   (`end()` on a finished one replays it). The overlay keeps the desired panel state (`panelWanted`) while hidden,

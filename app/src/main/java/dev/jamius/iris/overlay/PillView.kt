@@ -146,8 +146,8 @@ internal class PillView(context: Context) : View(context) {
         const val PILL_WIDTH_DP = 40f
         const val PILL_HEIGHT_DP = 96f
         const val GAP_DP = 6f
-        const val BAR_STROKE_DP = 3f
-        const val BAR_MAX_DP = 22f
+        const val BAR_STROKE_DP = 4.5f
+        const val BAR_MAX_DP = 23.5f
         const val BAR_PADDING_DP = 18f
         const val ATTACK_MS = 40f
         const val RELEASE_MS = 200f

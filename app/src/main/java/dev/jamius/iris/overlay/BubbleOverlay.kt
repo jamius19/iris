@@ -138,7 +138,7 @@ class BubbleOverlay(
         }
         if (bubbleShown && panelWanted) {
             placePanel()
-            // Reset here, not on removal: a change after the async removeView() would draw one more frame.
+            // Reset here: the panel may have been removed mid-exit, with the animation's alpha/scale.
             panel.alpha = 1f
             panel.scaleX = 1f
             panel.scaleY = 1f
@@ -153,7 +153,7 @@ class BubbleOverlay(
         panelAnimator?.cancel()
         removePanel()
         if (!bubbleShown) return
-        windowManager.removeView(stack)
+        windowManager.removeViewImmediate(stack) // See removePanel().
         bubbleShown = false
     }
 
@@ -250,7 +250,10 @@ class BubbleOverlay(
     private fun removePanel() {
         panelExiting = false
         if (!panelShown) return
-        windowManager.removeView(panel)
+        // Not removeView(): on Android 13-16 it frees the hardware renderer before the frame already scheduled, which
+        // then draws in software, ignoring alpha/scale/shadows (the faded panel flashed at full opacity). Safe here:
+        // only called from animator callbacks and hide(), never during the window's own layout or draw.
+        windowManager.removeViewImmediate(panel)
         panelShown = false
     }
 
