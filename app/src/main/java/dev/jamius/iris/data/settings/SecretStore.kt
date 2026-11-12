@@ -26,6 +26,7 @@ import javax.crypto.spec.GCMParameterSpec
 enum class Secret(val prefKey: Preferences.Key<String>) {
     OPENAI_API_KEY(stringPreferencesKey("openai_api_key")),
     GATEWAY_API_KEY(stringPreferencesKey("gateway_api_key")),
+    DEEPGRAM_API_KEY(stringPreferencesKey("deepgram_api_key")),
 }
 
 /**

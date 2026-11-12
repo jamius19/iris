@@ -6,6 +6,7 @@
 package dev.jamius.iris.stt.openai
 
 import android.util.Log
+import dev.jamius.iris.stt.SentBody
 import dev.jamius.iris.stt.SpeechToTextProvider
 import dev.jamius.iris.stt.SttException
 import dev.jamius.iris.stt.WAV_HEADER_BYTES
@@ -21,15 +22,12 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import okhttp3.Call
 import okhttp3.Callback
-import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
-import okio.BufferedSink
 import java.io.IOException
 import java.io.InterruptedIOException
 import java.util.concurrent.TimeUnit.MILLISECONDS
@@ -114,23 +112,6 @@ class OpenAiFileTranscription(
                 response.use { Log.d(TAG, "Warm-up: ${it.protocol} ${it.code}") }
             }
         })
-    }
-
-    /** [delegate], recording when it has been written in full: a timeout after that is the server's. */
-    private class SentBody(private val delegate: RequestBody) : RequestBody() {
-        @Volatile
-        var sent = false
-            private set
-
-        override fun contentType(): MediaType? = delegate.contentType()
-
-        override fun contentLength(): Long = delegate.contentLength()
-
-        override fun writeTo(sink: BufferedSink) {
-            sent = false
-            delegate.writeTo(sink)
-            sent = true
-        }
     }
 
     private companion object {

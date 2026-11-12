@@ -42,6 +42,14 @@ class SettingsRepository(
         }
     }
 
+    suspend fun setDeepgramSttModel(model: String) {
+        dataStore.edit { it[Keys.DEEPGRAM_STT_MODEL] = model.trim() }
+    }
+
+    suspend fun setDeepgramUpload(enabled: Boolean) {
+        dataStore.edit { it[Keys.DEEPGRAM_UPLOAD] = enabled }
+    }
+
     suspend fun setSttLanguage(language: String) {
         dataStore.edit { it[Keys.STT_LANGUAGE] = language.trim() }
     }
@@ -127,6 +135,8 @@ internal object Keys {
     val STT_MODEL = stringPreferencesKey("stt_model")
     val GATEWAY_STT_MODEL = stringPreferencesKey("gateway_stt_model")
     val GATEWAY_STT_LIVE = booleanPreferencesKey("gateway_stt_live")
+    val DEEPGRAM_STT_MODEL = stringPreferencesKey("deepgram_stt_model")
+    val DEEPGRAM_UPLOAD = booleanPreferencesKey("deepgram_upload")
     val STT_LANGUAGE = stringPreferencesKey("stt_language")
     val STT_TIMEOUT_SECONDS = intPreferencesKey("stt_timeout_seconds")
     val VAD_ENABLED = booleanPreferencesKey("vad_enabled")
@@ -162,6 +172,8 @@ internal fun Preferences.toSettings(storedSecrets: Set<Secret>): Settings {
         sttModel = this[Keys.STT_MODEL] ?: Settings.DEFAULT_STT_MODEL,
         gatewaySttModel = this[Keys.GATEWAY_STT_MODEL] ?: Settings.DEFAULT_GATEWAY_STT_MODEL,
         gatewaySttLive = this[Keys.GATEWAY_STT_LIVE] ?: true,
+        deepgramSttModel = this[Keys.DEEPGRAM_STT_MODEL] ?: Settings.DEFAULT_DEEPGRAM_STT_MODEL,
+        deepgramUpload = this[Keys.DEEPGRAM_UPLOAD] ?: false,
         sttLanguage = this[Keys.STT_LANGUAGE] ?: "",
         sttTimeoutSeconds = this[Keys.STT_TIMEOUT_SECONDS] ?: Settings.DEFAULT_STT_TIMEOUT_SECONDS,
         vadEnabled = this[Keys.VAD_ENABLED] ?: true,
@@ -179,6 +191,7 @@ internal fun Preferences.toSettings(storedSecrets: Set<Secret>): Settings {
         activePrompt = prompts.firstOrNull { it.id == activePromptId } ?: prompts.firstOrNull(),
         openAiKeySet = Secret.OPENAI_API_KEY in storedSecrets,
         gatewayKeySet = Secret.GATEWAY_API_KEY in storedSecrets,
+        deepgramKeySet = Secret.DEEPGRAM_API_KEY in storedSecrets,
         bubbleSide = this[Keys.BUBBLE_SIDE]?.let(BubbleSide::valueOf) ?: Settings.DEFAULT_BUBBLE_SIDE,
         bubbleYFraction = this[Keys.BUBBLE_Y_FRACTION] ?: Settings.DEFAULT_BUBBLE_Y_FRACTION,
         panelLines = this[Keys.PANEL_LINES] ?: Settings.DEFAULT_PANEL_LINES,

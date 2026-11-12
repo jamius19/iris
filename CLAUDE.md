@@ -7,7 +7,7 @@ keyboard/screen bottom), which becomes ✕ (cancel). The partial transcript stre
 (left of it if the bubble is on the right edge, right of it if on the left edge). Tap the pill to stop. The
 transcript is finalized, optionally cleaned up by an LLM (toggle in settings), then inserted at the cursor of the
 focused field. Models that can't stream are "after stop" ones: the recording is uploaded after the pill tap, with no
-live text (pill + waveform while recording, spinner after stop); the mode follows the model.
+live text (pill + waveform while recording, spinner after stop); the mode follows the model (Deepgram: a setting).
 Cloud APIs only for transcription and cleanup. On-device transcription is future scope: don't build for it, but keep
 the provider interfaces so a new provider is just a new implementation. The one on-device model is Silero VAD
 ("Skip silence"): it only decides which audio is sent, to cut STT cost.
@@ -40,7 +40,7 @@ the provider interfaces so a new provider is just a new implementation. The one 
 | `data.settings` | Settings model, `SettingsRepository` (DataStore), `SecretStore` (Keystore crypto) |
 | `ui.settings` | Settings screen (Compose) |
 | `audio` | PCM16 mono recorder (rate per session); `SileroVad` (ORT wrapper), `SpeechGate` (pure VAD gate); `timeStretched` (Sonic speed-up) |
-| `stt` | `SpeechToTextProvider`; `stt.openai` / `stt.vercel` streaming + upload providers; `Wav.kt` (upload helpers) |
+| `stt` | `SpeechToTextProvider`; `stt.openai` / `stt.vercel` / `stt.deepgram` streaming + upload providers; `Wav.kt` (upload helpers) |
 | `cleanup` | `CleanupProvider` interface; `cleanup.vercel` gateway implementation |
 | `dictation` | Session state machine/controller: audio -> STT -> cleanup -> insertion |
 | `overlay` | AccessibilityService, bubble overlay view, live-text panel |
@@ -167,8 +167,8 @@ Dictation (CP3):
   Listening, else `start()` (so the spinner ignores taps), and the pill to `stop()`. A tap that acts (start, stop,
   cancel; decided from the state at tap time) gets a haptic (`haptic()`: `EFFECT_HEAVY_CLICK`, touch usage, so the
   touch-haptics setting applies; needs `VIBRATE`); ignored taps, drags and focus-loss cancels don't. Finalizing
-  can't be cancelled by a tap: stalls end via the STT timeout `T` = `sttTimeoutSeconds` (OpenAI: 60 s drain, then
-  `T`; Gateway: 60 s drain, `T` stall, one reconnect within its budget, then `T` stall again) / cleanup
+  can't be cancelled by a tap: stalls end via the STT timeout `T` = `sttTimeoutSeconds` (OpenAI and Deepgram: 60 s
+  drain, then `T`; Gateway: 60 s drain, `T` stall, one reconnect within its budget, then `T` stall again) / cleanup
   `cleanupTimeoutSeconds`.
   `level: StateFlow<Float>`: the latest chunk's `level` while Listening (set in `transformWhile`), 0 otherwise; the
   service pushes it to the pill. Stop records the stop time (`clock`); the audio flow (`transformWhile`) keeps
@@ -217,10 +217,12 @@ VAD ("Skip silence", CP7):
   service bills a session that received no audio (only `session.update` / the start frame).
 - Keep-alive (streaming providers only, `stt.streams`): in `transformWhile`, when the gate has sent nothing for
   5 s (`readAtNanos` of the last emitted chunk, starting at the first chunk), one chunk-sized `ByteArray` of zeros
-  is emitted and the timer resets, since servers may end a stream that gets no audio (e.g. Deepgram after 10 s;
-  the Gateway upstreams' limits are undocumented); pings only keep the TCP/NAT path. ~1 % of the withheld
-  silence. Zeros don't count in `sentBytes`: a session with no speech still ends with "No speech detected" and no
-  commit / `audio-done` (if it ran >= 5 s, the socket got only keep-alive zeros). Upload providers get none.
+  is emitted and the timer resets, since servers may end a stream that gets no audio (e.g. Deepgram after 10 s:
+  `1011 NET-0001`, which its KeepAlive message doesn't reset, and `NET-0002 no_audio_timeout`; the zeros are real
+  audio, so they satisfy both, and are billed; the Gateway upstreams' limits are undocumented); pings only keep the
+  TCP/NAT path. ~1 % of the withheld silence. Zeros don't count in `sentBytes`: a session with no speech still
+  ends with "No speech detected" and no commit / `audio-done` (if it ran >= 5 s, the socket got only keep-alive
+  zeros). Upload providers get none.
 - Setting `Settings.vadEnabled` (`vad_enabled`, default on): Settings > Transcription > "Skip silence" switch
   (`ic_mic`), subtitle "Detects speech on-device and sends only that, to cut cost".
 
@@ -280,13 +282,14 @@ Cleanup + insertion (CP4):
   No/stale node or paste fails: text left on the clipboard, notice "Copied to clipboard".
 
 Providers (settings store a provider id for each):
-- STT provider: `Settings.sttProviderId` (`stt_provider_id`): `openai` (default) = OpenAI (direct), or
-  `vercel-gateway` = Vercel AI Gateway. Each has its own model setting (`sttModel`, `gatewaySttModel`, default
-  `openai/gpt-live-transcribe`); `activeSttModel` / `sttKeySet` follow the selection; the language setting is
-  shared. `AppContainer` builds four providers; `speechToText(settings)` picks one by mode: Gateway ->
-  `gatewaySttLive` ? streaming : upload; OpenAI -> `isRealtimeTranscriptionModel(sttModel)` ? realtime : upload.
-  The service's warm-up cache follows the selection.
-- WebSocket pings: both streaming providers connect on `httpClient.newBuilder().pingInterval(30, SECONDS)`, so long
+- STT provider: `Settings.sttProviderId` (`stt_provider_id`): `openai` (default) = OpenAI (direct),
+  `vercel-gateway` = Vercel AI Gateway, or `deepgram` = Deepgram (direct); an unknown id means OpenAI. Each has its
+  own model setting (`sttModel`, `gatewaySttModel`, default `openai/gpt-live-transcribe`, `deepgramSttModel`,
+  default `nova-3`) and key; `activeSttModel` / `sttKeySet` follow the selection; the language setting is
+  shared. `AppContainer` builds six providers; `speechToText(settings)` picks one by mode: Deepgram ->
+  `deepgramUpload` ? upload : streaming; Gateway -> `gatewaySttLive` ? streaming : upload; OpenAI ->
+  `isRealtimeTranscriptionModel(sttModel)` ? realtime : upload. The service's warm-up cache follows the selection.
+- WebSocket pings: all three streaming providers connect on `httpClient.newBuilder().pingInterval(30, SECONDS)`, so long
   pauses VAD doesn't send don't let a mobile NAT drop the idle socket; a pong must arrive within the interval (OkHttp
   fails the socket when the previous ping is unanswered at the next one), like any other failure (Gateway: its one
   reconnect; OpenAI: error). On a saturated uplink the ping queues behind sent data in the kernel and network
@@ -356,15 +359,15 @@ Providers (settings store a provider id for each):
   `openAiHttpErrorMessage`; no `data` array = "Unexpected response from OpenAI"; transport =
   `modelsNetworkErrorMessage` ("Loading models timed out" / "Couldn't load models (network error)"). Default client
   timeouts.
-- Uploads (both providers, `stt/Wav.kt`): `wavBytes` = 44-byte RIFF/WAVE header (PCM, mono, 16-bit) + the chunks,
+- Uploads (all three providers, `stt/Wav.kt`): `wavBytes` = 44-byte RIFF/WAVE header (PCM, mono, 16-bit) + the chunks,
   padded with silence to 1.25 s when under 1 s (as Handy: services reject very short files). Per upload,
   `httpClient.newBuilder().readTimeout(uploadReadTimeoutMs)` = `timeoutMs + audio duration / 4` (the server's
   transcription time grows with the audio; default 10 s + 15 s for 1 min); OkHttp's 10 s write timeout covers a
-  stalled upload; no call timeout. A timeout before the body was fully written (`sent` flag: reset at the start
-  of `writeTo`, set at its end) = "Timed out sending audio to OpenAI" / "... to AI Gateway", after = "Timed out
-  waiting for the transcript". `Call.await()` (enqueue, cancelling the coroutine cancels the call). Warm-up:
-  keyless `HEAD /v1/models` through the default (h2) client, 3 min throttle (reset only by a failure: an h2
-  connection returns to the pool).
+  stalled upload; no call timeout. A timeout before the body was fully written (`sent` flag, `SentBody` or the
+  Gateway's `UploadBody`: reset at the start of `writeTo`, set at its end) = "Timed out sending audio to OpenAI" /
+  "... to AI Gateway" / "... to Deepgram", after = "Timed out waiting for the transcript". `Call.await()`
+  (enqueue, cancelling the coroutine cancels the call). Warm-up: keyless `HEAD /v1/models` (Deepgram: `HEAD /v1/listen`)
+  through the default (h2) client, 3 min throttle (reset only by a failure: an h2 connection returns to the pool).
 - STT, Vercel AI Gateway (`stt.vercel`): streaming transcription WebSocket, beta (launched 2026-07-22); the only
   official client is the AI SDK's `experimental_streamTranscribe`, with no public protocol docs. Verified
   2026-11-12 (`stt.vercel.GatewayTranscriptionProtocol.kt`) against the source of `@ai-sdk/gateway` 4.0.143
@@ -438,6 +441,48 @@ Providers (settings store a provider id for each):
   `setGatewaySttModel(model, live)`; `live = gatewaySttLive(id, catalog)` (pure, tested): the catalog entry's
   `websocket-transcription` tag; an id not in the catalog (typed, or catalog not loaded) = live. Stale if the
   catalog later retags a model, until re-saved.
+- STT, Deepgram (direct) (`stt.deepgram.DeepgramSpeechToText`): live transcription WebSocket, one socket, no
+  reconnect (like OpenAI). Verified 2026-11-13 (`stt.deepgram.DeepgramProtocol.kt`) against
+  https://developers.deepgram.com/reference/speech-to-text/listen-streaming, `/docs/close-stream`, `/docs/errors`,
+  `/docs/audio-keep-alive`, `/docs/understand-endpointing-interim-results`, `/docs/multilingual-code-switching`,
+  `/docs/models-languages-overview` and https://deepgram.com/pricing; Handy's `deepgram_live_transcription.rs` does
+  the same. Connect `wss://api.deepgram.com/v1/listen` with `Authorization: Token <key>` (`Bearer` is for JWTs) and
+  query `model, language, smart_format=true, punctuate=true, encoding=linear16, sample_rate=16000, channels=1,
+  interim_results=true` (`listenUrl`, pure, tested); a blank language sends `language=multi` (Nova-3
+  code-switching, 55 languages, ~19 % pricier: streaming $0.0092 vs $0.0077/min pay as you go) plus
+  `endpointing=100` (the docs' code-switching advice). Not sent: `mip_opt_out`, `dictation`, `keyterm`,
+  `vad_events`, `utterance_end_ms`. 16 kHz for every model (`sampleRate`). Audio = raw PCM16 binary frames, one
+  per chunk, never empty (an empty frame closes the stream). On stop: `{"type":"CloseStream"}`, OkHttp drain wait
+  (60 s, "Timed out sending audio to Deepgram"), then `T` for `Metadata` (sent last) or the server's close 1000
+  (either ends it, only after CloseStream; an earlier Metadata is ignored) = "Timed out waiting for the
+  transcript". Server messages (`parseDeepgramEvent`, unknown/malformed = ignored): `Results` (`is_final`,
+  `channel.alternatives[0].transcript`); final = the `is_final` transcripts joined (`joined`, CJK-aware; never
+  `speech_final` alone, per the docs), live text = finals + the latest interim (`DeepgramTranscript`, tested);
+  `Error` (`description`, non-fatal per the docs) is `Log.w`-ed and the session continues. No padding (no minimum):
+  an instant stop gets Metadata with no Results = blank = "No speech detected". A close without CloseStream (e.g.
+  `1011 NET-0001`) = "Deepgram closed the connection: <reason>"; network failures "Network error: ...". Handshake
+  errors (`deepgramHttpErrorMessage`, body read in `onFailure`): 401 key, 402 "Deepgram account is out of credits",
+  429 rate limit (150 concurrent streams), 5xx server, else "Deepgram error: <err_msg | message | dg-error header>".
+  Warm-up: keyless `HEAD https://api.deepgram.com/v1/listen` (405, no body; ~240 ms after TLS with curl
+  `--http1.1`, 2026-11-13) through the HTTP/1.1 client like OpenAI's, 3 min throttle, reset by `transcribe` and by a
+  failure (the host's idle timeout is unmeasured). Logs `Timing: transcribe->ws open X ms` and `Timing:
+  CloseStream->Metadata X ms`. Not via the Gateway: its catalog (2026-11-13) has no `deepgram/*` model. Models: a
+  static menu list `DEEPGRAM_MODELS` (nova-3, nova-3-medical, nova-2; the keyless `GET /v1/models` takes 6-15 s
+  and 207 KB); any id can be typed. Flux (`/v2/listen`) is out of scope.
+- STT, Deepgram upload (`stt.deepgram.DeepgramFileTranscription`, when `Settings.deepgramUpload`): pre-recorded
+  API, verified 2026-11-13 against https://developers.deepgram.com/reference/speech-to-text/listen-pre-recorded
+  and `/docs/pre-recorded-audio`. `POST https://api.deepgram.com/v1/listen?model&language&smart_format&punctuate`
+  (`listenUrl(streaming = false)`: no format params, blank language = `multi`, no endpointing), `Authorization:
+  Token <key>`, `Content-Type: audio/wav`, body = 16 kHz `wavBytes` -> `{metadata, results: {channels:
+  [{alternatives: [{transcript}]}]}}` (`parseListenResponse`; missing = "Unexpected response from Deepgram"; blank
+  = "No speech detected" via the controller). Limits: 2 GB per file, 10 min processing (then 504), 50 concurrent
+  requests: one upload, no splitting. `streams = false`; key checked before collecting; errors map like the
+  handshake (no `dg-error` header: `Call.await` returns only code + body); transport = "Network error: ...".
+  Pricing (pay as you go, 2026-11-13): Nova-3 $0.0043/min mono-language, $0.0052 multi: ~44 % cheaper than
+  streaming. Warm-up: keyless `HEAD /v1/listen` through the default (h2) client, 3 min throttle (reset by a
+  failure). Logs `Timing: upload X KB, stop->response Y ms`.
+- Deepgram mode: `Settings.deepgramUpload` (`deepgram_upload`, default false), Settings > Transcription switch
+  "Disable realtime streaming (cheaper)", shown only with Deepgram selected.
 - Cleanup: Vercel AI Gateway, OpenAI-compatible `POST https://ai-gateway.vercel.sh/v1/chat/completions`,
   `Authorization: Bearer <key>`. Structured output via
   `response_format: {type:"json_schema", json_schema:{name, schema, strict:true}}` with schema
@@ -498,16 +543,22 @@ Providers (settings store a provider id for each):
   `low..max`; `openai/gpt-4.1-mini` has no `reasoning_options`. HTTP errors map as above; timeout = "Loading models
   timed out", other transport errors = "Couldn't load models (network error)" (no raw exception in the UI); no `data`
   array = "Unexpected response from AI Gateway".
-  Settings > Transcription: two radio rows (OpenAI (direct) / Vercel AI Gateway, each naming its key; the selected
-  one appends " · not set" in the error colour without its key), then the OpenAI model combobox (below; lists the
-  key's transcription models (OpenAI model list above); hint "Realtime models (gpt-live-transcribe, gpt-transcribe,
-  ...) stream; other models upload after you stop. Mode: live|streams, text after stop|after stop") or the Gateway
+  Settings > API keys has a field per key (OpenAI, Vercel AI Gateway, Deepgram).
+  Settings > Transcription: three radio rows (OpenAI (direct) / Vercel AI Gateway / Deepgram, each naming its key;
+  the selected one appends " · not set" in the error colour without its key), then the OpenAI model combobox
+  (below; lists the key's transcription models (OpenAI model list above); hint "Realtime models
+  (gpt-live-transcribe, gpt-transcribe, ...) stream; other models upload after you stop. Mode: live|streams, text after stop|after stop") or the Gateway
   model combobox (lists all transcription models; hint "Live models show text as you speak; others transcribe after
-  you stop. Mode: ..." for the saved model). In both menus a streaming model's item ends with the `ic_audio_lines`
+  you stop. Mode: ..." for the saved model) or the Deepgram model combobox (static `DEEPGRAM_MODELS`, no fetch:
+  refresh only reopens the menu; hint "Deepgram models stream unless realtime streaming is disabled below. Mode:
+  live|after stop"). In the menus a streaming model's item ends with the `ic_audio_lines`
   icon (18 dp, `onSurfaceVariant`, content description "Streams"; `streams`: OpenAI `isRealtimeTranscriptionModel`,
-  Gateway `isStreamingTranscriptionModel`), others with nothing. Then the shared language field, then a
-  "Timeout" `SliderSetting` (5..30 s, step 1) for `sttTimeoutSeconds`, hint "How long to wait for the final
-  transcript after you stop.", then a divider and the "Skip silence" switch row (`vadEnabled`), then a divider and
+  Gateway `isStreamingTranscriptionModel`, Deepgram every model while `deepgramUpload` is off), others with nothing.
+  The OpenAI list loads only while OpenAI is selected (`sttOpenAi` = neither Gateway nor Deepgram). Then the shared
+  language field, then a "Timeout" `SliderSetting` (5..30 s, step 1) for `sttTimeoutSeconds`, hint "How long to
+  wait for the final transcript after you stop.", then (Deepgram only) a divider and the "Disable realtime
+  streaming (cheaper)" switch row (`ic_audio_lines`, subtitle "Uploads after you stop: no live text, about 44%
+  cheaper", `deepgramUpload`), then a divider and the "Skip silence" switch row (`vadEnabled`), then a divider and
   a "Speed" `SliderSetting` (100..200 %, step 10, shown "1.0x".."2.0x") for `sttSpeedPercent`, hint "Speeds up the
   audio sent (pitch kept), so less is billed. Higher speeds can lower accuracy; services with a per-request minimum
   may not save.", saved on release.
@@ -543,6 +594,9 @@ Providers (settings store a provider id for each):
   (beta, protocol taken from the AI SDK source and Handy, see Providers) is offered as a second provider for model
   choice and one shared key. Recording rate is per session (`sampleRate(model)`), not resampled in Kotlin, except
   a 16 kHz copy for the VAD. The mode follows the model (streaming vs upload after stop), no separate setting.
+  Deepgram (direct, not via the Gateway: no `deepgram/*` there) is a third provider for Nova-3; it streams by default.
+- **Deepgram's mode follows a setting, not the model** (the one exception): every Nova model does both, so the
+  Deepgram-only "Disable realtime streaming (cheaper)" switch picks the ~44 % cheaper pre-recorded upload.
 - **VAD on device (Silero, ONNX Runtime 1.28.0 pinned)** to cut STT cost; fails open, never loses dictation.
 - **Speed-up after the VAD gate with vendored Sonic** (pitch kept) to cut billed audio; 1.0x = untouched. Not
   media3's `SonicAudioProcessor` (`@UnstableApi`, pulls Guava).
@@ -626,6 +680,13 @@ Not covered by unit tests; check on a real device (ideally more than one OEM) af
 - OpenAI model dropdown lists transcription models with your key (realtime ones with the audio-lines icon, also
   in the Gateway menu for live models); no key shows "Set your OpenAI API key to load models"; saving a key loads
   the list.
+- Deepgram (V1-V6): real voice with `nova-3` and `en`: live text streams, the final is inserted, log `Timing:
+  CloseStream->Metadata`; blank language (`multi`): mixed-language speech is transcribed; VAD on with a pause >= 60 s
+  on mobile data still gives a transcript (no `NET-0001`/`NET-0002`, no missed pong); bad key = key message, a
+  language Nova-3 lacks (e.g. `yo`) = "Deepgram error: ..."; Deepgram console usage of a VAD-gapped session ≈ the
+  sent audio (`VAD: sent X ms`), not wall time; speed 1.5x/2.0x accuracy. "Disable realtime streaming" on: no panel
+  while recording, spinner after stop, text inserted, console bills it as pre-recorded; the switch shows only with
+  Deepgram selected and the menu's audio-lines icons follow it.
 - Long Gateway upload: a 10 min Gateway after-stop dictation (VAD off) succeeds; on a 413, reuse `splitAtPauses`
   for the Gateway too.
 - Gateway STT with a real voice: live text streams and the final is inserted (default model, plus a 16 kHz one:
@@ -675,3 +736,4 @@ Update this section as checkpoints land.
 | CP6 | Vercel AI Gateway STT provider | Done (real-voice device check pending) |
 | CP7 | On-device VAD (skip silence) + upload-after-stop transcription models | Done (real-voice device check pending) |
 | CP8 | Speed-up (time-stretch) | Done (real-voice device check pending) |
+| CP9 | Deepgram Nova-3 STT | Done (real-voice device check pending) |

@@ -9,7 +9,10 @@ import dev.jamius.iris.audio.pcm16Level
 import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.Call
 import okhttp3.Callback
+import okhttp3.MediaType
+import okhttp3.RequestBody
 import okhttp3.Response
+import okio.BufferedSink
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -105,4 +108,21 @@ internal suspend fun Call.await(): Pair<Int, String> = suspendCancellableCorouti
             cont.resume(result)
         }
     })
+}
+
+/** [delegate], recording when it has been written in full: a timeout after that is the server's. */
+internal class SentBody(private val delegate: RequestBody) : RequestBody() {
+    @Volatile
+    var sent = false
+        private set
+
+    override fun contentType(): MediaType? = delegate.contentType()
+
+    override fun contentLength(): Long = delegate.contentLength()
+
+    override fun writeTo(sink: BufferedSink) {
+        sent = false
+        delegate.writeTo(sink)
+        sent = true
+    }
 }

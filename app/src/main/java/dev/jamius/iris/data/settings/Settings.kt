@@ -27,6 +27,10 @@ data class Settings(
      * when the model is saved.
      */
     val gatewaySttLive: Boolean,
+    /** The Deepgram model. */
+    val deepgramSttModel: String,
+    /** Deepgram uploads the recording after stop (pre-recorded API, cheaper, no live text) instead of streaming. */
+    val deepgramUpload: Boolean,
     /** ISO-639-1 code; blank means auto-detect. */
     val sttLanguage: String,
     /** How long to wait for the final transcript once the audio is sent; past it the session fails. */
@@ -47,6 +51,7 @@ data class Settings(
     val activePrompt: CleanupPrompt?,
     val openAiKeySet: Boolean,
     val gatewayKeySet: Boolean,
+    val deepgramKeySet: Boolean,
     /** Screen edge the overlay bubble is snapped to. */
     val bubbleSide: BubbleSide,
     /** Bubble's vertical position as a fraction (0 = top, 1 = bottom) of the usable screen height. */
@@ -59,19 +64,34 @@ data class Settings(
     /** Speech-to-text goes through Vercel AI Gateway (else OpenAI direct). */
     val sttGateway: Boolean get() = sttProviderId == STT_PROVIDER_VERCEL_GATEWAY
 
-    /** The selected provider's model. */
-    val activeSttModel: String get() = if (sttGateway) gatewaySttModel else sttModel
+    /** Speech-to-text goes through Deepgram (direct). */
+    val sttDeepgram: Boolean get() = sttProviderId == STT_PROVIDER_DEEPGRAM
+
+    /** The selected provider's model (an unknown provider id means OpenAI). */
+    val activeSttModel: String
+        get() = when {
+            sttGateway -> gatewaySttModel
+            sttDeepgram -> deepgramSttModel
+            else -> sttModel
+        }
 
     /** The selected speech-to-text provider's API key is set. */
-    val sttKeySet: Boolean get() = if (sttGateway) gatewayKeySet else openAiKeySet
+    val sttKeySet: Boolean
+        get() = when {
+            sttGateway -> gatewayKeySet
+            sttDeepgram -> deepgramKeySet
+            else -> openAiKeySet
+        }
 
     companion object {
         const val STT_PROVIDER_OPENAI = "openai"
         const val STT_PROVIDER_VERCEL_GATEWAY = "vercel-gateway"
+        const val STT_PROVIDER_DEEPGRAM = "deepgram"
         const val CLEANUP_PROVIDER_VERCEL_GATEWAY = "vercel-gateway"
 
         const val DEFAULT_STT_MODEL = "gpt-live-transcribe"
         const val DEFAULT_GATEWAY_STT_MODEL = "openai/gpt-live-transcribe"
+        const val DEFAULT_DEEPGRAM_STT_MODEL = "nova-3"
         const val DEFAULT_CLEANUP_MODEL = "openai/gpt-6-luna"
 
         const val DEFAULT_STT_TIMEOUT_SECONDS = 10

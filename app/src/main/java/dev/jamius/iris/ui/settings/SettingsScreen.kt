@@ -120,6 +120,7 @@ import dev.jamius.iris.data.settings.Settings
 import dev.jamius.iris.data.settings.SettingsRepository
 import dev.jamius.iris.overlay.IrisAccessibilityService
 import dev.jamius.iris.stt.SttException
+import dev.jamius.iris.stt.deepgram.DEEPGRAM_MODELS
 import dev.jamius.iris.stt.openai.hasLiveText
 import dev.jamius.iris.stt.openai.isRealtimeTranscriptionModel
 import dev.jamius.iris.stt.vercel.gatewaySttLive
@@ -205,21 +206,22 @@ fun SettingsScreen(
         }
     }
 
+    val sttOpenAi = settings != null && !settings.sttGateway && !settings.sttDeepgram
+
     // The list depends on the key: a key change drops it and cancels a running load (its result is never written),
     // then reloads while OpenAI is selected (without a key that shows the "set your key" error, with no request).
-    // With the Gateway selected, the list loads when OpenAI is selected again.
+    // With another provider selected, the list loads when OpenAI is selected again.
     fun onOpenAiKeyChanged() {
         openAiModelsJob?.cancel()
         openAiModelsJob = null
         openAiModelsLoading = false
         openAiModelsError = null
         openAiSttModels = null
-        if (settings?.sttGateway == false) loadOpenAiModels()
+        if (sttOpenAi) loadOpenAiModels()
     }
 
     // Loads when the screen opens with OpenAI transcription selected, and when it is selected before it has loaded.
     // Without a key nothing is requested and the error asks for one.
-    val sttOpenAi = settings?.sttGateway == false
     LaunchedEffect(sttOpenAi) {
         if (sttOpenAi && openAiSttModels == null) loadOpenAiModels()
     }
@@ -286,6 +288,12 @@ fun SettingsScreen(
                         onSave = { scope.launch { repository.setApiKey(Secret.GATEWAY_API_KEY, it) } },
                         onClear = { scope.launch { repository.clearApiKey(Secret.GATEWAY_API_KEY) } }
                     )
+                    ApiKeyField(
+                        label = "Deepgram API key",
+                        isSet = settings.deepgramKeySet,
+                        onSave = { scope.launch { repository.setApiKey(Secret.DEEPGRAM_API_KEY, it) } },
+                        onClear = { scope.launch { repository.clearApiKey(Secret.DEEPGRAM_API_KEY) } }
+                    )
                 }
             }
 
@@ -294,7 +302,7 @@ fun SettingsScreen(
                     ProviderRow(
                         title = "OpenAI",
                         subtitle = "Uses the OpenAI API key",
-                        selected = !settings.sttGateway,
+                        selected = sttOpenAi,
                         keyMissing = !settings.openAiKeySet,
                         onSelect = { scope.launch { repository.setSttProvider(Settings.STT_PROVIDER_OPENAI) } }
                     )
@@ -307,11 +315,18 @@ fun SettingsScreen(
                             scope.launch { repository.setSttProvider(Settings.STT_PROVIDER_VERCEL_GATEWAY) }
                         }
                     )
+                    ProviderRow(
+                        title = "Deepgram",
+                        subtitle = "Uses the Deepgram API key",
+                        selected = settings.sttDeepgram,
+                        keyMissing = !settings.deepgramKeySet,
+                        onSelect = { scope.launch { repository.setSttProvider(Settings.STT_PROVIDER_DEEPGRAM) } }
+                    )
                 }
                 CardDivider()
                 FieldsColumn {
-                    if (settings.sttGateway) {
-                        ModelField(
+                    when {
+                        settings.sttGateway -> ModelField(
                             value = settings.gatewaySttModel,
                             models = sttModelIds,
                             loading = modelsLoading,
@@ -322,8 +337,19 @@ fun SettingsScreen(
                             onSave = { scope.launch { repository.setGatewaySttModel(it, gatewaySttLive(it, models)) } },
                             streams = { it in liveSttModelIds.orEmpty() }
                         )
-                    } else {
-                        ModelField(
+                        // A static list: refresh only reopens the menu.
+                        settings.sttDeepgram -> ModelField(
+                            value = settings.deepgramSttModel,
+                            models = DEEPGRAM_MODELS,
+                            loading = false,
+                            error = null,
+                            supportingText = "Deepgram models stream unless realtime streaming is disabled below. " +
+                                sttModeText(!settings.deepgramUpload),
+                            onLoad = {},
+                            onSave = { scope.launch { repository.setDeepgramSttModel(it) } },
+                            streams = { !settings.deepgramUpload }
+                        )
+                        else -> ModelField(
                             value = settings.sttModel,
                             models = openAiSttModels,
                             loading = openAiModelsLoading,
@@ -355,6 +381,29 @@ fun SettingsScreen(
                         supportingText = "How long to wait for the final transcript after you stop.",
                         onSave = { scope.launch { repository.setSttTimeoutSeconds(it) } }
                     )
+                }
+                if (settings.sttDeepgram) {
+                    CardDivider()
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .toggleable(
+                                value = settings.deepgramUpload,
+                                role = Role.Switch,
+                                onValueChange = { scope.launch { repository.setDeepgramUpload(it) } }
+                            )
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        LabeledRow(
+                            icon = R.drawable.ic_audio_lines,
+                            title = "Disable realtime streaming (cheaper)",
+                            subtitle = "Uploads after you stop: no live text, about 44% cheaper",
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(Modifier.width(16.dp))
+                        Switch(checked = settings.deepgramUpload, onCheckedChange = null)
+                    }
                 }
                 CardDivider()
                 Row(

@@ -19,6 +19,8 @@ import dev.jamius.iris.data.settings.SettingsRepository
 import dev.jamius.iris.dictation.DictationController
 import dev.jamius.iris.dictation.DictationState
 import dev.jamius.iris.stt.SpeechToTextProvider
+import dev.jamius.iris.stt.deepgram.DeepgramFileTranscription
+import dev.jamius.iris.stt.deepgram.DeepgramSpeechToText
 import dev.jamius.iris.stt.openai.OpenAiFileTranscription
 import dev.jamius.iris.stt.openai.OpenAiRealtimeSpeechToText
 import dev.jamius.iris.stt.openai.isRealtimeTranscriptionModel
@@ -69,11 +71,23 @@ class AppContainer(context: Context) {
         apiKey = { secretStore.get(Secret.GATEWAY_API_KEY) }
     )
 
+    private val deepgramStt = DeepgramSpeechToText(
+        httpClient,
+        apiKey = { secretStore.get(Secret.DEEPGRAM_API_KEY) }
+    )
+
+    private val deepgramFileStt = DeepgramFileTranscription(
+        httpClient,
+        apiKey = { secretStore.get(Secret.DEEPGRAM_API_KEY) }
+    )
+
     /**
      * The speech-to-text provider [settings] select: the model picks streaming or upload after stop (OpenAI: the
-     * Realtime models stream; Gateway: the catalog's tag, stored at save).
+     * Realtime models stream; Gateway: the catalog's tag, stored at save). Deepgram: every model streams, so its
+     * own setting picks the cheaper upload instead.
      */
     fun speechToText(settings: Settings): SpeechToTextProvider = when {
+        settings.sttDeepgram -> if (settings.deepgramUpload) deepgramFileStt else deepgramStt
         settings.sttGateway -> if (settings.gatewaySttLive) gatewayStt else gatewayFileStt
         isRealtimeTranscriptionModel(settings.sttModel) -> openAiStt
         else -> openAiFileStt

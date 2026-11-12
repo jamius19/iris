@@ -44,7 +44,11 @@ class SettingsMappingTest {
         assertEquals(Settings.DEFAULT_STT_MODEL, settings.sttModel)
         assertEquals(Settings.DEFAULT_GATEWAY_STT_MODEL, settings.gatewaySttModel)
         assertTrue(settings.gatewaySttLive)
+        assertEquals(Settings.DEFAULT_DEEPGRAM_STT_MODEL, settings.deepgramSttModel)
+        assertEquals("nova-3", settings.deepgramSttModel)
+        assertFalse(settings.deepgramUpload)
         assertFalse(settings.sttGateway)
+        assertFalse(settings.sttDeepgram)
         assertEquals(Settings.DEFAULT_STT_MODEL, settings.activeSttModel)
         assertEquals("", settings.sttLanguage)
         assertEquals(Settings.DEFAULT_STT_TIMEOUT_SECONDS, settings.sttTimeoutSeconds)
@@ -59,6 +63,7 @@ class SettingsMappingTest {
         assertEquals(Settings.DEFAULT_PROMPT, settings.activePrompt)
         assertFalse(settings.openAiKeySet)
         assertFalse(settings.gatewayKeySet)
+        assertFalse(settings.deepgramKeySet)
         assertEquals(Settings.DEFAULT_BUBBLE_SIDE, settings.bubbleSide)
         assertEquals(Settings.DEFAULT_BUBBLE_Y_FRACTION, settings.bubbleYFraction)
         assertEquals(Settings.DEFAULT_PANEL_LINES, settings.panelLines)
@@ -72,6 +77,8 @@ class SettingsMappingTest {
             Keys.STT_MODEL to "gpt-transcribe",
             Keys.GATEWAY_STT_MODEL to "google/gemini-3.5-transcribe-live",
             Keys.GATEWAY_STT_LIVE to false,
+            Keys.DEEPGRAM_STT_MODEL to "nova-3-medical",
+            Keys.DEEPGRAM_UPLOAD to true,
             Keys.STT_LANGUAGE to "fr",
             Keys.STT_TIMEOUT_SECONDS to 20,
             Keys.VAD_ENABLED to false,
@@ -88,12 +95,14 @@ class SettingsMappingTest {
             Keys.PANEL_WIDTH_PERCENT to 70,
         )
 
-        val settings = prefs.toSettings(setOf(Secret.GATEWAY_API_KEY))
+        val settings = prefs.toSettings(setOf(Secret.GATEWAY_API_KEY, Secret.DEEPGRAM_API_KEY))
 
         assertEquals(Settings.STT_PROVIDER_VERCEL_GATEWAY, settings.sttProviderId)
         assertEquals("gpt-transcribe", settings.sttModel)
         assertEquals("google/gemini-3.5-transcribe-live", settings.gatewaySttModel)
         assertFalse(settings.gatewaySttLive)
+        assertEquals("nova-3-medical", settings.deepgramSttModel)
+        assertTrue(settings.deepgramUpload)
         assertEquals("fr", settings.sttLanguage)
         assertEquals(20, settings.sttTimeoutSeconds)
         assertFalse(settings.vadEnabled)
@@ -106,6 +115,7 @@ class SettingsMappingTest {
         assertEquals(prompts[1], settings.activePrompt)
         assertFalse(settings.openAiKeySet)
         assertTrue(settings.gatewayKeySet)
+        assertTrue(settings.deepgramKeySet)
         assertEquals(BubbleSide.LEFT, settings.bubbleSide)
         assertEquals(0.75f, settings.bubbleYFraction)
         assertEquals(5, settings.panelLines)
@@ -117,6 +127,7 @@ class SettingsMappingTest {
         val prefs = mutablePreferencesOf(
             Keys.STT_MODEL to "gpt-transcribe",
             Keys.GATEWAY_STT_MODEL to "spacexai/grok-stt",
+            Keys.DEEPGRAM_STT_MODEL to "nova-2",
         )
 
         val openAi = prefs.toSettings(setOf(Secret.OPENAI_API_KEY))
@@ -130,6 +141,19 @@ class SettingsMappingTest {
         assertEquals("spacexai/grok-stt", gateway.activeSttModel)
         assertFalse(gateway.sttKeySet)
         assertTrue(prefs.toSettings(setOf(Secret.GATEWAY_API_KEY)).sttKeySet)
+
+        prefs[Keys.STT_PROVIDER_ID] = Settings.STT_PROVIDER_DEEPGRAM
+        val deepgram = prefs.toSettings(setOf(Secret.OPENAI_API_KEY, Secret.GATEWAY_API_KEY))
+        assertTrue(deepgram.sttDeepgram)
+        assertFalse(deepgram.sttGateway)
+        assertEquals("nova-2", deepgram.activeSttModel)
+        assertFalse(deepgram.sttKeySet)
+        assertTrue(prefs.toSettings(setOf(Secret.DEEPGRAM_API_KEY)).sttKeySet)
+
+        prefs[Keys.STT_PROVIDER_ID] = "unknown"
+        val unknown = prefs.toSettings(setOf(Secret.OPENAI_API_KEY))
+        assertEquals("gpt-transcribe", unknown.activeSttModel)
+        assertTrue(unknown.sttKeySet)
     }
 
     @Test
