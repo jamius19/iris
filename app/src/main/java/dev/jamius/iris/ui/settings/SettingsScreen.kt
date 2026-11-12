@@ -292,7 +292,7 @@ fun SettingsScreen(
             Section("Transcription") {
                 Column(modifier = Modifier.padding(vertical = 8.dp)) {
                     ProviderRow(
-                        title = "OpenAI (direct)",
+                        title = "OpenAI",
                         subtitle = "Uses the OpenAI API key",
                         selected = !settings.sttGateway,
                         keyMissing = !settings.openAiKeySet,
