@@ -264,39 +264,6 @@ fun SettingsScreen(
         ) {
             SetupSection()
 
-            Section("API keys") {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    ApiKeyField(
-                        label = "OpenAI API key",
-                        isSet = settings.openAiKeySet,
-                        onSave = {
-                            scope.launch {
-                                repository.setApiKey(Secret.OPENAI_API_KEY, it)
-                                onOpenAiKeyChanged()
-                            }
-                        },
-                        onClear = {
-                            scope.launch {
-                                repository.clearApiKey(Secret.OPENAI_API_KEY)
-                                onOpenAiKeyChanged()
-                            }
-                        }
-                    )
-                    ApiKeyField(
-                        label = "Vercel AI Gateway API key",
-                        isSet = settings.gatewayKeySet,
-                        onSave = { scope.launch { repository.setApiKey(Secret.GATEWAY_API_KEY, it) } },
-                        onClear = { scope.launch { repository.clearApiKey(Secret.GATEWAY_API_KEY) } }
-                    )
-                    ApiKeyField(
-                        label = "Deepgram API key",
-                        isSet = settings.deepgramKeySet,
-                        onSave = { scope.launch { repository.setApiKey(Secret.DEEPGRAM_API_KEY, it) } },
-                        onClear = { scope.launch { repository.clearApiKey(Secret.DEEPGRAM_API_KEY) } }
-                    )
-                }
-            }
-
             Section("Transcription") {
                 Column(modifier = Modifier.padding(vertical = 8.dp)) {
                     ProviderRow(
@@ -325,6 +292,37 @@ fun SettingsScreen(
                 }
                 CardDivider()
                 FieldsColumn {
+                    // The selected provider's key only; the Gateway key is the same one the cleanup card shows.
+                    when {
+                        settings.sttGateway -> ApiKeyField(
+                            label = "Vercel AI Gateway API key",
+                            isSet = settings.gatewayKeySet,
+                            onSave = { scope.launch { repository.setApiKey(Secret.GATEWAY_API_KEY, it) } },
+                            onClear = { scope.launch { repository.clearApiKey(Secret.GATEWAY_API_KEY) } }
+                        )
+                        settings.sttDeepgram -> ApiKeyField(
+                            label = "Deepgram API key",
+                            isSet = settings.deepgramKeySet,
+                            onSave = { scope.launch { repository.setApiKey(Secret.DEEPGRAM_API_KEY, it) } },
+                            onClear = { scope.launch { repository.clearApiKey(Secret.DEEPGRAM_API_KEY) } }
+                        )
+                        else -> ApiKeyField(
+                            label = "OpenAI API key",
+                            isSet = settings.openAiKeySet,
+                            onSave = {
+                                scope.launch {
+                                    repository.setApiKey(Secret.OPENAI_API_KEY, it)
+                                    onOpenAiKeyChanged()
+                                }
+                            },
+                            onClear = {
+                                scope.launch {
+                                    repository.clearApiKey(Secret.OPENAI_API_KEY)
+                                    onOpenAiKeyChanged()
+                                }
+                            }
+                        )
+                    }
                     when {
                         settings.sttGateway -> ModelField(
                             value = settings.gatewaySttModel,
@@ -466,6 +464,12 @@ fun SettingsScreen(
                 }
                 CardDivider()
                 FieldsColumn(modifier = Modifier.alpha(cleanupAlpha)) {
+                    ApiKeyField(
+                        label = "Vercel AI Gateway API key",
+                        isSet = settings.gatewayKeySet,
+                        onSave = { scope.launch { repository.setApiKey(Secret.GATEWAY_API_KEY, it) } },
+                        onClear = { scope.launch { repository.clearApiKey(Secret.GATEWAY_API_KEY) } }
+                    )
                     ModelField(
                         value = settings.cleanupModel,
                         models = chatModelIds,

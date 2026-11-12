@@ -543,9 +543,12 @@ Providers (settings store a provider id for each):
   `low..max`; `openai/gpt-4.1-mini` has no `reasoning_options`. HTTP errors map as above; timeout = "Loading models
   timed out", other transport errors = "Couldn't load models (network error)" (no raw exception in the UI); no `data`
   array = "Unexpected response from AI Gateway".
-  Settings > API keys has a field per key (OpenAI, Vercel AI Gateway, Deepgram).
+  No separate API keys card: each key field sits with the provider that uses it. Transcription shows only the
+  selected provider's key; Cleanup always shows the Gateway key (the same stored key, so with Gateway STT both
+  cards show it and saving either updates both).
   Settings > Transcription: three radio rows (OpenAI (direct) / Vercel AI Gateway / Deepgram, each naming its key;
-  the selected one appends " · not set" in the error colour without its key), then the OpenAI model combobox
+  the selected one appends " · not set" in the error colour without its key), then the selected provider's key
+  field, then the OpenAI model combobox
   (below; lists the key's transcription models (OpenAI model list above); hint "Realtime models
   (gpt-live-transcribe, gpt-transcribe, ...) stream; other models upload after you stop. Mode: live|streams, text after stop|after stop") or the Gateway
   model combobox (lists all transcription models; hint "Live models show text as you speak; others transcribe after
