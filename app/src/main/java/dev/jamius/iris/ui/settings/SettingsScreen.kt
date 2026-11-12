@@ -123,6 +123,10 @@ import dev.jamius.iris.stt.SttException
 import dev.jamius.iris.stt.deepgram.DEEPGRAM_MODELS
 import dev.jamius.iris.stt.openai.hasLiveText
 import dev.jamius.iris.stt.openai.isRealtimeTranscriptionModel
+import dev.jamius.iris.stt.soniox.SonioxCatalog
+import dev.jamius.iris.stt.soniox.SonioxRegion
+import dev.jamius.iris.stt.soniox.sonioxRegion
+import dev.jamius.iris.stt.soniox.sonioxStreams
 import dev.jamius.iris.stt.vercel.gatewaySttLive
 import dev.jamius.iris.stt.vercel.isStreamingTranscriptionModel
 import dev.jamius.iris.stt.vercel.isTranscriptionModel
@@ -140,9 +144,12 @@ fun SettingsScreen(
     repository: SettingsRepository,
     cleanup: CleanupProvider,
     openAiModels: suspend () -> List<String>,
+    sonioxCatalog: SonioxCatalog,
     modifier: Modifier = Modifier,
 ) {
     val settings = repository.settings.collectAsState(initial = null).value
+    // App-level (sessions use it too); it reloads itself when the Soniox key or region changes.
+    val sonioxState by sonioxCatalog.state.collectAsState()
     val scope = rememberCoroutineScope()
     var editingPrompt by remember { mutableStateOf<CleanupPrompt?>(null) }
     // The Gateway's model catalog, shared by the cleanup and transcription model fields and the reasoning level;
@@ -206,7 +213,7 @@ fun SettingsScreen(
         }
     }
 
-    val sttOpenAi = settings != null && !settings.sttGateway && !settings.sttDeepgram
+    val sttOpenAi = settings != null && !settings.sttGateway && !settings.sttDeepgram && !settings.sttSoniox
 
     // The list depends on the key: a key change drops it and cancels a running load (its result is never written),
     // then reloads while OpenAI is selected (without a key that shows the "set your key" error, with no request).
@@ -224,6 +231,12 @@ fun SettingsScreen(
     // Without a key nothing is requested and the error asks for one.
     LaunchedEffect(sttOpenAi) {
         if (sttOpenAi && openAiSttModels == null) loadOpenAiModels()
+    }
+
+    // Loads when the screen opens with Soniox selected, and when it is selected, if not loaded (or loading) yet.
+    val sttSoniox = settings?.sttSoniox == true
+    LaunchedEffect(sttSoniox) {
+        if (sttSoniox && sonioxState.models == null && !sonioxState.loading) sonioxCatalog.refresh()
     }
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val screenColor = MaterialTheme.colorScheme.surfaceContainer
@@ -245,6 +258,7 @@ fun SettingsScreen(
         }
     ) { innerPadding ->
         if (settings == null) return@Scaffold
+        val sonioxLive = settings.sttSoniox && sonioxStreams(settings.sonioxSttModel, sonioxState.models)
         val layoutDirection = LocalLayoutDirection.current
         // Content scrolls under the navigation bar; its inset is added as bottom padding inside the scroll.
         // Only the applied padding is consumed, so imePadding() lifts the viewport by the IME's full height.
@@ -289,6 +303,13 @@ fun SettingsScreen(
                         keyMissing = !settings.deepgramKeySet,
                         onSelect = { scope.launch { repository.setSttProvider(Settings.STT_PROVIDER_DEEPGRAM) } }
                     )
+                    ProviderRow(
+                        title = "Soniox",
+                        subtitle = "Uses the Soniox API key",
+                        selected = settings.sttSoniox,
+                        keyMissing = !settings.sonioxKeySet,
+                        onSelect = { scope.launch { repository.setSttProvider(Settings.STT_PROVIDER_SONIOX) } }
+                    )
                 }
                 CardDivider()
                 FieldsColumn {
@@ -306,6 +327,13 @@ fun SettingsScreen(
                             onSave = { scope.launch { repository.setApiKey(Secret.DEEPGRAM_API_KEY, it) } },
                             onClear = { scope.launch { repository.clearApiKey(Secret.DEEPGRAM_API_KEY) } }
                         )
+                        // The catalogue reloads itself on a key change.
+                        settings.sttSoniox -> ApiKeyField(
+                            label = "Soniox API key",
+                            isSet = settings.sonioxKeySet,
+                            onSave = { scope.launch { repository.setApiKey(Secret.SONIOX_API_KEY, it) } },
+                            onClear = { scope.launch { repository.clearApiKey(Secret.SONIOX_API_KEY) } }
+                        )
                         else -> ApiKeyField(
                             label = "OpenAI API key",
                             isSet = settings.openAiKeySet,
@@ -321,6 +349,12 @@ fun SettingsScreen(
                                     onOpenAiKeyChanged()
                                 }
                             }
+                        )
+                    }
+                    if (settings.sttSoniox) {
+                        SonioxRegionField(
+                            value = sonioxRegion(settings.sonioxRegion),
+                            onSelect = { scope.launch { repository.setSonioxRegion(it.id) } }
                         )
                     }
                     when {
@@ -347,6 +381,17 @@ fun SettingsScreen(
                             onSave = { scope.launch { repository.setDeepgramSttModel(it) } },
                             streams = { !settings.deepgramUpload }
                         )
+                        settings.sttSoniox -> ModelField(
+                            value = settings.sonioxSttModel,
+                            models = sonioxState.models?.map { it.id },
+                            loading = sonioxState.loading,
+                            error = sonioxState.error,
+                            supportingText = "Real-time models (stt-rt-…) stream; async models upload after you " +
+                                "stop. " + sttModeText(sonioxLive),
+                            onLoad = sonioxCatalog::refresh,
+                            onSave = { scope.launch { repository.setSonioxSttModel(it) } },
+                            streams = { sonioxStreams(it, sonioxState.models) }
+                        )
                         else -> ModelField(
                             value = settings.sttModel,
                             models = openAiSttModels,
@@ -363,13 +408,24 @@ fun SettingsScreen(
                             streams = ::isRealtimeTranscriptionModel
                         )
                     }
-                    SavableTextField(
-                        label = "Language code (optional, e.g. en)",
-                        value = settings.sttLanguage,
-                        supportingText = "Leave blank to auto-detect.",
-                        allowBlank = true,
-                        onSave = { scope.launch { repository.setSttLanguage(it) } }
-                    )
+                    // Soniox has its own setting: it takes several languages, which other providers may not.
+                    if (settings.sttSoniox) {
+                        SavableTextField(
+                            label = "Language codes (optional, e.g. en, bn)",
+                            value = settings.sonioxLanguages,
+                            supportingText = "Comma-separated; Soniox sticks to these. Leave blank to auto-detect.",
+                            allowBlank = true,
+                            onSave = { scope.launch { repository.setSonioxLanguages(it) } }
+                        )
+                    } else {
+                        SavableTextField(
+                            label = "Language code (optional, e.g. en)",
+                            value = settings.sttLanguage,
+                            supportingText = "Leave blank to auto-detect.",
+                            allowBlank = true,
+                            onSave = { scope.launch { repository.setSttLanguage(it) } }
+                        )
+                    }
                     SliderSetting(
                         label = "Timeout",
                         value = settings.sttTimeoutSeconds,
@@ -418,24 +474,32 @@ fun SettingsScreen(
                     LabeledRow(
                         icon = R.drawable.ic_mic,
                         title = "Skip silence",
-                        subtitle = "Detects speech on-device and sends only that, to cut cost",
+                        subtitle = if (sonioxLive) {
+                            "Detects speech on-device and sends only that; no saving on Soniox real-time " +
+                                "(billed by session length)"
+                        } else {
+                            "Detects speech on-device and sends only that, to cut cost"
+                        },
                         modifier = Modifier.weight(1f)
                     )
                     Spacer(Modifier.width(16.dp))
                     Switch(checked = settings.vadEnabled, onCheckedChange = null)
                 }
-                CardDivider()
-                FieldsColumn {
-                    SliderSetting(
-                        label = "Speed",
-                        value = settings.sttSpeedPercent,
-                        range = Settings.STT_SPEED_PERCENT_RANGE,
-                        step = 10,
-                        valueText = { "${it / 100f}x" }, // "1.0x" .. "2.0x"; Float.toString, no locale comma
-                        supportingText = "Speeds up the audio sent (pitch kept), so less is billed. Higher speeds " +
-                            "can lower accuracy; services with a per-request minimum may not save.",
-                        onSave = { scope.launch { repository.setSttSpeedPercent(it) } }
-                    )
+                // Soniox real-time bills wall-clock stream time: a speed-up saves nothing, so it's never applied.
+                if (!sonioxLive) {
+                    CardDivider()
+                    FieldsColumn {
+                        SliderSetting(
+                            label = "Speed",
+                            value = settings.sttSpeedPercent,
+                            range = Settings.STT_SPEED_PERCENT_RANGE,
+                            step = 10,
+                            valueText = { "${it / 100f}x" }, // "1.0x" .. "2.0x"; Float.toString, no locale comma
+                            supportingText = "Speeds up the audio sent (pitch kept), so less is billed. Higher " +
+                                "speeds can lower accuracy; services with a per-request minimum may not save.",
+                            onSave = { scope.launch { repository.setSttSpeedPercent(it) } }
+                        )
+                    }
                 }
             }
 
@@ -1076,6 +1140,39 @@ private fun ReasoningEffortField(value: String?, efforts: List<String>?, onSelec
             (listOf(null) + (efforts ?: Settings.REASONING_EFFORTS)).forEach { option ->
                 DropdownMenuItem(
                     text = { Text(reasoningEffortLabel(option)) },
+                    onClick = {
+                        expanded = false
+                        if (option != value) onSelect(option)
+                    },
+                    contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding
+                )
+            }
+        }
+    }
+}
+
+/** Read-only dropdown of the Soniox regions; saves on selection. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SonioxRegionField(value: SonioxRegion, onSelect: (SonioxRegion) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
+        OutlinedTextField(
+            value = value.label,
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("Region") },
+            supportingText = { Text("Your Soniox project's region (data residency); its key works only there.") },
+            singleLine = true,
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            SonioxRegion.entries.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(option.label) },
                     onClick = {
                         expanded = false
                         if (option != value) onSelect(option)

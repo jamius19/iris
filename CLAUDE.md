@@ -36,11 +36,11 @@ the provider interfaces so a new provider is just a new implementation. The one 
 ## Architecture
 | Package | Responsibility |
 |---|---|
-| (root) | `IrisApp` (Application), `AppContainer` (manual DI), `MainActivity` (hosts settings UI) |
+| (root) | `IrisApp` (Application), `AppContainer` (manual DI, app scope, Soniox catalogue), `MainActivity` (hosts settings UI) |
 | `data.settings` | Settings model, `SettingsRepository` (DataStore), `SecretStore` (Keystore crypto) |
 | `ui.settings` | Settings screen (Compose) |
 | `audio` | PCM16 mono recorder (rate per session); `SileroVad` (ORT wrapper), `SpeechGate` (pure VAD gate); `timeStretched` (Sonic speed-up) |
-| `stt` | `SpeechToTextProvider`; `stt.openai` / `stt.vercel` / `stt.deepgram` streaming + upload providers; `Wav.kt` (upload helpers) |
+| `stt` | `SpeechToTextProvider`; `stt.openai` / `stt.vercel` / `stt.deepgram` / `stt.soniox` streaming + upload providers; `Wav.kt` (upload helpers) |
 | `cleanup` | `CleanupProvider` interface; `cleanup.vercel` gateway implementation |
 | `dictation` | Session state machine/controller: audio -> STT -> cleanup -> insertion |
 | `overlay` | AccessibilityService, bubble overlay view, live-text panel |
@@ -145,7 +145,9 @@ Dictation (CP3):
   chunk carries `level` = `pcm16Level` (pure, unit tested): RMS dBFS mapped from -55..-12 dB to 0..1, then `pow 0.7`.
 - `stt.SpeechToTextProvider.transcribe(audio: Flow<ByteArray>, model, language, timeoutMs, onPartial): String`.
   Streams until `audio` completes, then finalizes and returns the final text; `onPartial` gets the whole live text;
-  cancelling the coroutine aborts. `timeoutMs`: how long to wait for the final transcript once all audio is sent;
+  cancelling the coroutine aborts. `language`: an ISO-639-1 code or blank (auto-detect); Soniox: a comma-separated
+  list (the controller passes `Settings.activeSttLanguage`: `sonioxLanguages` for Soniox, else the shared
+  `sttLanguage`). `timeoutMs`: how long to wait for the final transcript once all audio is sent;
   the controller passes `Settings.sttTimeoutSeconds` (5..30, default 10; min 5 so a too-short wait can't fail
   every dictation) per session, all providers use it (below). Failures are `SttException` with a user-readable
   message; exceptions from `audio` propagate unchanged (the VAD no-speech path relies on it). `warmUp()`:
@@ -153,7 +155,8 @@ Dictation (CP3):
   (default 24 000; the Gateway and upload providers override it). `streams` (default true): sends audio while
   recording over a socket (gets the VAD keep-alive); false = uploads after stop, never calls `onPartial` (the upload
   providers). `liveText(model)` (default `streams`; OpenAI realtime: `hasLiveText(model)`): reports text while
-  recording; it picks the VAD hangover.
+  recording; it picks the VAD hangover. `allowsSpeedUp` (default true; Soniox real-time false): the audio may be
+  sped up (Speed, below).
 - `dictation.DictationController` (one per service, main thread, built by `AppContainer.dictationController`;
   `audio: (sampleRate) -> Flow<AudioChunk>` = `audioRecorder::chunks`, `stt: (Settings) -> SpeechToTextProvider` =
   `AppContainer::speechToText`, picked once per session after the settings load, with `Settings.activeSttModel`;
@@ -167,9 +170,10 @@ Dictation (CP3):
   Listening, else `start()` (so the spinner ignores taps), and the pill to `stop()`. A tap that acts (start, stop,
   cancel; decided from the state at tap time) gets a haptic (`haptic()`: `EFFECT_HEAVY_CLICK`, touch usage, so the
   touch-haptics setting applies; needs `VIBRATE`); ignored taps, drags and focus-loss cancels don't. Finalizing
-  can't be cancelled by a tap: stalls end via the STT timeout `T` = `sttTimeoutSeconds` (OpenAI and Deepgram: 60 s
-  drain, then `T`; Gateway: 60 s drain, `T` stall, one reconnect within its budget, then `T` stall again) / cleanup
-  `cleanupTimeoutSeconds`.
+  can't be cancelled by a tap: stalls end via the STT timeout `T` = `sttTimeoutSeconds` (OpenAI, Deepgram and
+  Soniox real-time: 60 s drain, then `T`; Soniox async: `T` + audio / 4 for each request and for the polling, after
+  up to 5 s for the catalogue (strict-hints check) when hints are set and it isn't loaded; Gateway: 60 s drain, `T`
+  stall, one reconnect within its budget, then `T` stall again) / cleanup `cleanupTimeoutSeconds`.
   `level: StateFlow<Float>`: the latest chunk's `level` while Listening (set in `transformWhile`), 0 otherwise; the
   service pushes it to the pill. Stop records the stop time (`clock`); the audio flow (`transformWhile`) keeps
   sending queued chunks (e.g. behind a stalled main thread) until it has sent the first one read after that time
@@ -213,18 +217,20 @@ VAD ("Skip silence", CP7):
   only the bytes riding along are gated). `onCompletion` with no cause (the recording ended at the stop) logs
   `VAD: sent X ms of Y ms` (`Log.w` with the failure if the gate failed open) and, if nothing was sent, throws
   `SttException("No speech detected")`: the provider's `audio.collect` rethrows it, so the socket is cancelled before
-  any padding, `input_audio_buffer.commit` / `audio-done` or upload (provider tests pin this). Assumption: neither
-  service bills a session that received no audio (only `session.update` / the start frame).
-- Keep-alive (streaming providers only, `stt.streams`): in `transformWhile`, when the gate has sent nothing for
-  5 s (`readAtNanos` of the last emitted chunk, starting at the first chunk), one chunk-sized `ByteArray` of zeros
-  is emitted and the timer resets, since servers may end a stream that gets no audio (e.g. Deepgram after 10 s:
-  `1011 NET-0001`, which its KeepAlive message doesn't reset, and `NET-0002 no_audio_timeout`; the zeros are real
-  audio, so they satisfy both, and are billed; the Gateway upstreams' limits are undocumented); pings only keep the
-  TCP/NAT path. ~1 % of the withheld silence. Zeros don't count in `sentBytes`: a session with no speech still
-  ends with "No speech detected" and no commit / `audio-done` (if it ran >= 5 s, the socket got only keep-alive
-  zeros). Upload providers get none.
+  any padding, `input_audio_buffer.commit` / `audio-done` or upload (provider tests pin this). Assumption: no
+  provider bills a session that received no audio (only `session.update` / the start frame), except Soniox real-time,
+  which bills the stream's wall-clock duration.
+- Keep-alive (streaming providers only, `stt.streams`): in `transformWhile`, when the gate has sent nothing for 5 s
+  (`readAtNanos` of the last emitted chunk, starting at the first chunk), one chunk-sized `ByteArray` of zeros is
+  emitted and the timer resets, since servers may end a stream that gets no audio (e.g. Deepgram after 10 s: `1011
+  NET-0001`, which its KeepAlive message doesn't reset, and `NET-0002 no_audio_timeout`; Soniox after 20 s: `408
+  request_timeout`, so no `{"type":"keepalive"}` is needed; the zeros are real audio, so they satisfy all of these, and
+  are billed; the Gateway upstreams' limits are undocumented); pings only keep the TCP/NAT path. ~1 % of the withheld
+  silence. Zeros don't count in `sentBytes`: a session with no speech still ends with "No speech detected" and no commit
+  / `audio-done` (if it ran >= 5 s, the socket got only keep-alive zeros). Upload providers get none.
 - Setting `Settings.vadEnabled` (`vad_enabled`, default on): Settings > Transcription > "Skip silence" switch
-  (`ic_mic`), subtitle "Detects speech on-device and sends only that, to cut cost".
+  (`ic_mic`), subtitle "Detects speech on-device and sends only that, to cut cost" (live Soniox model: "Detects
+  speech on-device and sends only that; no saving on Soniox real-time (billed by session length)").
 
 Speed (CP8):
 - `audio.timeStretched(sampleRate, speed)` (`TimeStretch.kt`, pure, unit tested): `Flow<ByteArray>` of PCM16 mono
@@ -233,11 +239,13 @@ Speed (CP8):
   headers, start frame and `session.update` rates stay right). Sonic holds back up to ~30 ms; `flushStream()` emits
   that tail (measured 12-27 ms of output) when upstream completes normally; an upstream error propagates unchanged
   with no flush. Never emits empty arrays.
-- Placement: after `onCompletion` (VAD), before `stt.transcribe`, only when `sttSpeedPercent != 100` (at 1.0x no
-  Sonic object, the same arrays). After `transformWhile`, so only sent chunks reach Sonic and the flush happens
-  exactly at the stop; after `onCompletion`, so `NO_SPEECH` is thrown before any flush output (nothing reaches the
-  provider). Every provider acts (commit / `audio-done` / upload) only after its `audio.collect` returns, i.e. after
-  the tail. Keep-alive zeros go through Sonic too (keeps byte order; a 50 ms zero chunk comes out as ~25-45 ms).
+- Placement: after `onCompletion` (VAD), before `stt.transcribe`, only when `sttSpeedPercent != 100` and
+  `stt.allowsSpeedUp` (otherwise no Sonic object, the same arrays). Soniox real-time is never stretched (billed by
+  wall-clock stream time, wants real-time pace) and Settings hides the slider for a live Soniox model. After
+  `transformWhile`, so only sent chunks reach Sonic and the flush happens exactly at the stop; after `onCompletion`, so
+  `NO_SPEECH` is thrown before any flush output (nothing reaches the provider). Every provider acts (commit /
+  `audio-done` / upload) only after its `audio.collect` returns, i.e. after the tail. Keep-alive zeros go through Sonic
+  too (keeps byte order; a 50 ms zero chunk comes out as ~25-45 ms).
 - Counts/logs: `sentBytes`, `recordedBytes` and `VAD: sent X ms of Y ms` stay in recorded time; a completed
   stretched session logs `Speed Xx: sent A ms as B ms` (`Log.d`).
 - Thread: runs in the collector's context (the provider's `transcribe`, main thread), like `transformWhile`.
@@ -283,13 +291,18 @@ Cleanup + insertion (CP4):
 
 Providers (settings store a provider id for each):
 - STT provider: `Settings.sttProviderId` (`stt_provider_id`): `openai` (default) = OpenAI (direct),
-  `vercel-gateway` = Vercel AI Gateway, or `deepgram` = Deepgram (direct); an unknown id means OpenAI. Each has its
-  own model setting (`sttModel`, `gatewaySttModel`, default `openai/gpt-live-transcribe`, `deepgramSttModel`,
-  default `nova-3`) and key; `activeSttModel` / `sttKeySet` follow the selection; the language setting is
-  shared. `AppContainer` builds six providers; `speechToText(settings)` picks one by mode: Deepgram ->
+  `vercel-gateway` = Vercel AI Gateway, `deepgram` = Deepgram (direct), or `soniox` = Soniox (direct); an unknown
+  id means OpenAI. Each has its own model setting (`sttModel`, `gatewaySttModel`, default
+  `openai/gpt-live-transcribe`, `deepgramSttModel`, default `nova-3`, `sonioxSttModel`, default `stt-rt-v6`) and key
+  (Soniox also `sonioxRegion`, default `us`); `activeSttModel` / `sttKeySet` follow the selection; the language
+  setting is shared except Soniox's own `sonioxLanguages` (`activeSttLanguage`). `AppContainer` builds six
+  providers plus two per Soniox region; `speechToText(settings)` picks one by mode: Soniox -> the region's
+  `sonioxStreams(sonioxSttModel, catalogue)` ? streaming : upload; Deepgram ->
   `deepgramUpload` ? upload : streaming; Gateway -> `gatewaySttLive` ? streaming : upload; OpenAI ->
-  `isRealtimeTranscriptionModel(sttModel)` ? realtime : upload. The service's warm-up cache follows the selection.
-- WebSocket pings: all three streaming providers connect on `httpClient.newBuilder().pingInterval(30, SECONDS)`, so long
+  `isRealtimeTranscriptionModel(sttModel)` ? realtime : upload. The service's warm-up cache follows the selection
+  (Soniox: recomputed only on settings changes, so a mode that comes from the catalogue reaches the warm-up only at
+  the next settings change).
+- WebSocket pings: all four streaming providers connect on `httpClient.newBuilder().pingInterval(30, SECONDS)`, so long
   pauses VAD doesn't send don't let a mobile NAT drop the idle socket; a pong must arrive within the interval (OkHttp
   fails the socket when the previous ping is unanswered at the next one), like any other failure (Gateway: its one
   reconnect; OpenAI: error). On a saturated uplink the ping queues behind sent data in the kernel and network
@@ -483,6 +496,69 @@ Providers (settings store a provider id for each):
   failure). Logs `Timing: upload X KB, stop->response Y ms`.
 - Deepgram mode: `Settings.deepgramUpload` (`deepgram_upload`, default false), Settings > Transcription switch
   "Disable realtime streaming (cheaper)", shown only with Deepgram selected.
+- STT, Soniox (direct) (`stt.soniox.SonioxSpeechToText`, `real_time` models): WebSocket, one socket, no reconnect,
+  no async fallback. Verified 2026-11-13 (`stt.soniox.SonioxProtocol.kt`) against
+  https://docs.soniox.com/api-reference/stt/websocket-api, `/authentication/websocket-authentication`,
+  `/stt/rt/connection-keepalive`, `/stt/rt/error-handling` and `/api-reference/errors`. Connect the region's
+  `wss://stt-rt[.<region>].soniox.com/transcribe-websocket` with `Authorization: Bearer <key>` only (no
+  subprotocol, never the deprecated `api_key`). A bad key doesn't fail the handshake: an error frame follows. First
+  (text) frame `{model, audio_format:"pcm_s16le", sample_rate:16000, num_channels:1, language_hints?,
+  language_hints_strict?}` (`sonioxStartMessage`): hints = `sonioxLanguageHints(language)` (split on `,`, trimmed,
+  lowercased, unique; not filtered against the catalogue), only when non-empty; strict only with hints and when the
+  model's catalogue entry has `supports_language_hints_strict` (else the server answers 400). The start frame goes
+  out at the first non-empty chunk (or at the end if none), so the mic opens at once; with hints it waits for
+  `SonioxCatalog.entry` (up to 5 s if the catalogue isn't loaded; the audio queues meanwhile in the controller's
+  `flowOn`/`produceIn` channels, 2 x 64 chunks = 6.4 s, so nothing is lost, but the waveform pauses). Audio = raw
+  PCM16 16 kHz binary frames, never empty; end = an empty TEXT frame (`""`), then OkHttp drain (60 s, "Timed out
+  sending audio to Soniox"), then `T` for a `{"tokens":[], "finished":true}` response ("Timed out waiting for the
+  transcript"). Responses (`parseSonioxEvent`): `tokens[]` (`text`, `is_final`; `<fin>`/`<end>` dropped) +
+  `finished`; `SonioxTranscript`: finals appended once, the tail replaced by each response's non-finals, tokens
+  carry their own spacing (concatenated, trimmed); final = the finals. Error frame `{error_code, error_type,
+  error_message}` (then the server closes) = `sonioxErrorMessage`: 401 key, 402 "out of credits or over budget",
+  403 permission, 429 "Soniox limit reached: <message>", 5xx server, else "Soniox error: <message>"; except 400
+  "No audio received." (`isNoAudioError`, the one message match) = "" -> "No speech detected". A close before
+  `finished` = "Soniox closed the connection: <reason>"; rejected handshake = `sonioxHttpErrorMessage` (REST error
+  body `message`, else the first `validation_errors[].message`); network = "Network error: ...". `allowsSpeedUp`
+  false; `streams`/`liveText` true (live VAD hangover; the 5 s keep-alive zeros cover Soniox's 20 s no-audio 408).
+  Warm-up: keyless `HEAD` on the WebSocket URL through the HTTP/1.1 client like Deepgram's (426 Upgrade Required,
+  `Connection: keep-alive`, ~280 ms warm with curl `--http1.1`, 2026-11-13), 3 min throttle, reset by `transcribe`
+  and by a failure (idle timeout unmeasured). Logs `Timing: transcribe->ws open X ms` and `Timing: end->finished X
+  ms`.
+- STT, Soniox async upload (`stt.soniox.SonioxFileTranscription`, `async` models): REST job flow, verified
+  2026-11-13 against `/api-reference/stt/files/upload_file`, `.../files/delete_file`,
+  `.../transcriptions/{create,get,delete}_transcription`, `.../get_transcription_transcript`. `Authorization:
+  Bearer <key>`; key checked before collecting. `POST <base>/v1/files` multipart `file` (`audio.wav`, 16 kHz
+  `wavBytes`) -> `{id}`; `POST /v1/transcriptions` `{model, file_id, language_hints?, language_hints_strict?}` (same
+  rules; the strict check's `SonioxCatalog.entry` runs after the stop, so with hints and no catalogue the upload starts
+  up to 5 s later (inside `stop->transcript`)) -> `{id}`; poll `GET /v1/transcriptions/{id}` after 250, 500, then
+  every 1000 ms until `completed` (`error`/`failed` = "Soniox error: <error_message | error_type | transcription
+  failed>"); then `GET .../{id}/transcript` -> `text`. Any 2xx accepted; missing ids/status/text =
+  "Unexpected response from Soniox". Budget = `uploadReadTimeoutMs(T, audio)`: each request's read timeout, and the
+  poll deadline from the create response ("Timed out waiting for the transcript"); an upload timeout before the body
+  is written = "Timed out sending audio to Soniox". Always (success, error, timeout, cancel): fire-and-forget `DELETE
+  /v1/transcriptions/{id}` and `DELETE /v1/files/{id}` (enqueued on the base client, outlive cancellation; a job
+  still processing answers 409 and is left to the 30-day auto-delete: no retry). Warm-up: keyless `HEAD
+  /v1/models` (405, HTTP/1.1 only, keep-alive; 2026-11-13) on the default client, 3 min throttle (reset by a
+  failure). Logs `Timing: upload X KB, stop->transcript Y ms, N polls`.
+- Soniox catalogue (`stt.soniox.SonioxModels.kt`, `SonioxCatalog`): `GET <base>/v1/models` with the key (401
+  without one) -> `{models:[{id, transcription_mode, supports_language_hints_strict, ...}]}`
+  (`parseSonioxModels`: sorted, no-id entries skipped, missing flag = false). No/blank key = "Set your Soniox API
+  key to load models", unsendable key = "Invalid Soniox API key" (no request); errors `sonioxHttpErrorMessage`,
+  transport `modelsNetworkErrorMessage`, no `models` = "Unexpected response from Soniox". `SonioxCatalog` (one per
+  app in `AppContainer`, main-thread app scope, in memory): `reload()` (cancels a running load, whose result is
+  never written, clears, loads) runs at app start and whenever the stored Soniox key ciphertext
+  (`SecretStore.changes`) or `sonioxRegion` changes; `refresh()` loads unless one is running (refresh button,
+  first menu open, screen open with Soniox, a session); `entry(model)`: loaded -> the entry or null (no refetch);
+  not loaded -> loads and waits up to 5 s (`CATALOG_WAIT_MS`), null on timeout/failure (the load keeps running).
+  Mode (`sonioxStreams`): the entry's `transcription_mode == "real_time"`; no entry (not loaded, typed id) = id
+  starts with `stt-rt-` (`speechToText` is sync: no wait). Typed ids not in a loaded catalogue: no refetch, strict
+  omitted.
+- Soniox region: `Settings.sonioxRegion` (`soniox_region`: us, eu, jp, in; unknown = us), `SonioxRegion` with the
+  REST / WebSocket domains `api[.eu|.jp|.in].soniox.com` / `stt-rt[.eu|.jp|.in].soniox.com`; a project's key works
+  only on its region's domains. Soniox languages: `Settings.sonioxLanguages` (`soniox_languages`, default "",
+  trimmed on save), separate from the shared `sttLanguage` (other providers take one code).
+- Soniox pricing (2026-11-13): real-time ~$0.12/h, billed by wall-clock stream time (VAD gaps don't cut it, so a
+  long pause still costs); async ~$0.10/h by audio duration (VAD and Speed cut it).
 - Cleanup: Vercel AI Gateway, OpenAI-compatible `POST https://ai-gateway.vercel.sh/v1/chat/completions`,
   `Authorization: Bearer <key>`. Structured output via
   `response_format: {type:"json_schema", json_schema:{name, schema, strict:true}}` with schema
@@ -546,25 +622,32 @@ Providers (settings store a provider id for each):
   No separate API keys card: each key field sits with the provider that uses it. Transcription shows only the
   selected provider's key; Cleanup always shows the Gateway key (the same stored key, so with Gateway STT both
   cards show it and saving either updates both).
-  Settings > Transcription: three radio rows (OpenAI (direct) / Vercel AI Gateway / Deepgram, each naming its key;
-  the selected one appends " · not set" in the error colour without its key), then the selected provider's key
-  field, then the OpenAI model combobox
+  Settings > Transcription: four radio rows (OpenAI (direct) / Vercel AI Gateway / Deepgram / Soniox, each naming
+  its key; the selected one appends " · not set" in the error colour without its key), then the selected provider's
+  key field, then (Soniox only) a read-only "Region" dropdown (`SonioxRegionField`, `PrimaryNotEditable`, saves on
+  select, hint "Your Soniox project's region (data residency); its key works only there."), then the OpenAI model
+  combobox
   (below; lists the key's transcription models (OpenAI model list above); hint "Realtime models
   (gpt-live-transcribe, gpt-transcribe, ...) stream; other models upload after you stop. Mode: live|streams, text after stop|after stop") or the Gateway
   model combobox (lists all transcription models; hint "Live models show text as you speak; others transcribe after
   you stop. Mode: ..." for the saved model) or the Deepgram model combobox (static `DEEPGRAM_MODELS`, no fetch:
   refresh only reopens the menu; hint "Deepgram models stream unless realtime streaming is disabled below. Mode:
-  live|after stop"). In the menus a streaming model's item ends with the `ic_audio_lines`
+  live|after stop") or the Soniox model combobox (the app-level catalogue's ids; hint "Real-time models (stt-rt-…)
+  stream; async models upload after you stop. Mode: live|after stop"). In the menus a streaming model's item ends
+  with the `ic_audio_lines`
   icon (18 dp, `onSurfaceVariant`, content description "Streams"; `streams`: OpenAI `isRealtimeTranscriptionModel`,
-  Gateway `isStreamingTranscriptionModel`, Deepgram every model while `deepgramUpload` is off), others with nothing.
-  The OpenAI list loads only while OpenAI is selected (`sttOpenAi` = neither Gateway nor Deepgram). Then the shared
-  language field, then a "Timeout" `SliderSetting` (5..30 s, step 1) for `sttTimeoutSeconds`, hint "How long to
-  wait for the final transcript after you stop.", then (Deepgram only) a divider and the "Disable realtime
-  streaming (cheaper)" switch row (`ic_audio_lines`, subtitle "Uploads after you stop: no live text, about 44%
-  cheaper", `deepgramUpload`), then a divider and the "Skip silence" switch row (`vadEnabled`), then a divider and
-  a "Speed" `SliderSetting` (100..200 %, step 10, shown "1.0x".."2.0x") for `sttSpeedPercent`, hint "Speeds up the
-  audio sent (pitch kept), so less is billed. Higher speeds can lower accuracy; services with a per-request minimum
-  may not save.", saved on release.
+  Gateway `isStreamingTranscriptionModel`, Deepgram every model while `deepgramUpload` is off, Soniox
+  `sonioxStreams`), others with nothing. The OpenAI list loads only while OpenAI is selected (`sttOpenAi` = none of
+  Gateway/Deepgram/Soniox); the Soniox catalogue loads when the screen opens with Soniox selected (or it is
+  selected) if not loaded, and reloads itself on a key/region change. Then the shared language field (Soniox: its
+  own field, "Language codes (optional, e.g. en, bn)", hint "Comma-separated; Soniox sticks to these. Leave blank to
+  auto-detect.", `sonioxLanguages`), then a "Timeout" `SliderSetting` (5..30 s, step 1) for `sttTimeoutSeconds`, hint
+  "How long to wait for the final transcript after you stop.", then (Deepgram only) a divider and the "Disable realtime
+  streaming (cheaper)" switch row (`ic_audio_lines`, subtitle "Uploads after you stop: no live text, about 44% cheaper",
+  `deepgramUpload`), then a divider and the "Skip silence" switch row (`vadEnabled`), then a divider and a "Speed"
+  `SliderSetting` (100..200 %, step 10, shown "1.0x".."2.0x") for `sttSpeedPercent`, hint "Speeds up the audio sent
+  (pitch kept), so less is billed. Higher speeds can lower accuracy; services with a per-request minimum may not save.",
+  saved on release; hidden (with its divider) for a live Soniox model.
   Settings shows the cleanup model (and both STT models: `ModelField`) as an editable M3
   `ExposedDropdownMenuBox` (`PrimaryEditable` field): any
   custom id can be typed; typing filters the list (case-insensitive substring); explicit Save as other fields.
@@ -598,6 +681,10 @@ Providers (settings store a provider id for each):
   choice and one shared key. Recording rate is per session (`sampleRate(model)`), not resampled in Kotlin, except
   a 16 kHz copy for the VAD. The mode follows the model (streaming vs upload after stop), no separate setting.
   Deepgram (direct, not via the Gateway: no `deepgram/*` there) is a third provider for Nova-3; it streams by default.
+- **Soniox (direct) is a fourth provider**: real-time models stream, async ones upload after stop; the mode
+  follows the catalogue's `transcription_mode` (id rule `stt-rt-*` until it loads). Soniox real-time disables
+  speed-up (billed by stream time). The catalogue is app-level (`SonioxCatalog`), not just the settings screen's,
+  because the start frame needs `supports_language_hints_strict` (sending it to a model without it is a 400).
 - **Deepgram's mode follows a setting, not the model** (the one exception): every Nova model does both, so the
   Deepgram-only "Disable realtime streaming (cheaper)" switch picks the ~44 % cheaper pre-recorded upload.
 - **VAD on device (Silero, ONNX Runtime 1.28.0 pinned)** to cut STT cost; fails open, never loses dictation.
@@ -690,6 +777,14 @@ Not covered by unit tests; check on a real device (ideally more than one OEM) af
   sent audio (`VAD: sent X ms`), not wall time; speed 1.5x/2.0x accuracy. "Disable realtime streaming" on: no panel
   while recording, spinner after stop, text inserted, console bills it as pre-recorded; the switch shows only with
   Deepgram selected and the menu's audio-lines icons follow it.
+- Soniox (S1-S7): (1) `stt-rt-v6` + `en`: live text streams, the final is inserted, log `Timing: end->finished`;
+  (2) languages "en, bn" with mixed speech: the start frame has both hints and `language_hints_strict`; (3) bad key =
+  key message while Listening; (4) a pause >= 60 s with VAD on: no 408; (5) `stt-async-v6`: no panel while
+  recording, spinner after stop, text inserted, no leftover files/transcriptions in the Soniox console, a poll
+  timeout (e.g. Timeout 5 s with a long dictation) or turning the service off mid-poll leaves no file (a failed
+  transcription may remain until Soniox's 30-day auto-delete); (6) EU region with an EU key works, a US key on EU =
+  key error; (7) app start offline, then a dictation online: the catalogue is fetched at session start. Speed hidden
+  for `stt-rt-*`, shown for async; console usage matches (real-time = wall-clock stream time).
 - Long Gateway upload: a 10 min Gateway after-stop dictation (VAD off) succeeds; on a 413, reuse `splitAtPauses`
   for the Gateway too.
 - Gateway STT with a real voice: live text streams and the final is inserted (default model, plus a 16 kHz one:
@@ -740,3 +835,4 @@ Update this section as checkpoints land.
 | CP7 | On-device VAD (skip silence) + upload-after-stop transcription models | Done (real-voice device check pending) |
 | CP8 | Speed-up (time-stretch) | Done (real-voice device check pending) |
 | CP9 | Deepgram Nova-3 STT | Done (real-voice device check pending) |
+| CP10 | Soniox STT (real-time + async) | Done (real-voice device check pending) |

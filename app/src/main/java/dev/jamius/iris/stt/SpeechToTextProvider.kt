@@ -26,6 +26,12 @@ interface SpeechToTextProvider {
     fun liveText(model: String): Boolean = streams
 
     /**
+     * The audio may be sped up (Settings' Speed); false = always sent as recorded (Soniox real-time bills wall-clock
+     * time and wants real-time pace, so a speed-up saves nothing and adds risk).
+     */
+    val allowsSpeedUp: Boolean get() = true
+
+    /**
      * Streams [audio] (PCM16 mono chunks at [sampleRate] of [model]) to the service and reports the whole live
      * transcript through [onPartial] whenever it changes. Once [audio] completes, finalizes and returns the final
      * transcript. Cancel the calling coroutine to abort and discard the session.
@@ -33,7 +39,7 @@ interface SpeechToTextProvider {
      * Throws [SttException] on provider failures; exceptions from [audio] propagate unchanged.
      * [onPartial] runs in the caller's context.
      *
-     * @param language ISO-639-1 code, or blank to auto-detect.
+     * @param language ISO-639-1 code, or blank to auto-detect (Soniox: a comma-separated list).
      * @param timeoutMs how long to wait for the final transcript once all audio is sent.
      */
     suspend fun transcribe(

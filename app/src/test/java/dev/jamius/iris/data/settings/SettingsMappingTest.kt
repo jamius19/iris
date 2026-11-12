@@ -47,8 +47,14 @@ class SettingsMappingTest {
         assertEquals(Settings.DEFAULT_DEEPGRAM_STT_MODEL, settings.deepgramSttModel)
         assertEquals("nova-3", settings.deepgramSttModel)
         assertFalse(settings.deepgramUpload)
+        assertEquals(Settings.DEFAULT_SONIOX_STT_MODEL, settings.sonioxSttModel)
+        assertEquals("stt-rt-v6", settings.sonioxSttModel)
+        assertEquals(Settings.DEFAULT_SONIOX_REGION, settings.sonioxRegion)
+        assertEquals("us", settings.sonioxRegion)
+        assertEquals("", settings.sonioxLanguages)
         assertFalse(settings.sttGateway)
         assertFalse(settings.sttDeepgram)
+        assertFalse(settings.sttSoniox)
         assertEquals(Settings.DEFAULT_STT_MODEL, settings.activeSttModel)
         assertEquals("", settings.sttLanguage)
         assertEquals(Settings.DEFAULT_STT_TIMEOUT_SECONDS, settings.sttTimeoutSeconds)
@@ -64,6 +70,7 @@ class SettingsMappingTest {
         assertFalse(settings.openAiKeySet)
         assertFalse(settings.gatewayKeySet)
         assertFalse(settings.deepgramKeySet)
+        assertFalse(settings.sonioxKeySet)
         assertEquals(Settings.DEFAULT_BUBBLE_SIDE, settings.bubbleSide)
         assertEquals(Settings.DEFAULT_BUBBLE_Y_FRACTION, settings.bubbleYFraction)
         assertEquals(Settings.DEFAULT_PANEL_LINES, settings.panelLines)
@@ -79,6 +86,9 @@ class SettingsMappingTest {
             Keys.GATEWAY_STT_LIVE to false,
             Keys.DEEPGRAM_STT_MODEL to "nova-3-medical",
             Keys.DEEPGRAM_UPLOAD to true,
+            Keys.SONIOX_STT_MODEL to "stt-async-v6",
+            Keys.SONIOX_REGION to "eu",
+            Keys.SONIOX_LANGUAGES to "en, bn",
             Keys.STT_LANGUAGE to "fr",
             Keys.STT_TIMEOUT_SECONDS to 20,
             Keys.VAD_ENABLED to false,
@@ -95,7 +105,7 @@ class SettingsMappingTest {
             Keys.PANEL_WIDTH_PERCENT to 70,
         )
 
-        val settings = prefs.toSettings(setOf(Secret.GATEWAY_API_KEY, Secret.DEEPGRAM_API_KEY))
+        val settings = prefs.toSettings(setOf(Secret.GATEWAY_API_KEY, Secret.DEEPGRAM_API_KEY, Secret.SONIOX_API_KEY))
 
         assertEquals(Settings.STT_PROVIDER_VERCEL_GATEWAY, settings.sttProviderId)
         assertEquals("gpt-transcribe", settings.sttModel)
@@ -103,6 +113,9 @@ class SettingsMappingTest {
         assertFalse(settings.gatewaySttLive)
         assertEquals("nova-3-medical", settings.deepgramSttModel)
         assertTrue(settings.deepgramUpload)
+        assertEquals("stt-async-v6", settings.sonioxSttModel)
+        assertEquals("eu", settings.sonioxRegion)
+        assertEquals("en, bn", settings.sonioxLanguages)
         assertEquals("fr", settings.sttLanguage)
         assertEquals(20, settings.sttTimeoutSeconds)
         assertFalse(settings.vadEnabled)
@@ -116,6 +129,7 @@ class SettingsMappingTest {
         assertFalse(settings.openAiKeySet)
         assertTrue(settings.gatewayKeySet)
         assertTrue(settings.deepgramKeySet)
+        assertTrue(settings.sonioxKeySet)
         assertEquals(BubbleSide.LEFT, settings.bubbleSide)
         assertEquals(0.75f, settings.bubbleYFraction)
         assertEquals(5, settings.panelLines)
@@ -128,12 +142,16 @@ class SettingsMappingTest {
             Keys.STT_MODEL to "gpt-transcribe",
             Keys.GATEWAY_STT_MODEL to "spacexai/grok-stt",
             Keys.DEEPGRAM_STT_MODEL to "nova-2",
+            Keys.SONIOX_STT_MODEL to "stt-async-v6",
+            Keys.STT_LANGUAGE to "fr",
+            Keys.SONIOX_LANGUAGES to "en, bn",
         )
 
         val openAi = prefs.toSettings(setOf(Secret.OPENAI_API_KEY))
         assertFalse(openAi.sttGateway)
         assertEquals("gpt-transcribe", openAi.activeSttModel)
         assertTrue(openAi.sttKeySet)
+        assertEquals("fr", openAi.activeSttLanguage)
 
         prefs[Keys.STT_PROVIDER_ID] = Settings.STT_PROVIDER_VERCEL_GATEWAY
         val gateway = prefs.toSettings(setOf(Secret.OPENAI_API_KEY))
@@ -149,6 +167,16 @@ class SettingsMappingTest {
         assertEquals("nova-2", deepgram.activeSttModel)
         assertFalse(deepgram.sttKeySet)
         assertTrue(prefs.toSettings(setOf(Secret.DEEPGRAM_API_KEY)).sttKeySet)
+        assertEquals("fr", deepgram.activeSttLanguage)
+
+        prefs[Keys.STT_PROVIDER_ID] = Settings.STT_PROVIDER_SONIOX
+        val soniox = prefs.toSettings(setOf(Secret.OPENAI_API_KEY, Secret.DEEPGRAM_API_KEY))
+        assertTrue(soniox.sttSoniox)
+        assertFalse(soniox.sttDeepgram)
+        assertEquals("stt-async-v6", soniox.activeSttModel)
+        assertFalse(soniox.sttKeySet)
+        assertTrue(prefs.toSettings(setOf(Secret.SONIOX_API_KEY)).sttKeySet)
+        assertEquals("en, bn", soniox.activeSttLanguage)
 
         prefs[Keys.STT_PROVIDER_ID] = "unknown"
         val unknown = prefs.toSettings(setOf(Secret.OPENAI_API_KEY))

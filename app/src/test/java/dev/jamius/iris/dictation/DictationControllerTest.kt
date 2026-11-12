@@ -57,10 +57,12 @@ class DictationControllerTest {
         private val rate: Int = 24_000,
         override val streams: Boolean = true,
         private val live: Boolean = streams,
+        override val allowsSpeedUp: Boolean = true,
         private val result: suspend () -> String,
     ) : SpeechToTextProvider {
         var calls = 0
         var model = ""
+        var language = ""
         var timeoutMs = 0L
         val received = mutableListOf<ByteArray>()
 
@@ -77,6 +79,7 @@ class DictationControllerTest {
         ): String {
             calls++
             this.model = model
+            this.language = language
             this.timeoutMs = timeoutMs
             var chunks = 0
             audio.collect {
@@ -189,6 +192,28 @@ class DictationControllerTest {
         assertEquals(DictationState.Done("Hi"), controller.state.value)
         assertEquals(16_000, recordedRate)
         assertEquals("google/gemini-3.5-transcribe-live", stt.model)
+    }
+
+    @Test
+    fun sessionPassesTheActiveProvidersLanguage() = runTest {
+        val cases = listOf(Settings.STT_PROVIDER_OPENAI to "fr", Settings.STT_PROVIDER_SONIOX to "en, bn")
+        for ((provider, expected) in cases) {
+            val stt = FakeStt { "Hi" }
+            val settings = emptyPreferences().toSettings(emptySet()).copy(
+                sttProviderId = provider,
+                sttLanguage = "fr",
+                sonioxLanguages = "en, bn"
+            )
+            val controller = controller(stt, settings = settings)
+
+            controller.start()
+            runCurrent()
+            controller.stop()
+            advanceTimeBy(101)
+
+            assertEquals(DictationState.Done("Hi"), controller.state.value)
+            assertEquals(expected, stt.language)
+        }
     }
 
     @Test
@@ -800,6 +825,28 @@ class DictationControllerTest {
             stt,
             audio = frames.map { it.also { bytes -> recorded += bytes } },
             settings = speed(100),
+            vadModel = speechAt(20..29)
+        )
+
+        controller.start()
+        runCurrent()
+        advanceTimeBy(100 * 32L + 10)
+        controller.stop()
+        advanceTimeBy(32)
+
+        assertEquals(DictationState.Done("Hi"), controller.state.value)
+        assertEquals((6..81).toList(), tags(stt.received))
+        stt.received.forEach { assertSame(recorded[it[0].toInt() and 0xFF], it) }
+    }
+
+    @Test
+    fun speed200IsIgnoredWhenTheProviderDisallowsIt() = runTest {
+        val stt = FakeStt(rate = 16_000, allowsSpeedUp = false) { "Hi" }
+        val recorded = mutableListOf<ByteArray>()
+        val controller = controller(
+            stt,
+            audio = frames.map { it.also { bytes -> recorded += bytes } },
+            settings = speed(200),
             vadModel = speechAt(20..29)
         )
 

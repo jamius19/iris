@@ -17,7 +17,8 @@ class MainActivity : ComponentActivity() {
                 SettingsScreen(
                     repository = container.settingsRepository,
                     cleanup = container.cleanup,
-                    openAiModels = container::openAiTranscriptionModels
+                    openAiModels = container::openAiTranscriptionModels,
+                    sonioxCatalog = container.sonioxCatalog
                 )
             }
         }

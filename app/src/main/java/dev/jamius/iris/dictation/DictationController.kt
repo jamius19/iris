@@ -193,7 +193,8 @@ class DictationController(
                     }
                     // After the gate and the stop: only sent chunks are stretched, and the tail is flushed at the
                     // stop (after a NO_SPEECH check, so a session without speech sends nothing).
-                    val sent = if (config.sttSpeedPercent == Settings.DEFAULT_STT_SPEED_PERCENT) chunks else {
+                    val asRecorded = config.sttSpeedPercent == Settings.DEFAULT_STT_SPEED_PERCENT || !stt.allowsSpeedUp
+                    val sent = if (asRecorded) chunks else {
                         val speed = config.sttSpeedPercent / 100f
                         var inBytes = 0L
                         var outBytes = 0L
@@ -205,7 +206,13 @@ class DictationController(
                                 Log.d(TAG, "Speed ${speed}x: sent ${ms(inBytes, rate)} ms as ${ms(outBytes, rate)} ms")
                             }
                     }
-                    stt.transcribe(sent, model, config.sttLanguage, config.sttTimeoutSeconds * 1000L, ::onPartial)
+                    stt.transcribe(
+                        sent,
+                        model,
+                        config.activeSttLanguage,
+                        config.sttTimeoutSeconds * 1000L,
+                        ::onPartial
+                    )
                 }
                 if (text.isBlank()) DictationState.Error(NO_SPEECH) else onFinalTranscript(text)
             } catch (e: CancellationException) {

@@ -13,6 +13,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
@@ -27,6 +28,7 @@ enum class Secret(val prefKey: Preferences.Key<String>) {
     OPENAI_API_KEY(stringPreferencesKey("openai_api_key")),
     GATEWAY_API_KEY(stringPreferencesKey("gateway_api_key")),
     DEEPGRAM_API_KEY(stringPreferencesKey("deepgram_api_key")),
+    SONIOX_API_KEY(stringPreferencesKey("soniox_api_key")),
 }
 
 /**
@@ -55,6 +57,12 @@ class SecretStore(private val dataStore: DataStore<Preferences>) {
         )
         generator.generateKey()
     }
+
+    /**
+     * [secret]'s stored ciphertext, never decrypted: null when cleared, and a new value on every [put] (fresh IV),
+     * even of the same key. Tells when a key was saved, replaced or cleared (drives the Soniox catalogue reload).
+     */
+    fun changes(secret: Secret): Flow<String?> = dataStore.data.map { it[secret.prefKey] }.distinctUntilChanged()
 
     suspend fun get(secret: Secret): String? = dataStore.data.first()[secret.prefKey]?.let { decrypt(it) }
 

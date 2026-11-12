@@ -50,6 +50,18 @@ class SettingsRepository(
         dataStore.edit { it[Keys.DEEPGRAM_UPLOAD] = enabled }
     }
 
+    suspend fun setSonioxSttModel(model: String) {
+        dataStore.edit { it[Keys.SONIOX_STT_MODEL] = model.trim() }
+    }
+
+    suspend fun setSonioxRegion(id: String) {
+        dataStore.edit { it[Keys.SONIOX_REGION] = id }
+    }
+
+    suspend fun setSonioxLanguages(languages: String) {
+        dataStore.edit { it[Keys.SONIOX_LANGUAGES] = languages.trim() }
+    }
+
     suspend fun setSttLanguage(language: String) {
         dataStore.edit { it[Keys.STT_LANGUAGE] = language.trim() }
     }
@@ -137,6 +149,9 @@ internal object Keys {
     val GATEWAY_STT_LIVE = booleanPreferencesKey("gateway_stt_live")
     val DEEPGRAM_STT_MODEL = stringPreferencesKey("deepgram_stt_model")
     val DEEPGRAM_UPLOAD = booleanPreferencesKey("deepgram_upload")
+    val SONIOX_STT_MODEL = stringPreferencesKey("soniox_stt_model")
+    val SONIOX_REGION = stringPreferencesKey("soniox_region")
+    val SONIOX_LANGUAGES = stringPreferencesKey("soniox_languages")
     val STT_LANGUAGE = stringPreferencesKey("stt_language")
     val STT_TIMEOUT_SECONDS = intPreferencesKey("stt_timeout_seconds")
     val VAD_ENABLED = booleanPreferencesKey("vad_enabled")
@@ -174,6 +189,9 @@ internal fun Preferences.toSettings(storedSecrets: Set<Secret>): Settings {
         gatewaySttLive = this[Keys.GATEWAY_STT_LIVE] ?: true,
         deepgramSttModel = this[Keys.DEEPGRAM_STT_MODEL] ?: Settings.DEFAULT_DEEPGRAM_STT_MODEL,
         deepgramUpload = this[Keys.DEEPGRAM_UPLOAD] ?: false,
+        sonioxSttModel = this[Keys.SONIOX_STT_MODEL] ?: Settings.DEFAULT_SONIOX_STT_MODEL,
+        sonioxRegion = this[Keys.SONIOX_REGION] ?: Settings.DEFAULT_SONIOX_REGION,
+        sonioxLanguages = this[Keys.SONIOX_LANGUAGES] ?: "",
         sttLanguage = this[Keys.STT_LANGUAGE] ?: "",
         sttTimeoutSeconds = this[Keys.STT_TIMEOUT_SECONDS] ?: Settings.DEFAULT_STT_TIMEOUT_SECONDS,
         vadEnabled = this[Keys.VAD_ENABLED] ?: true,
@@ -192,6 +210,7 @@ internal fun Preferences.toSettings(storedSecrets: Set<Secret>): Settings {
         openAiKeySet = Secret.OPENAI_API_KEY in storedSecrets,
         gatewayKeySet = Secret.GATEWAY_API_KEY in storedSecrets,
         deepgramKeySet = Secret.DEEPGRAM_API_KEY in storedSecrets,
+        sonioxKeySet = Secret.SONIOX_API_KEY in storedSecrets,
         bubbleSide = this[Keys.BUBBLE_SIDE]?.let(BubbleSide::valueOf) ?: Settings.DEFAULT_BUBBLE_SIDE,
         bubbleYFraction = this[Keys.BUBBLE_Y_FRACTION] ?: Settings.DEFAULT_BUBBLE_Y_FRACTION,
         panelLines = this[Keys.PANEL_LINES] ?: Settings.DEFAULT_PANEL_LINES,
