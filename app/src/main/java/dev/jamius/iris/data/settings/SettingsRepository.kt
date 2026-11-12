@@ -54,6 +54,10 @@ class SettingsRepository(
         dataStore.edit { it[Keys.VAD_ENABLED] = enabled }
     }
 
+    suspend fun setSttSpeedPercent(percent: Int) {
+        dataStore.edit { it[Keys.STT_SPEED_PERCENT] = percent }
+    }
+
     suspend fun setCleanupEnabled(enabled: Boolean) {
         dataStore.edit { it[Keys.CLEANUP_ENABLED] = enabled }
     }
@@ -126,6 +130,7 @@ internal object Keys {
     val STT_LANGUAGE = stringPreferencesKey("stt_language")
     val STT_TIMEOUT_SECONDS = intPreferencesKey("stt_timeout_seconds")
     val VAD_ENABLED = booleanPreferencesKey("vad_enabled")
+    val STT_SPEED_PERCENT = intPreferencesKey("stt_speed_percent")
     val CLEANUP_ENABLED = booleanPreferencesKey("cleanup_enabled")
     val CLEANUP_PROVIDER_ID = stringPreferencesKey("cleanup_provider_id")
     val CLEANUP_MODEL = stringPreferencesKey("cleanup_model")
@@ -160,6 +165,7 @@ internal fun Preferences.toSettings(storedSecrets: Set<Secret>): Settings {
         sttLanguage = this[Keys.STT_LANGUAGE] ?: "",
         sttTimeoutSeconds = this[Keys.STT_TIMEOUT_SECONDS] ?: Settings.DEFAULT_STT_TIMEOUT_SECONDS,
         vadEnabled = this[Keys.VAD_ENABLED] ?: true,
+        sttSpeedPercent = this[Keys.STT_SPEED_PERCENT] ?: Settings.DEFAULT_STT_SPEED_PERCENT,
         cleanupEnabled = this[Keys.CLEANUP_ENABLED] ?: false,
         cleanupProviderId = this[Keys.CLEANUP_PROVIDER_ID] ?: Settings.CLEANUP_PROVIDER_VERCEL_GATEWAY,
         cleanupModel = this[Keys.CLEANUP_MODEL] ?: Settings.DEFAULT_CLEANUP_MODEL,

@@ -26,8 +26,12 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.EmptyCoroutineContext
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.math.PI
+import kotlin.math.roundToInt
+import kotlin.math.sin
 
 class DictationControllerTest {
 
@@ -767,6 +771,84 @@ class DictationControllerTest {
         assertEquals(DictationState.Done("Hello world"), controller.state.value)
         assertEquals(listOf("Hello world"), finals)
         assertEquals(16_000, recordedRate)
+    }
+
+    /** A 50 ms chunk of a 200 Hz sine at 16 kHz every 50 ms until cancelled; [sent] collects them. */
+    private fun sine(sent: MutableList<ByteArray>): Flow<ByteArray> = flow {
+        var n = 0
+        while (true) {
+            val chunk = ByteArray(1_600)
+            for (i in 0 until 800) {
+                val sample = (sin(2 * PI * 200 * (n * 800 + i) / 16_000) * 10_000).roundToInt()
+                chunk[2 * i] = sample.toByte()
+                chunk[2 * i + 1] = (sample shr 8).toByte()
+            }
+            n++
+            sent += chunk
+            emit(chunk)
+            delay(50)
+        }
+    }
+
+    private fun speed(percent: Int) = emptyPreferences().toSettings(emptySet()).copy(sttSpeedPercent = percent)
+
+    @Test
+    fun speed100SendsTheGatedArraysUnchanged() = runTest {
+        val stt = FakeStt(rate = 16_000) { "Hi" }
+        val recorded = mutableListOf<ByteArray>()
+        val controller = controller(
+            stt,
+            audio = frames.map { it.also { bytes -> recorded += bytes } },
+            settings = speed(100),
+            vadModel = speechAt(20..29)
+        )
+
+        controller.start()
+        runCurrent()
+        advanceTimeBy(100 * 32L + 10)
+        controller.stop()
+        advanceTimeBy(32)
+
+        assertEquals(DictationState.Done("Hi"), controller.state.value)
+        assertEquals((6..81).toList(), tags(stt.received))
+        stt.received.forEach { assertSame(recorded[it[0].toInt() and 0xFF], it) }
+    }
+
+    @Test
+    fun speed200SendsHalfTheAudioIncludingTheFlushedTail() = runTest {
+        val stt = FakeStt(rate = 16_000) { "Hi" }
+        val sent = mutableListOf<ByteArray>()
+        val controller = controller(stt, audio = sine(sent), settings = speed(200))
+
+        controller.start()
+        runCurrent()
+        advanceTimeBy(2_000)
+        controller.stop()
+        advanceTimeBy(51) // The chunk recorded during the stop ends the audio.
+
+        assertEquals(DictationState.Done("Hi"), controller.state.value)
+        val expected = sent.sumOf { it.size } / 2.0
+        // The flush tail (~12 ms = ~380 bytes) is part of what the provider got before its audio ended.
+        assertEquals(expected, stt.received.sumOf { it.size }.toDouble(), 100.0)
+        assertTrue(stt.received.none { it.isEmpty() })
+    }
+
+    @Test
+    fun speed200WithoutSpeechStillEndsWithNoSpeechAndSendsNothing() = runTest {
+        val stt = FakeStt(rate = 16_000) {
+            delay(10_000) // Never reached: no STT wait.
+            "unused"
+        }
+        val controller = controller(stt, audio = frames, settings = speed(200), vadModel = { 0f })
+
+        controller.start()
+        runCurrent()
+        advanceTimeBy(1_000)
+        controller.stop()
+        advanceTimeBy(33)
+
+        assertEquals(DictationState.Error("No speech detected"), controller.state.value)
+        assertTrue(stt.received.isEmpty())
     }
 
     private companion object {

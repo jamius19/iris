@@ -307,6 +307,19 @@ fun SettingsScreen(repository: SettingsRepository, cleanup: CleanupProvider, mod
                     Spacer(Modifier.width(16.dp))
                     Switch(checked = settings.vadEnabled, onCheckedChange = null)
                 }
+                CardDivider()
+                FieldsColumn {
+                    SliderSetting(
+                        label = "Speed",
+                        value = settings.sttSpeedPercent,
+                        range = Settings.STT_SPEED_PERCENT_RANGE,
+                        step = 10,
+                        valueText = { "${it / 100f}x" }, // "1.0x" .. "2.0x"; Float.toString, no locale comma
+                        supportingText = "Speeds up the audio sent (pitch kept), so less is billed. Higher speeds " +
+                            "can lower accuracy; services with a per-request minimum may not save.",
+                        onSave = { scope.launch { repository.setSttSpeedPercent(it) } }
+                    )
+                }
             }
 
             // Not disabled, so cleanup can be configured before it is turned on; dimmed to show it is inactive.

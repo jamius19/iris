@@ -10,6 +10,7 @@ import android.util.Log
 import dev.jamius.iris.audio.AudioCaptureException
 import dev.jamius.iris.audio.AudioChunk
 import dev.jamius.iris.audio.SpeechGate
+import dev.jamius.iris.audio.timeStretched
 import dev.jamius.iris.data.settings.Settings
 import dev.jamius.iris.stt.SpeechToTextProvider
 import dev.jamius.iris.stt.SttException
@@ -29,6 +30,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onCompletion
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.produceIn
 import kotlinx.coroutines.flow.transformWhile
 import kotlinx.coroutines.flow.update
@@ -189,7 +191,21 @@ class DictationController(
                         // Nothing to transcribe: fail before the provider pads or commits any audio.
                         if (sentBytes == 0L) throw SttException(NO_SPEECH)
                     }
-                    stt.transcribe(chunks, model, config.sttLanguage, config.sttTimeoutSeconds * 1000L, ::onPartial)
+                    // After the gate and the stop: only sent chunks are stretched, and the tail is flushed at the
+                    // stop (after a NO_SPEECH check, so a session without speech sends nothing).
+                    val sent = if (config.sttSpeedPercent == Settings.DEFAULT_STT_SPEED_PERCENT) chunks else {
+                        val speed = config.sttSpeedPercent / 100f
+                        var inBytes = 0L
+                        var outBytes = 0L
+                        chunks.onEach { inBytes += it.size }
+                            .timeStretched(rate, speed)
+                            .onEach { outBytes += it.size }
+                            .onCompletion { cause ->
+                                if (cause != null) return@onCompletion
+                                Log.d(TAG, "Speed ${speed}x: sent ${ms(inBytes, rate)} ms as ${ms(outBytes, rate)} ms")
+                            }
+                    }
+                    stt.transcribe(sent, model, config.sttLanguage, config.sttTimeoutSeconds * 1000L, ::onPartial)
                 }
                 if (text.isBlank()) DictationState.Error(NO_SPEECH) else onFinalTranscript(text)
             } catch (e: CancellationException) {

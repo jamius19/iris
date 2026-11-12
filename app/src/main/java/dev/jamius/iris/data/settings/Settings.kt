@@ -33,6 +33,8 @@ data class Settings(
     val sttTimeoutSeconds: Int,
     /** Send only audio around detected speech (on-device Silero VAD). */
     val vadEnabled: Boolean,
+    /** Speed-up of the audio sent to the STT service, in percent (100 = as recorded). */
+    val sttSpeedPercent: Int,
     val cleanupEnabled: Boolean,
     val cleanupProviderId: String,
     val cleanupModel: String,
@@ -74,6 +76,9 @@ data class Settings(
 
         const val DEFAULT_STT_TIMEOUT_SECONDS = 10
         val STT_TIMEOUT_RANGE = 5..30
+
+        const val DEFAULT_STT_SPEED_PERCENT = 100
+        val STT_SPEED_PERCENT_RANGE = 100..200
 
         const val DEFAULT_REASONING_EFFORT = "low"
 

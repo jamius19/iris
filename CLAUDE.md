@@ -24,6 +24,10 @@ the provider interfaces so a new provider is just a new implementation. The one 
   `abiFilters` arm64-v8a + x86_64 (phones + emulator): 32-bit-only devices can't install the app. The native libs
   are ~29 MB (arm64) + ~35 MB (x86_64), stored uncompressed: the debug APK went from 34 MB to 99.6 MB (a store
   bundle would ship one ABI).
+- Sonic (time-stretch, "Speed"), vendored, no dependency: `audio/sonic/Sonic.java` (Java, Apache-2.0, Bill Cox) from
+  https://github.com/waywardgeek/sonic commit `1d7051354f32392a3b3cdb8a8bcfe56e6f8b744f` (upstream file SHA-256
+  `c23fb313fafa9cdab4c9aa291bfdc2426f33a42d0e19e3e8d1cfd3f85258d7df`); only the package line changed (noted in its
+  header); licence ships as `assets/sonic_LICENSE.txt`.
 - Manual DI: `AppContainer` held by the custom `Application` class `IrisApp`. No Hilt/Koin.
 - All versions live in `gradle/libs.versions.toml`.
 
@@ -33,7 +37,7 @@ the provider interfaces so a new provider is just a new implementation. The one 
 | (root) | `IrisApp` (Application), `AppContainer` (manual DI), `MainActivity` (hosts settings UI) |
 | `data.settings` | Settings model, `SettingsRepository` (DataStore), `SecretStore` (Keystore crypto) |
 | `ui.settings` | Settings screen (Compose) |
-| `audio` | PCM16 mono recorder (rate per session); `SileroVad` (ORT wrapper), `SpeechGate` (pure VAD gate) |
+| `audio` | PCM16 mono recorder (rate per session); `SileroVad` (ORT wrapper), `SpeechGate` (pure VAD gate); `timeStretched` (Sonic speed-up) |
 | `stt` | `SpeechToTextProvider`; `stt.openai` / `stt.vercel` streaming + upload providers; `Wav.kt` (upload helpers) |
 | `cleanup` | `CleanupProvider` interface; `cleanup.vercel` gateway implementation |
 | `dictation` | Session state machine/controller: audio -> STT -> cleanup -> insertion |
@@ -172,7 +176,7 @@ Dictation (CP3):
   API key check, so a missing key never opens the mic. Flow:
   `audio(rate).map { chunk to gate.process(chunk) }.flowOn(vadContext)` -> `produceIn` -> `transformWhile` (main:
   level and stop check on every chunk, emits the gated bytes) -> `onCompletion` (VAD log / no speech, see VAD) ->
-  `stt.transcribe`.
+  `timeStretched` (speed != 1.0x, see Speed) -> `stt.transcribe`.
   `onFocusLost()` (the service's debounced focus-lost hide) cancels only while Listening: once stopped, the session
   always finishes.
   Service destroy cancels its scope. Errors other than `SttException`/`AudioCaptureException` are logged and shown
@@ -217,6 +221,30 @@ VAD ("Skip silence", CP7):
   commit / `audio-done` (if it ran >= 5 s, the socket got only keep-alive zeros). Upload providers get none.
 - Setting `Settings.vadEnabled` (`vad_enabled`, default on): Settings > Transcription > "Skip silence" switch
   (`ic_mic`), subtitle "Detects speech on-device and sends only that, to cut cost".
+
+Speed (CP8):
+- `audio.timeStretched(sampleRate, speed)` (`TimeStretch.kt`, pure, unit tested): `Flow<ByteArray>` of PCM16 mono
+  -> the same audio `speed` times faster through vendored Sonic (`Sonic(rate, 1)`, `setSpeed`, defaults otherwise:
+  quality 0, pitch/rate/volume 1, so only `changeSpeed` runs and pitch is kept). Output rate = input rate (WAV
+  headers, start frame and `session.update` rates stay right). Sonic holds back up to ~30 ms; `flushStream()` emits
+  that tail (measured 12-27 ms of output) when upstream completes normally; an upstream error propagates unchanged
+  with no flush. Never emits empty arrays.
+- Placement: after `onCompletion` (VAD), before `stt.transcribe`, only when `sttSpeedPercent != 100` (at 1.0x no
+  Sonic object, the same arrays). After `transformWhile`, so only sent chunks reach Sonic and the flush happens
+  exactly at the stop; after `onCompletion`, so `NO_SPEECH` is thrown before any flush output (nothing reaches the
+  provider). Every provider acts (commit / `audio-done` / upload) only after its `audio.collect` returns, i.e. after
+  the tail. Keep-alive zeros go through Sonic too (keeps byte order; a 50 ms zero chunk comes out as ~25-45 ms).
+- Counts/logs: `sentBytes`, `recordedBytes` and `VAD: sent X ms of Y ms` stay in recorded time; a completed
+  stretched session logs `Speed Xx: sent A ms as B ms` (`Log.d`).
+- Thread: runs in the collector's context (the provider's `transcribe`, main thread), like `transformWhile`.
+  Measured on a desktop JVM (50 ms chunks): avg 6-48 µs per chunk, worst 283 µs (24 kHz 2.0x); phone cost
+  unmeasured. Off-main would need per-chunk thread hops or `flowOn` around main-thread state.
+- Interactions (all see the stretched bytes, unchanged code): OpenAI 100 ms min-commit padding, `wavBytes` 1 s /
+  1.25 s padding (short dictations at high speed save less), `uploadReadTimeoutMs` (stretched duration),
+  `splitAtPauses` (chunks ~25-45 ms instead of 50 ms; limits count the file), Gateway reconnect resend (its sent
+  list, no re-stretch). The VAD hangover is not scaled: a live model gets 1650 / speed ms of tail.
+- Setting `Settings.sttSpeedPercent` (`stt_speed_percent`, 100..200, default 100 = as recorded; percent int so the
+  integer slider works and 1.0x is an exact check; no read-side clamp). Read per session.
 
 Cleanup + insertion (CP4):
 - Cleanup runs only if `cleanupEnabled`, with the active prompt and `cleanupModel`; no separate status text: the
@@ -462,7 +490,10 @@ Providers (settings store a provider id for each):
   labelled "live" or "after stop" (`modelLabel`, a trailing `labelSmall`); hint "Live models show text as you
   speak; others transcribe after you stop. Mode: ..." for the saved model), then the shared language field, then a
   "Timeout" `SliderSetting` (5..30 s, step 1) for `sttTimeoutSeconds`, hint "How long to wait for the final
-  transcript after you stop.", then a divider and the "Skip silence" switch row (`vadEnabled`).
+  transcript after you stop.", then a divider and the "Skip silence" switch row (`vadEnabled`), then a divider and
+  a "Speed" `SliderSetting` (100..200 %, step 10, shown "1.0x".."2.0x") for `sttSpeedPercent`, hint "Speeds up the
+  audio sent (pitch kept), so less is billed. Higher speeds can lower accuracy; services with a per-request minimum
+  may not save.", saved on release.
   Settings shows the cleanup model (and the Gateway STT model: `GatewayModelField`) as an editable M3
   `ExposedDropdownMenuBox` (`PrimaryEditable` field): any
   custom id can be typed; typing filters the list (case-insensitive substring); explicit Save as other fields.
@@ -491,6 +522,8 @@ Providers (settings store a provider id for each):
   choice and one shared key. Recording rate is per session (`sampleRate(model)`), not resampled in Kotlin, except
   a 16 kHz copy for the VAD. The mode follows the model (streaming vs upload after stop), no separate setting.
 - **VAD on device (Silero, ONNX Runtime 1.28.0 pinned)** to cut STT cost; fails open, never loses dictation.
+- **Speed-up after the VAD gate with vendored Sonic** (pitch kept) to cut billed audio; 1.0x = untouched. Not
+  media3's `SonicAudioProcessor` (`@UnstableApi`, pulls Guava).
 - **API keys are user-entered** in Settings and encrypted with an Android Keystore AES/GCM key; ciphertext is
   persisted in DataStore. Do NOT use the deprecated `androidx.security:security-crypto`.
 - **Insertion at cursor via accessibility actions**: merge with existing text using `ACTION_SET_TEXT` + set
@@ -573,6 +606,16 @@ Not covered by unit tests; check on a real device (ideally more than one OEM) af
   Grok chunks don't flicker/duplicate, MAI/Gemini partials don't double); `en` with `openai/gpt-live-transcribe`
   logs no `Stream warning`; a bad key shows the key message; a brief network drop mid-dictation (airplane mode up
   to ~10 s) logs the reconnect warning(s) and still gives a complete transcript, a second drop shows an error.
+- Speed 1.0x: no `Speed` log line, behaviour unchanged.
+- Speed 1.5x and 2.0x, real voice: OpenAI realtime live model, Gateway live 24 kHz model, a 16 kHz Gateway model
+  (e.g. Grok), an after-stop model on each provider: transcript correct, first/last words kept, live text still
+  streams, log `Speed Xx: sent A ms as B ms` with B ≈ A / speed.
+- 2.0x with VAD on: a 10 s pause mid-dictation still gives a complete transcript (keep-alive), silence only =
+  instant "No speech detected" with no commit / `audio-done` / upload.
+- 2.0x: the waveform stays smooth (main-thread cost).
+- Short dictation (< 2 s) at 2.0x with an upload model: transcribed (WAV padding path).
+- Billing: the provider's usage page shows fewer audio seconds for the same dictation at 2.0x.
+- Gateway brief network drop at 2.0x: reconnect + resend still gives a complete transcript.
 
 ### Emulator / Android MCP
 Checked 2026-11-11 on `emulator-5554` (AVD `Medium_Phone_API_37.0`, API 37, 1080x2400; SDK `K:\Android\SDK`).
@@ -605,3 +648,4 @@ Update this section as checkpoints land.
 | CP5 | Polish | Done |
 | CP6 | Vercel AI Gateway STT provider | Done (real-voice device check pending) |
 | CP7 | On-device VAD (skip silence) + upload-after-stop transcription models | Done (real-voice device check pending) |
+| CP8 | Speed-up (time-stretch) | Done (real-voice device check pending) |
