@@ -17,6 +17,15 @@ interface SpeechToTextProvider {
     fun sampleRate(model: String): Int = 24_000
 
     /**
+     * Sends audio while recording (holds a socket: gets VAD keep-alive audio); false = uploads the recording after
+     * stop (no `onPartial`).
+     */
+    val streams: Boolean get() = true
+
+    /** [model] reports text while recording. Picks the VAD hangover. */
+    fun liveText(model: String): Boolean = streams
+
+    /**
      * Streams [audio] (PCM16 mono chunks at [sampleRate] of [model]) to the service and reports the whole live
      * transcript through [onPartial] whenever it changes. Once [audio] completes, finalizes and returns the final
      * transcript. Cancel the calling coroutine to abort and discard the session.

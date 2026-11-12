@@ -329,6 +329,25 @@ class OpenAiRealtimeSpeechToTextTest {
     }
 
     @Test(timeout = TEST_TIMEOUT_MS)
+    fun audioFailureIsRethrownWithoutPaddingOrCommit() {
+        upgrade()
+        // The controller's audio flow ends like this when VAD let nothing through.
+        val audio = flow<ByteArray> {
+            emit(byteArrayOf(1, 2)) // Under 100 ms: a normal end would pad it.
+            while (received.size < 2) delay(10) // The server got session.update and the chunk.
+            throw SttException("No speech detected")
+        }
+
+        val error = assertThrows(SttException::class.java) {
+            runBlocking { stt().transcribe(audio, "gpt-live-transcribe", "", TIMEOUT_MS, {}) }
+        }
+
+        assertEquals("No speech detected", error.message)
+        assertTrue(serverSawClose.await(5, TimeUnit.SECONDS))
+        assertEquals(listOf("session.update", "input_audio_buffer.append"), received.map(::type))
+    }
+
+    @Test(timeout = TEST_TIMEOUT_MS)
     fun malformedEventsAreIgnored() = runBlocking {
         upgrade(
             onOpen = { socket ->

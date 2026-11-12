@@ -6,9 +6,11 @@ Tap the mic to start dictating: a red pill with a live waveform slides out below
 keyboard/screen bottom), which becomes ✕ (cancel). The partial transcript streams live in a panel beside the bubble
 (left of it if the bubble is on the right edge, right of it if on the left edge). Tap the pill to stop. The
 transcript is finalized, optionally cleaned up by an LLM (toggle in settings), then inserted at the cursor of the
-focused field.
-Cloud APIs only for now. On-device models are future scope: don't build for them, but keep the provider
-interfaces so a new provider is just a new implementation.
+focused field. Models that can't stream are "after stop" ones: the recording is uploaded after the pill tap, with no
+live text (pill + waveform while recording, spinner after stop); the mode follows the model.
+Cloud APIs only for transcription and cleanup. On-device transcription is future scope: don't build for it, but keep
+the provider interfaces so a new provider is just a new implementation. The one on-device model is Silero VAD
+("Skip silence"): it only decides which audio is sent, to cut STT cost.
 
 ## Tech stack & build
 - AGP 9.x with built-in Kotlin (no separate `kotlin-android` plugin). Kotlin 2.2.10, Compose compiler plugin,
@@ -16,6 +18,12 @@ interfaces so a new provider is just a new implementation.
 - `minSdk 30`, `targetSdk`/`compileSdk 37`, Java 11 target. JDK 25 locally.
 - Compose Material3 (app UI), OkHttp (HTTP + WebSocket), kotlinx.serialization (JSON),
   Jetpack DataStore Preferences, Coroutines/Flow.
+- ONNX Runtime Android 1.28.0 (Silero VAD), pinned: 1.29+ adds default-on telemetry (INTERNET permission + an
+  `ai.onnxruntime.TelemetryInitializer` ContentProvider); 1.28.0's AAR manifest is empty (checked 2026-11-12: the
+  merged manifest gets nothing from it; INTERNET comes from OkHttp) and its libs are 16 KB page aligned.
+  `abiFilters` arm64-v8a + x86_64 (phones + emulator): 32-bit-only devices can't install the app. The native libs
+  are ~29 MB (arm64) + ~35 MB (x86_64), stored uncompressed: the debug APK went from 34 MB to 99.6 MB (a store
+  bundle would ship one ABI).
 - Manual DI: `AppContainer` held by the custom `Application` class `IrisApp`. No Hilt/Koin.
 - All versions live in `gradle/libs.versions.toml`.
 
@@ -25,8 +33,8 @@ interfaces so a new provider is just a new implementation.
 | (root) | `IrisApp` (Application), `AppContainer` (manual DI), `MainActivity` (hosts settings UI) |
 | `data.settings` | Settings model, `SettingsRepository` (DataStore), `SecretStore` (Keystore crypto) |
 | `ui.settings` | Settings screen (Compose) |
-| `audio` | PCM16 mono recorder (rate per session) emitting chunks |
-| `stt` | `SpeechToTextProvider` interface; `stt.openai` realtime and `stt.vercel` AI Gateway implementations |
+| `audio` | PCM16 mono recorder (rate per session); `SileroVad` (ORT wrapper), `SpeechGate` (pure VAD gate) |
+| `stt` | `SpeechToTextProvider`; `stt.openai` / `stt.vercel` streaming + upload providers; `Wav.kt` (upload helpers) |
 | `cleanup` | `CleanupProvider` interface; `cleanup.vercel` gateway implementation |
 | `dictation` | Session state machine/controller: audio -> STT -> cleanup -> insertion |
 | `overlay` | AccessibilityService, bubble overlay view, live-text panel |
@@ -126,15 +134,22 @@ Dictation (CP3):
   Streams until `audio` completes, then finalizes and returns the final text; `onPartial` gets the whole live text;
   cancelling the coroutine aborts. `timeoutMs`: how long to wait for the final transcript once all audio is sent;
   the controller passes `Settings.sttTimeoutSeconds` (5..30, default 10; min 5 so a too-short wait can't fail
-  every dictation) per session, both providers use it (below). Failures are `SttException` with a user-readable
-  message. `warmUp()`: fire-and-forget pre-connect, throttled by the provider (below). `sampleRate(model)`: the
-  rate `audio` must have (default 24 000; the Gateway provider overrides it).
+  every dictation) per session, all providers use it (below). Failures are `SttException` with a user-readable
+  message; exceptions from `audio` propagate unchanged (the VAD no-speech path relies on it). `warmUp()`:
+  fire-and-forget pre-connect, throttled by the provider (below). `sampleRate(model)`: the rate `audio` must have
+  (default 24 000; the Gateway and upload providers override it). `streams` (default true): sends audio while
+  recording over a socket (gets the VAD keep-alive); false = uploads after stop, never calls `onPartial` (the upload
+  providers). `liveText(model)` (default `streams`; OpenAI realtime: `hasLiveText(model)`): reports text while
+  recording; it picks the VAD hangover.
 - `dictation.DictationController` (one per service, main thread, built by `AppContainer.dictationController`;
   `audio: (sampleRate) -> Flow<AudioChunk>` = `audioRecorder::chunks`, `stt: (Settings) -> SpeechToTextProvider` =
-  `AppContainer::speechToText`, picked once per session after the settings load, with `Settings.activeSttModel`):
+  `AppContainer::speechToText`, picked once per session after the settings load, with `Settings.activeSttModel`;
+  `vadModel: () -> (FloatArray) -> Float` = `sileroVad::newStream`, a fresh Silero stream per session with VAD on;
+  `vadContext` = `Dispatchers.Default`, where the gate runs, tests pass `EmptyCoroutineContext`):
   `Idle -> Listening(text) -> Finalizing(text) -> Done(text, notice?) | Error(message) -> Idle` (Done shown 1.5 s,
-  or 3 s with a notice, which the panel shows instead of the text; Error 3 s; blank transcript = Error
-  "No speech detected"). `start()`: new session (also from Done/Error), ignored while Listening/Finalizing;
+  or 3 s with a notice, which the panel shows instead of the text; Error 3 s; blank transcript, or nothing passed
+  VAD = Error "No speech detected"). An upload provider stays at `Listening("")`/`Finalizing("")` (blank text keeps
+  the panel hidden). `start()`: new session (also from Done/Error), ignored while Listening/Finalizing;
   `stop()`: Listening only; `cancel()`: discards any session. The service maps the button to `cancel()` while
   Listening, else `start()` (so the spinner ignores taps), and the pill to `stop()`. A tap that acts (start, stop,
   cancel; decided from the state at tap time) gets a haptic (`haptic()`: `EFFECT_HEAVY_CLICK`, touch usage, so the
@@ -146,7 +161,10 @@ Dictation (CP3):
   sending queued chunks (e.g. behind a stalled main thread) until it has sent the first one read after that time
   (the chunk in progress), then ends. The mic runs in its own coroutine (`produceIn`), so the audio (and the STT
   commit) doesn't wait for the mic's next read and release; it starts on the provider's first collect, after its
-  API key check, so a missing key never opens the mic.
+  API key check, so a missing key never opens the mic. Flow:
+  `audio(rate).map { chunk to gate.process(chunk) }.flowOn(vadContext)` -> `produceIn` -> `transformWhile` (main:
+  level and stop check on every chunk, emits the gated bytes) -> `onCompletion` (VAD log / no speech, see VAD) ->
+  `stt.transcribe`.
   `onFocusLost()` (the service's debounced focus-lost hide) cancels only while Listening: once stopped, the session
   always finishes.
   Service destroy cancels its scope. Errors other than `SttException`/`AudioCaptureException` are logged and shown
@@ -154,6 +172,43 @@ Dictation (CP3):
 - Final hook: `suspend IrisAccessibilityService.onFinalTranscript(text): Done`, called directly inside the session
   (state still Finalizing). It does cleanup + insertion and returns the Done to show (inserted text, plus a notice
   on fallback). No retry/skip.
+
+VAD ("Skip silence", CP7):
+- Model: `app/src/main/assets/silero_vad.onnx`, Silero VAD v6.2.3
+  (https://github.com/snakers4/silero-vad/raw/v6.2.3/src/silero_vad/data/silero_vad.onnx, 2,327,524 bytes, SHA-256
+  `1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3`), MIT; its licence ships as
+  `assets/silero_vad_LICENSE.txt` (attribution: Silero Team, https://github.com/snakers4/silero-vad).
+- `audio.SileroVad` (one per app in `AppContainer`, not unit tested: needs native ORT): `OrtSession` with 1 intra-
+  and 1 inter-op thread, `ALL_OPT`, loaded lazily on the first frame (off main, on `vadContext`; emulator log
+  `SileroVad: Model loaded in ~160 ms`) and never closed (process lifetime). `newStream()` = a closure with zeroed
+  state/context. I/O as the official `OnnxWrapper` (`silero_vad/utils_vad.py` v6.2.3, checked 2026-11-12): `input`
+  float32 `[1, 576]` = the previous input's last 64 samples + the 512-sample frame, `state` float32 `[2, 1, 128]`
+  (fed back from output 1), `sr` int64 0-d tensor 16000; output 0 = probability. Load failure (incl.
+  `LinkageError`: `UnsatisfiedLinkError`, `ExceptionInInitializerError`, `NoClassDefFoundError`) is logged once and
+  the stream throws on every frame.
+- `audio.SpeechGate` (pure, unit tested), Handy's `SmoothedVad` (`src-tauri/src/audio_toolkit/vad/`): 32 ms frames
+  (512 samples at 16 kHz; a 24 kHz frame of 768 samples is decimated to 512 for the VAD only: `s0, (s1+s2)/2` per 3;
+  the STT always gets the original audio), frame remainders carried across chunks. Voiced = probability `> 0.3`;
+  onset 2 voiced frames in a row; hangover after the last voiced frame: 1650 ms = 52 frames for live-text models
+  (`liveText(model)`), 450 ms = 15 frames for the others (uploads, OpenAI realtime models without live text)
+  (frames rounded up like Handy's `frames_for_duration_ms`); pre-roll: the unsent chunks of the last >= 450 ms. A
+  chunk is sent whole if a frame completed in it is kept (or it completed none while in speech); the onset chunk
+  also sends the pre-roll, oldest first. An unconfirmed onset at stop is dropped. If the model throws, the gate
+  fails open (`failure`): pre-roll + chunk, then every chunk.
+- Gate placement: upstream of `transformWhile`, never drops chunks from the flow (level and stop see every chunk;
+  only the bytes riding along are gated). `onCompletion` with no cause (the recording ended at the stop) logs
+  `VAD: sent X ms of Y ms` (`Log.w` with the failure if the gate failed open) and, if nothing was sent, throws
+  `SttException("No speech detected")`: the provider's `audio.collect` rethrows it, so the socket is cancelled before
+  any padding, `input_audio_buffer.commit` / `audio-done` or upload (provider tests pin this). Assumption: neither
+  service bills a session that received no audio (only `session.update` / the start frame).
+- Keep-alive (streaming providers only, `stt.streams`): in `transformWhile`, when the gate has sent nothing for
+  5 s (`readAtNanos` of the last emitted chunk, starting at the first chunk), one chunk-sized `ByteArray` of zeros
+  is emitted and the timer resets, since servers may end a stream that gets no audio (e.g. Deepgram after 10 s;
+  the Gateway upstreams' limits are undocumented); pings only keep the TCP/NAT path. ~1 % of the withheld
+  silence. Zeros don't count in `sentBytes`: a session with no speech still ends with "No speech detected" and no
+  commit / `audio-done` (if it ran >= 5 s, the socket got only keep-alive zeros). Upload providers get none.
+- Setting `Settings.vadEnabled` (`vad_enabled`, default on): Settings > Transcription > "Skip silence" switch
+  (`ic_mic`), subtitle "Detects speech on-device and sends only that, to cut cost".
 
 Cleanup + insertion (CP4):
 - Cleanup runs only if `cleanupEnabled`, with the active prompt and `cleanupModel`; no separate status text: the
@@ -185,7 +240,16 @@ Providers (settings store a provider id for each):
 - STT provider: `Settings.sttProviderId` (`stt_provider_id`): `openai` (default) = OpenAI (direct), or
   `vercel-gateway` = Vercel AI Gateway. Each has its own model setting (`sttModel`, `gatewaySttModel`, default
   `openai/gpt-live-transcribe`); `activeSttModel` / `sttKeySet` follow the selection; the language setting is
-  shared. `AppContainer` builds both providers; `speechToText(settings)` picks one.
+  shared. `AppContainer` builds four providers; `speechToText(settings)` picks one by mode: Gateway ->
+  `gatewaySttLive` ? streaming : upload; OpenAI -> `isRealtimeTranscriptionModel(sttModel)` ? realtime : upload.
+  The service's warm-up cache follows the selection.
+- WebSocket pings: both streaming providers connect on `httpClient.newBuilder().pingInterval(30, SECONDS)`, so long
+  pauses VAD doesn't send don't let a mobile NAT drop the idle socket; a pong must arrive within the interval (OkHttp
+  fails the socket when the previous ping is unanswered at the next one), like any other failure (Gateway: its one
+  reconnect; OpenAI: error). On a saturated uplink the ping queues behind sent data in the kernel and network
+  buffers, so 30 s (not 15) allows that much queueing before a false failure; the longest idle gap stays under the
+  usual 60 s+ NAT/proxy idle timeouts. `pingInterval` isn't part of OkHttp's `Address`, so the
+  HTTP/1.1 warm-up connection is still reused (the `connectionIndex` warm-up tests pass).
 - STT, OpenAI (direct): OpenAI Realtime API, transcription-only session over WebSocket. Audio is PCM16 mono
   24 kHz, sent as base64 chunks via `input_audio_buffer.append`. On stop: commit the buffer, wait for the final
   transcript. Verify event names and session config against current OpenAI docs before changing protocol code.
@@ -195,7 +259,9 @@ Providers (settings store a provider id for each):
   connect `wss://api.openai.com/v1/realtime?intent=transcription` (no `model` param: that makes a conversation
   session) with only `Authorization: Bearer <key>` (no `OpenAI-Beta` header in the GA docs); send
   `session.update` `{session:{type:"transcription", audio:{input:{format:{type:"audio/pcm",rate:24000},
-  transcription:{model, languages?}, turn_detection:null}}}}`. Server events used: `input_audio_buffer.committed`
+  transcription:{model, languages? | language?}, turn_detection:null}}}}` (`languages: [code]` only for
+  `gpt-transcribe` / `gpt-live-transcribe` (`usesLanguageList`), singular `language` for the others, never both;
+  checked 2026-11-12). Server events used: `input_audio_buffer.committed`
   (item_id), `conversation.item.input_audio_transcription.delta` / `.completed` / `.failed`, `error` (all
   `error` events are treated as fatal). Deltas concatenate per item_id; items join with spaces in first-seen
   order; final = completed items once the committed item completes; it is returned at once (`close(1000)` only
@@ -219,6 +285,33 @@ Providers (settings store a provider id for each):
   Default model `gpt-live-transcribe` (`gpt-4o-*-transcribe` are deprecated, shutdown 2027-02-26). It requires
   `turn_detection: null` (no server/semantic VAD) and takes `audio.input.transcription.languages: [..]` (array;
   never also send singular `language`). Settings store one optional code; the client wraps it into the array.
+  Realtime models (`REALTIME_TRANSCRIPTION_MODELS`, client events reference checked 2026-11-12): `whisper-1`,
+  `gpt-transcribe`, `gpt-live-transcribe`, `gpt-4o-mini-transcribe`, `gpt-4o-mini-transcribe-2025-12-15`,
+  `gpt-4o-transcribe`, `gpt-4o-transcribe-diarize`, `gpt-realtime-whisper`; all stream (decided: less wait at stop),
+  but only gpt-live-transcribe and gpt-realtime-whisper send text before the commit (`hasLiveText`: live hangover
+  and "Mode: live"; the others get the short hangover). Any other id (trimmed) uploads.
+- STT, OpenAI file upload (`stt.openai.OpenAiFileTranscription`, ids outside the realtime list): verified 2026-11-12
+  against https://developers.openai.com/api/docs/guides/speech-to-text and
+  https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create.
+  `POST https://api.openai.com/v1/audio/transcriptions`, `Authorization: Bearer <key>`, multipart: `file`
+  (`audio.wav`, `audio/wav`), `model`, `response_format=json`, plus `languages[]` (list models) or `language` when
+  set -> `{text, usage}` (missing text = "Unexpected response from OpenAI"; blank = "No speech detected"). Records
+  at 16 kHz; `streams = false`. Key checked before collecting (no mic without a key). Files are limited to 25 MB:
+  the recording is split (`splitAtPauses`, pure, unit tested) into parts of <= 20 MB of PCM (~10 min), each cut
+  after the quietest 50 ms chunk within the part's last 30 s (with VAD on, the joins between kept segments are
+  ~900 ms of hangover + pre-roll non-speech, so cuts land there; with VAD off, in natural pauses); parts upload one
+  after another, each with its own timeout, texts joined with `joined` (CJK-aware). Errors (`openAiHttpErrorMessage`):
+  401/403 key, 429 quota, 5xx server, else `OpenAI error: <error.message>`; transport = "Network error: ...".
+  Logs `Timing: upload X KB in N part(s), stop->response Y ms`.
+- Uploads (both providers, `stt/Wav.kt`): `wavBytes` = 44-byte RIFF/WAVE header (PCM, mono, 16-bit) + the chunks,
+  padded with silence to 1.25 s when under 1 s (as Handy: services reject very short files). Per upload,
+  `httpClient.newBuilder().readTimeout(uploadReadTimeoutMs)` = `timeoutMs + audio duration / 4` (the server's
+  transcription time grows with the audio; default 10 s + 15 s for 1 min); OkHttp's 10 s write timeout covers a
+  stalled upload; no call timeout. A timeout before the body was fully written (`sent` flag: reset at the start
+  of `writeTo`, set at its end) = "Timed out sending audio to OpenAI" / "... to AI Gateway", after = "Timed out
+  waiting for the transcript". `Call.await()` (enqueue, cancelling the coroutine cancels the call). Warm-up:
+  keyless `HEAD /v1/models` through the default (h2) client, 3 min throttle (reset only by a failure: an h2
+  connection returns to the pool).
 - STT, Vercel AI Gateway (`stt.vercel`): streaming transcription WebSocket, beta (launched 2026-07-22); the only
   official client is the AI SDK's `experimental_streamTranscribe`, with no public protocol docs. Verified
   2026-11-12 (`stt.vercel.GatewayTranscriptionProtocol.kt`) against the source of `@ai-sdk/gateway` 4.0.143
@@ -265,15 +358,33 @@ Providers (settings store a provider id for each):
   before `audio-done`. After `audio-done`: wait for OkHttp's queue to drain (max 60 s, "Timed out sending audio to
   AI Gateway"; terminal on purpose: a slow/stuck uplink won't improve with a full resend, which would push
   Finalizing past ~90 s), then a stall timer: `timeoutMs` (`sttTimeoutSeconds`, default 10 s; the same both times)
-  without a server part reconnects (above; a silently dead socket only shows up here), a second stall = "Timed out
-  waiting for the transcript" (a timer, not a total, so a reconnected stream re-transcribing a long recording isn't
-  cut off). Worst-case Finalizing without server parts: 60 s drain + stall + reconnect budget + stall. A `finish`
-  before `audio-done` is accepted (text so far, `Log.w`). A model id without `/` counts as `openai/` for the rate
-  and options (the Gateway qualifies it so). On `finish`: `close(1000)` and return.
+  without a server part reconnects (above; a silently dead socket shows up here or as a missed pong), a second
+  stall = "Timed out waiting for the transcript" (a timer, not a total, so a reconnected stream re-transcribing a
+  long recording isn't cut off). Worst-case Finalizing without server parts: 60 s drain + stall + reconnect budget +
+  stall. A `finish` before `audio-done` is accepted (text so far, `Log.w`). A model id without `/` counts as
+  `openai/` for the rate and options (the Gateway qualifies it so). On `finish`: `close(1000)` and return.
   Warm-up: like OpenAI's (keyless `HEAD https://ai-gateway.vercel.sh/v1/models` through the HTTP/1.1 client, 3 min
   throttle, reset by `transcribe` and by a failure; emulator log `Warm-up: http/1.1 200`; the Gateway's HTTP/1.1
   idle timeout is unmeasured). Logs `Timing: transcribe->ws open X ms` and `Timing: audio-done->finish X ms`.
   Uses the Gateway API key (shared with cleanup).
+- STT, Vercel AI Gateway upload (`stt.vercel.VercelGatewayFileTranscription`, models without the
+  `websocket-transcription` tag): verified 2026-11-12 against
+  https://vercel.com/docs/ai-gateway/modalities/speech-to-text (updated 2026-09-08) and Handy's
+  `vercel_transcription.rs`. `POST https://ai-gateway.vercel.sh/v4/ai/transcription-model`
+  with the WebSocket's headers minus `Sec-WebSocket-Protocol` (invalid header id = "Invalid model id", checked
+  before recording) and a JSON body `{audio: "<base64 WAV>", mediaType: "audio/wav", providerOptions?}`
+  (`UploadBody`: Base64 written straight into the sink in 48 KiB slices, no big String; repeatable) -> `{text,
+  segments, language, durationInSeconds, warnings}` (warnings logged `Upload warning`). 16 kHz WAV for every model
+  (Handy). `providerOptions(model, language, streaming = false)`: as streaming, except `openai/gpt-transcribe` gets
+  `{openai:{languages:[code]}}` and Grok gets no interim-results option. No size limit is documented, so it is one
+  upload (a 413 would map through `httpErrorMessage`). Errors map like cleanup; transport =
+  `gatewayNetworkErrorMessage`. The Gateway's catalog (2026-11-12) has after-stop models elevenlabs/scribe-v2,
+  fish-audio/transcribe-1, google/gemini-3.5-transcribe, microsoft/mai-transcribe-2, mistral/voxtral-mini-transcribe-3,
+  mistral/voxtral-small-transcribe-3, openai/gpt-4o-mini-transcribe, openai/gpt-4o-transcribe, openai/whisper-1.
+- Gateway mode: `Settings.gatewaySttLive` (`gateway_stt_live`, default true), written with the model by
+  `setGatewaySttModel(model, live)`; `live = gatewaySttLive(id, catalog)` (pure, tested): the catalog entry's
+  `websocket-transcription` tag; an id not in the catalog (typed, or catalog not loaded) = live. Stale if the
+  catalog later retags a model, until re-saved.
 - Cleanup: Vercel AI Gateway, OpenAI-compatible `POST https://ai-gateway.vercel.sh/v1/chat/completions`,
   `Authorization: Bearer <key>`. Structured output via
   `response_format: {type:"json_schema", json_schema:{name, schema, strict:true}}` with schema
@@ -328,22 +439,25 @@ Providers (settings store a provider id for each):
   `language|embedding|image|video|speech|transcription|realtime|reranking|evaluation`. It returns every entry with
   an id, sorted by id, as `GatewayModel(id, type, tags, reasoningEfforts)` (`tags` = the string entries of `tags`,
   e.g. `websocket-transcription`, `open-weights`); callers filter: cleanup with `isChatModel` (`type ==
-  "language"` or no `type`), Gateway STT with `isStreamingTranscriptionModel` (`type == "transcription"` and
-  `websocket-transcription` in `tags`; 2026-11-12: elevenlabs/scribe-v2-realtime, google/gemini-3.5-transcribe-live,
-  microsoft/mai-transcribe-2-streaming, openai/gpt-live-transcribe, openai/gpt-realtime-whisper,
-  openai/gpt-transcribe, spacexai/grok-stt). `reasoningEfforts` =
-  the `reasoning_options[]` entry `{type:"effort", values:[..]}` (other entry types: `{type:"toggle"}`,
-  `{type:"budget_tokens", min?, max?}`; a missing `reasoning_options` means the controls are "not specified"). It
-  is null when the field is missing, null or not an array, there is no effort entry, or `values` is empty or not an
-  array. E.g. luna `none..max`, `google/gemini-3-flash` `low|high`, `anthropic/claude-sonnet-5.5` `low..max`;
-  `openai/gpt-4.1-mini` has no `reasoning_options`. HTTP errors map as above; timeout = "Loading models timed out",
-  other transport errors = "Couldn't load models (network error)" (no raw exception in the UI); no `data` array =
-  "Unexpected response from AI Gateway".
+  "language"` or no `type`), Gateway STT with `isTranscriptionModel` (`type == "transcription"`), live ones with
+  `isStreamingTranscriptionModel` (also `websocket-transcription` in `tags`; 2026-11-12:
+  elevenlabs/scribe-v2-realtime, google/gemini-3.5-transcribe-live, microsoft/mai-transcribe-2-streaming,
+  openai/gpt-live-transcribe, openai/gpt-realtime-whisper, openai/gpt-transcribe, spacexai/grok-stt).
+  `reasoningEfforts` = the `reasoning_options[]` entry `{type:"effort", values:[..]}` (other entry types:
+  `{type:"toggle"}`, `{type:"budget_tokens", min?, max?}`; a missing `reasoning_options` means the controls are "not
+  specified"). It is null when the field is missing, null or not an array, there is no effort entry, or `values` is
+  empty or not an array. E.g. luna `none..max`, `google/gemini-3-flash` `low|high`, `anthropic/claude-sonnet-5.5`
+  `low..max`; `openai/gpt-4.1-mini` has no `reasoning_options`. HTTP errors map as above; timeout = "Loading models
+  timed out", other transport errors = "Couldn't load models (network error)" (no raw exception in the UI); no `data`
+  array = "Unexpected response from AI Gateway".
   Settings > Transcription: two radio rows (OpenAI (direct) / Vercel AI Gateway, each naming its key; the selected
-  one appends " · not set" in the error colour without its key), then the OpenAI model text field or the Gateway
-  model combobox (below, hint "Streaming transcription models"), then the shared language field, then a "Timeout"
-  `SliderSetting` (5..30 s, step 1) for `sttTimeoutSeconds`, hint "How long to wait for the final transcript after
-  you stop."
+  one appends " · not set" in the error colour without its key), then the OpenAI model text field (hint "Realtime
+  models (gpt-live-transcribe, gpt-transcribe, ...) stream; other models upload after you stop. Mode: live|streams,
+  text after stop|after stop") or the Gateway model combobox (below; lists all transcription models, each item
+  labelled "live" or "after stop" (`modelLabel`, a trailing `labelSmall`); hint "Live models show text as you
+  speak; others transcribe after you stop. Mode: ..." for the saved model), then the shared language field, then a
+  "Timeout" `SliderSetting` (5..30 s, step 1) for `sttTimeoutSeconds`, hint "How long to wait for the final
+  transcript after you stop.", then a divider and the "Skip silence" switch row (`vadEnabled`).
   Settings shows the cleanup model (and the Gateway STT model: `GatewayModelField`) as an editable M3
   `ExposedDropdownMenuBox` (`PrimaryEditable` field): any
   custom id can be typed; typing filters the list (case-insensitive substring); explicit Save as other fields.
@@ -369,7 +483,9 @@ Providers (settings store a provider id for each):
 ## Key decisions (don't re-litigate without a concrete reason)
 - **STT providers**: OpenAI Realtime (direct) stays the default. Vercel AI Gateway's streaming transcription
   (beta, protocol taken from the AI SDK source and Handy, see Providers) is offered as a second provider for model
-  choice and one shared key. Recording rate is per session (`sampleRate(model)`), not resampled in Kotlin.
+  choice and one shared key. Recording rate is per session (`sampleRate(model)`), not resampled in Kotlin, except
+  a 16 kHz copy for the VAD. The mode follows the model (streaming vs upload after stop), no separate setting.
+- **VAD on device (Silero, ONNX Runtime 1.28.0 pinned)** to cut STT cost; fails open, never loses dictation.
 - **API keys are user-entered** in Settings and encrypted with an Android Keystore AES/GCM key; ciphertext is
   persisted in DataStore. Do NOT use the deprecated `androidx.security:security-crypto`.
 - **Insertion at cursor via accessibility actions**: merge with existing text using `ACTION_SET_TEXT` + set
@@ -436,6 +552,17 @@ Not covered by unit tests; check on a real device (ideally more than one OEM) af
   words and animates out after the tick; re-show after focus loss mid-Finalizing restores spinner/panel without
   replayed animations; TalkBack reads "Start/Cancel/Stop dictation" and double-tap works on the ✕ and the pill.
 - Sideloaded APK: the accessibility toggle needs App info > ⋮ > "Allow restricted settings".
+- VAD on, real voice: first and last words aren't clipped (incl. speaking right after the tap and stopping right
+  after the last word); a 10 s pause mid-dictation is dropped (log `VAD: sent X ms of Y ms` with sent < recorded); a
+  pause >= 60 s on mobile data still gives a transcript for each live model (pings keep the socket, the 5 s
+  keep-alive zeros keep the server's own no-audio timeout away); silence only = instant "No speech detected" with no
+  commit / `audio-done` / upload; both providers incl. a 16 kHz Gateway model; a release build loads the model.
+- Upload models: an after-stop model on each provider (OpenAI: an id outside the realtime list; Gateway e.g.
+  `openai/gpt-4o-transcribe` or `elevenlabs/scribe-v2`): no panel while recording, spinner after stop, text
+  inserted; a 2–3 min dictation on mobile data finishes within the timeout; language set; VAD on + silence = no
+  upload; picking an after-stop Gateway model from the menu shows "Mode: after stop" and is used at once.
+- Long Gateway upload: a 10 min Gateway after-stop dictation (VAD off) succeeds; on a 413, reuse `splitAtPauses`
+  for the Gateway too.
 - Gateway STT with a real voice: live text streams and the final is inserted (default model, plus a 16 kHz one:
   Grok chunks don't flicker/duplicate, MAI/Gemini partials don't double); `en` with `openai/gpt-live-transcribe`
   logs no `Stream warning`; a bad key shows the key message; a brief network drop mid-dictation (airplane mode up
@@ -453,6 +580,8 @@ Checked 2026-11-11 on `emulator-5554` (AVD `Medium_Phone_API_37.0`, API 37, 1080
 - Accessibility service: `adb shell settings put secure enabled_accessibility_services
   dev.jamius.iris/dev.jamius.iris.overlay.IrisAccessibilityService` (binds at once). `am force-stop
   dev.jamius.iris` clears that setting, so re-run it after a force-stop.
+- VAD (checked 2026-11-12): with Skip silence on, a no-speech dictation ends right after the stop tap with "No
+  speech detected"; logcat `SileroVad: Model loaded in X ms` and `DictationController: VAD: sent 0 ms of Y ms`.
 - No speech input: the emulator mic opens (session reaches the STT, "No speech detected"), but host audio isn't
   forwarded (host TTS played through speakers wasn't heard). Transcript/cleanup/insertion paths need a device or
   Extended controls > Microphone > "Virtual microphone uses host audio input" plus a real voice.
@@ -469,3 +598,4 @@ Update this section as checkpoints land.
 | CP4 | Text insertion + LLM cleanup | Done |
 | CP5 | Polish | Done |
 | CP6 | Vercel AI Gateway STT provider | Done (real-voice device check pending) |
+| CP7 | On-device VAD (skip silence) + upload-after-stop transcription models | Done (real-voice device check pending) |

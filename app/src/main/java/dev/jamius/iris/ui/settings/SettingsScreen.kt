@@ -118,7 +118,11 @@ import dev.jamius.iris.data.settings.Secret
 import dev.jamius.iris.data.settings.Settings
 import dev.jamius.iris.data.settings.SettingsRepository
 import dev.jamius.iris.overlay.IrisAccessibilityService
+import dev.jamius.iris.stt.openai.hasLiveText
+import dev.jamius.iris.stt.openai.isRealtimeTranscriptionModel
+import dev.jamius.iris.stt.vercel.gatewaySttLive
 import dev.jamius.iris.stt.vercel.isStreamingTranscriptionModel
+import dev.jamius.iris.stt.vercel.isTranscriptionModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -137,7 +141,9 @@ fun SettingsScreen(repository: SettingsRepository, cleanup: CleanupProvider, mod
     var modelsLoading by remember { mutableStateOf(false) }
     var modelsError by remember { mutableStateOf<String?>(null) }
     val chatModelIds = remember(models) { models?.filter(::isChatModel)?.map { it.id } }
-    val sttModelIds = remember(models) { models?.filter(::isStreamingTranscriptionModel)?.map { it.id } }
+    val sttModels = remember(models) { models?.filter(::isTranscriptionModel) }
+    val sttModelIds = remember(sttModels) { sttModels?.map { it.id } }
+    val liveSttModelIds = remember(sttModels) { sttModels?.filter(::isStreamingTranscriptionModel)?.map { it.id } }
 
     fun loadModels() {
         if (modelsLoading) return
@@ -244,14 +250,22 @@ fun SettingsScreen(repository: SettingsRepository, cleanup: CleanupProvider, mod
                             models = sttModelIds,
                             loading = modelsLoading,
                             error = modelsError,
-                            supportingText = "Streaming transcription models",
+                            supportingText = "Live models show text as you speak; others transcribe after you stop. " +
+                                sttModeText(settings.gatewaySttLive),
                             onLoad = ::loadModels,
-                            onSave = { scope.launch { repository.setGatewaySttModel(it) } }
+                            onSave = { scope.launch { repository.setGatewaySttModel(it, gatewaySttLive(it, models)) } },
+                            modelLabel = { if (it in liveSttModelIds.orEmpty()) "live" else "after stop" }
                         )
                     } else {
                         SavableTextField(
                             label = "Model",
                             value = settings.sttModel,
+                            supportingText = "Realtime models (gpt-live-transcribe, gpt-transcribe, ...) stream; " +
+                                "other models upload after you stop. " +
+                                sttModeText(
+                                    live = hasLiveText(settings.sttModel),
+                                    streams = isRealtimeTranscriptionModel(settings.sttModel)
+                                ),
                             onSave = { scope.launch { repository.setSttModel(it) } }
                         )
                     }
@@ -271,6 +285,27 @@ fun SettingsScreen(repository: SettingsRepository, cleanup: CleanupProvider, mod
                         supportingText = "How long to wait for the final transcript after you stop.",
                         onSave = { scope.launch { repository.setSttTimeoutSeconds(it) } }
                     )
+                }
+                CardDivider()
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .toggleable(
+                            value = settings.vadEnabled,
+                            role = Role.Switch,
+                            onValueChange = { scope.launch { repository.setVadEnabled(it) } }
+                        )
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    LabeledRow(
+                        icon = R.drawable.ic_mic,
+                        title = "Skip silence",
+                        subtitle = "Detects speech on-device and sends only that, to cut cost",
+                        modifier = Modifier.weight(1f)
+                    )
+                    Spacer(Modifier.width(16.dp))
+                    Switch(checked = settings.vadEnabled, onCheckedChange = null)
                 }
             }
 
@@ -699,7 +734,8 @@ private fun SavableTextField(
 /**
  * Gateway model combobox: type any model id, or pick one from the Gateway's list (filtered by what was typed).
  * The list ([models], [loading], [error]) is passed in; [onLoad] fetches it, on first open if not loaded yet or on
- * refresh. Saves like [SavableTextField].
+ * refresh. [modelLabel] is a short note shown at the end of a model's menu item, if any. Saves like
+ * [SavableTextField].
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -711,6 +747,7 @@ private fun GatewayModelField(
     supportingText: String,
     onLoad: () -> Unit,
     onSave: (String) -> Unit,
+    modelLabel: (String) -> String? = { null },
 ) {
     var input by rememberSaveable(value) { mutableStateOf(value) }
     // What the user typed to filter the list; empty shows the whole list. Cleared when the field opens the menu.
@@ -822,6 +859,15 @@ private fun GatewayModelField(
                                 input = model
                                 close()
                             },
+                            trailingIcon = modelLabel(model)?.let {
+                                {
+                                    Text(
+                                        it,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            },
                             contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding
                         )
                     }
@@ -852,6 +898,13 @@ private fun GatewayModelField(
 }
 
 private val MODEL_MENU_MAX_HEIGHT = 280.dp
+
+/** The saved transcription model's mode, for the model field's hint; [streams] without [live]: text after stop. */
+private fun sttModeText(live: Boolean, streams: Boolean = live): String = when {
+    live -> "Mode: live"
+    streams -> "Mode: streams, text after stop"
+    else -> "Mode: after stop"
+}
 
 /** A one-line [DropdownMenuItem]'s height (its minimum, M3 menu list item token). */
 private val MODEL_MENU_ITEM_HEIGHT = 48.dp

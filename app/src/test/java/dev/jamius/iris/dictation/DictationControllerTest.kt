@@ -24,6 +24,7 @@ import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.EmptyCoroutineContext
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -47,16 +48,21 @@ class DictationControllerTest {
         }
     }
 
-    /** Reports "chunk N" for each chunk, then returns [result] once the audio ends. */
+    /** Reports "chunk N" for each chunk (if it [streams]), then returns [result] once the audio ends. */
     private class FakeStt(
         private val rate: Int = 24_000,
+        override val streams: Boolean = true,
+        private val live: Boolean = streams,
         private val result: suspend () -> String,
     ) : SpeechToTextProvider {
         var calls = 0
         var model = ""
         var timeoutMs = 0L
+        val received = mutableListOf<ByteArray>()
 
         override fun sampleRate(model: String) = rate
+
+        override fun liveText(model: String) = live
 
         override suspend fun transcribe(
             audio: Flow<ByteArray>,
@@ -69,7 +75,11 @@ class DictationControllerTest {
             this.model = model
             this.timeoutMs = timeoutMs
             var chunks = 0
-            audio.collect { onPartial("chunk ${++chunks}") }
+            audio.collect {
+                received += it
+                chunks++
+                if (streams) onPartial("chunk $chunks")
+            }
             return result()
         }
 
@@ -82,6 +92,7 @@ class DictationControllerTest {
         cleanupEnabled: Boolean = false,
         level: Float = 0f,
         settings: Settings = emptyPreferences().toSettings(emptySet()).copy(cleanupEnabled = cleanupEnabled),
+        vadModel: ((FloatArray) -> Float)? = null,
         onFinalTranscript: suspend (String) -> DictationState.Done = { text ->
             finals += text
             DictationState.Done(text)
@@ -91,14 +102,47 @@ class DictationControllerTest {
         // Virtual time is the clock: a chunk's read ends when it is emitted.
         audio = { rate ->
             recordedRate = rate
-            audio.map { AudioChunk(it, currentTime, level) }
+            audio.map { AudioChunk(it, currentTime * NANOS_PER_MS, level) }
         },
         stt = { stt },
-        settings = flowOf(settings),
+        // VAD only for tests that pass a model.
+        settings = flowOf(settings.copy(vadEnabled = vadModel != null)),
         warmUpCleanup = { warmUps++ },
         onFinalTranscript = onFinalTranscript,
-        clock = { currentTime },
+        vadModel = { vadModel ?: error("VAD off") },
+        // Gate in the test's thread, so virtual time stays deterministic.
+        vadContext = EmptyCoroutineContext,
+        clock = { currentTime * NANOS_PER_MS },
     )
+
+    /** One 32 ms frame at 16 kHz every 32 ms until cancelled, the Nth (from 0) tagged with N in its first byte. */
+    private val frames: Flow<ByteArray> = flow {
+        try {
+            var n = 0
+            while (true) {
+                emit(ByteArray(1024).also { it[0] = n++.toByte() })
+                delay(32)
+            }
+        } finally {
+            audioReleased = true
+        }
+    }
+
+    /** The model is called once per frame, in order: frames [voiced] are speech. */
+    private fun speechAt(vararg voiced: IntRange): (FloatArray) -> Float {
+        var calls = 0
+        return {
+            val frame = calls++
+            if (voiced.any { frame in it }) 1f else 0f
+        }
+    }
+
+    /** [frames], never all zeros (a keep-alive chunk is). */
+    private val markedFrames = frames.map { it.also { bytes -> bytes[1] = 1 } }
+
+    private fun isZeros(chunk: ByteArray) = chunk.all { it == 0.toByte() }
+
+    private fun tags(chunks: List<ByteArray>) = chunks.map { it[0].toInt() and 0xFF }
 
     @Test
     fun startThenStopFinalizesToDoneThenIdle() = runTest {
@@ -513,5 +557,219 @@ class DictationControllerTest {
         advanceTimeBy(101)
         assertEquals(DictationState.Done("Hi"), controller.state.value)
         assertEquals(0, warmUps)
+    }
+
+    @Test
+    fun stopDuringSilenceEndsAtOnceWithNoSpeechAndSendsNothing() = runTest {
+        val stt = FakeStt(rate = 16_000) {
+            delay(10_000) // Never reached: no STT wait.
+            "unused"
+        }
+        val controller = controller(stt, audio = frames, vadModel = { 0f })
+
+        controller.start()
+        runCurrent()
+        advanceTimeBy(1_000)
+        controller.stop()
+        advanceTimeBy(33) // The frame read during the tap ends the audio.
+
+        assertEquals(DictationState.Error("No speech detected"), controller.state.value)
+        assertTrue(stt.received.isEmpty())
+        assertTrue(audioReleased)
+    }
+
+    @Test
+    fun levelFollowsEveryChunkWhileTheGateSendsNothing() = runTest {
+        val stt = FakeStt(rate = 16_000) { "unused" }
+        val controller = controller(stt, audio = frames, level = 0.5f, vadModel = { 0f })
+
+        controller.start()
+        runCurrent()
+        advanceTimeBy(500)
+        assertEquals(0.5f, controller.level.value)
+        assertTrue(stt.received.isEmpty())
+    }
+
+    @Test
+    fun streamingProviderGetsPreRollSpeechAndTheStreamingHangover() = runTest {
+        val stt = FakeStt(rate = 16_000) { "Hi" }
+        val controller = controller(stt, audio = frames, vadModel = speechAt(20..29))
+
+        controller.start()
+        runCurrent()
+        advanceTimeBy(100 * 32L + 10)
+        controller.stop()
+        advanceTimeBy(32)
+
+        assertEquals(DictationState.Done("Hi"), controller.state.value)
+        // 450 ms pre-roll (frames 6..20, the first voiced one included), speech up to 29, then 52 hangover frames.
+        assertEquals((6..81).toList(), tags(stt.received))
+    }
+
+    @Test
+    fun uploadingProviderGetsTheOfflineHangover() = runTest {
+        val stt = FakeStt(rate = 16_000, streams = false) { "Hi" }
+        val controller = controller(stt, audio = frames, vadModel = speechAt(20..29))
+
+        controller.start()
+        runCurrent()
+        advanceTimeBy(100 * 32L + 10)
+        controller.stop()
+        advanceTimeBy(32)
+
+        assertEquals(DictationState.Done("Hi"), controller.state.value)
+        assertEquals((6..44).toList(), tags(stt.received))
+    }
+
+    @Test
+    fun streamingProviderWithoutLiveTextGetsTheOfflineHangover() = runTest {
+        val stt = FakeStt(rate = 16_000, live = false) { "Hi" }
+        val controller = controller(stt, audio = frames, vadModel = speechAt(20..29))
+
+        controller.start()
+        runCurrent()
+        advanceTimeBy(100 * 32L + 10)
+        controller.stop()
+        advanceTimeBy(32)
+
+        assertEquals(DictationState.Done("Hi"), controller.state.value)
+        assertEquals((6..44).toList(), tags(stt.received))
+    }
+
+    @Test
+    fun vadAt24kHzSendsPreRollSpeechAndTheStreamingHangover() = runTest {
+        val stt = FakeStt { "Hi" }
+        // 1200-sample (50 ms) chunks at 24 kHz, the Nth tagged with N: 1.5625 VAD frames each.
+        val chunks = flow {
+            var n = 0
+            while (true) {
+                emit(ByteArray(2_400).also { it[0] = n++.toByte() })
+                delay(50)
+            }
+        }
+        val controller = controller(stt, audio = chunks, vadModel = speechAt(20..29))
+
+        controller.start()
+        runCurrent()
+        advanceTimeBy(60 * 50L + 10)
+        controller.stop()
+        advanceTimeBy(50)
+
+        assertEquals(DictationState.Done("Hi"), controller.state.value)
+        assertEquals(24_000, recordedRate)
+        // Onset at frame 21 (chunk 14) with 9 chunks (450 ms) of pre-roll; the 52nd hangover frame (81) completes in
+        // chunk 52.
+        assertEquals((5..52).toList(), tags(stt.received))
+    }
+
+    @Test
+    fun streamingProviderGetsAChunkOfZerosEvery5sOfWithheldAudio() = runTest {
+        val stt = FakeStt(rate = 16_000) { "Hi" }
+        val controller = controller(stt, audio = markedFrames, vadModel = speechAt(20..29, 460..469))
+
+        controller.start()
+        runCurrent()
+        advanceTimeBy(530 * 32L + 10)
+        controller.stop()
+        advanceTimeBy(32)
+
+        assertEquals(DictationState.Done("Hi"), controller.state.value)
+        // Speech 6..81 (76 chunks), last sent at 2.59 s; zeros at frames 238 (7.62 s) and 395 (12.64 s); speech
+        // again from 446 (pre-roll) to 521 (76 chunks).
+        assertEquals(154, stt.received.size)
+        assertEquals(listOf(76, 77), stt.received.indices.filter { isZeros(stt.received[it]) })
+        assertEquals(1_024, stt.received[76].size)
+    }
+
+    @Test
+    fun uploadingProviderGetsNoKeepAlive() = runTest {
+        val stt = FakeStt(rate = 16_000, streams = false) { "Hi" }
+        val controller = controller(stt, audio = markedFrames, vadModel = speechAt(20..29, 460..469))
+
+        controller.start()
+        runCurrent()
+        advanceTimeBy(530 * 32L + 10)
+        controller.stop()
+        advanceTimeBy(32)
+
+        assertEquals(DictationState.Done("Hi"), controller.state.value)
+        assertTrue(stt.received.isNotEmpty())
+        assertTrue(stt.received.none(::isZeros))
+    }
+
+    @Test
+    fun keepAliveZerosDontCountAsSpeech() = runTest {
+        val stt = FakeStt(rate = 16_000) {
+            delay(10_000) // Never reached: no STT wait.
+            "unused"
+        }
+        val controller = controller(stt, audio = markedFrames, vadModel = { 0f })
+
+        controller.start()
+        runCurrent()
+        advanceTimeBy(6_000)
+        controller.stop()
+        advanceTimeBy(33)
+
+        assertEquals(DictationState.Error("No speech detected"), controller.state.value)
+        // Only the keep-alive at 5 s reached the provider.
+        assertEquals(1, stt.received.size)
+        assertTrue(isZeros(stt.received[0]))
+    }
+
+    @Test
+    fun vadOffSendsEveryChunk() = runTest {
+        val stt = FakeStt(rate = 16_000) { "Hi" }
+        val controller = controller(stt, audio = frames) // vadModel would throw if called.
+
+        controller.start()
+        runCurrent()
+        advanceTimeBy(10 * 32L + 10)
+        controller.stop()
+        advanceTimeBy(32)
+
+        assertEquals(DictationState.Done("Hi"), controller.state.value)
+        assertEquals((0..11).toList(), tags(stt.received))
+    }
+
+    @Test
+    fun failingVadModelSendsEveryChunk() = runTest {
+        val stt = FakeStt(rate = 16_000) { "Hi" }
+        val controller = controller(stt, audio = frames, vadModel = { throw IllegalStateException("No model") })
+
+        controller.start()
+        runCurrent()
+        advanceTimeBy(10 * 32L + 10)
+        controller.stop()
+        advanceTimeBy(32)
+
+        assertEquals(DictationState.Done("Hi"), controller.state.value)
+        assertEquals((0..11).toList(), tags(stt.received))
+    }
+
+    @Test
+    fun uploadingProviderShowsNoLiveTextThenTheFinalText() = runTest {
+        val stt = FakeStt(rate = 16_000, streams = false) {
+            delay(500) // The upload.
+            "Hello world"
+        }
+        val controller = controller(stt, audio = frames)
+
+        controller.start()
+        runCurrent()
+        advanceTimeBy(1_000)
+        assertEquals(DictationState.Listening(""), controller.state.value)
+        controller.stop()
+        advanceTimeBy(100)
+        assertEquals(DictationState.Finalizing(""), controller.state.value)
+
+        advanceTimeBy(500)
+        assertEquals(DictationState.Done("Hello world"), controller.state.value)
+        assertEquals(listOf("Hello world"), finals)
+        assertEquals(16_000, recordedRate)
+    }
+
+    private companion object {
+        const val NANOS_PER_MS = 1_000_000L
     }
 }

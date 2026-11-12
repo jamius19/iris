@@ -20,12 +20,19 @@ data class Settings(
     val sttProviderId: String,
     /** The OpenAI (direct) model. */
     val sttModel: String,
-    /** The Vercel AI Gateway streaming transcription model. */
+    /** The Vercel AI Gateway transcription model. */
     val gatewaySttModel: String,
+    /**
+     * [gatewaySttModel] streams while recording (live text); false = uploaded after stop. Decided from the catalog
+     * when the model is saved.
+     */
+    val gatewaySttLive: Boolean,
     /** ISO-639-1 code; blank means auto-detect. */
     val sttLanguage: String,
     /** How long to wait for the final transcript once the audio is sent; past it the session fails. */
     val sttTimeoutSeconds: Int,
+    /** Send only audio around detected speech (on-device Silero VAD). */
+    val vadEnabled: Boolean,
     val cleanupEnabled: Boolean,
     val cleanupProviderId: String,
     val cleanupModel: String,

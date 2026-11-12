@@ -34,8 +34,12 @@ class SettingsRepository(
         dataStore.edit { it[Keys.STT_MODEL] = model.trim() }
     }
 
-    suspend fun setGatewaySttModel(model: String) {
-        dataStore.edit { it[Keys.GATEWAY_STT_MODEL] = model.trim() }
+    /** [live]: the model streams (see [Settings.gatewaySttLive]). */
+    suspend fun setGatewaySttModel(model: String, live: Boolean) {
+        dataStore.edit {
+            it[Keys.GATEWAY_STT_MODEL] = model.trim()
+            it[Keys.GATEWAY_STT_LIVE] = live
+        }
     }
 
     suspend fun setSttLanguage(language: String) {
@@ -44,6 +48,10 @@ class SettingsRepository(
 
     suspend fun setSttTimeoutSeconds(seconds: Int) {
         dataStore.edit { it[Keys.STT_TIMEOUT_SECONDS] = seconds }
+    }
+
+    suspend fun setVadEnabled(enabled: Boolean) {
+        dataStore.edit { it[Keys.VAD_ENABLED] = enabled }
     }
 
     suspend fun setCleanupEnabled(enabled: Boolean) {
@@ -114,8 +122,10 @@ internal object Keys {
     val STT_PROVIDER_ID = stringPreferencesKey("stt_provider_id")
     val STT_MODEL = stringPreferencesKey("stt_model")
     val GATEWAY_STT_MODEL = stringPreferencesKey("gateway_stt_model")
+    val GATEWAY_STT_LIVE = booleanPreferencesKey("gateway_stt_live")
     val STT_LANGUAGE = stringPreferencesKey("stt_language")
     val STT_TIMEOUT_SECONDS = intPreferencesKey("stt_timeout_seconds")
+    val VAD_ENABLED = booleanPreferencesKey("vad_enabled")
     val CLEANUP_ENABLED = booleanPreferencesKey("cleanup_enabled")
     val CLEANUP_PROVIDER_ID = stringPreferencesKey("cleanup_provider_id")
     val CLEANUP_MODEL = stringPreferencesKey("cleanup_model")
@@ -146,8 +156,10 @@ internal fun Preferences.toSettings(storedSecrets: Set<Secret>): Settings {
         sttProviderId = this[Keys.STT_PROVIDER_ID] ?: Settings.STT_PROVIDER_OPENAI,
         sttModel = this[Keys.STT_MODEL] ?: Settings.DEFAULT_STT_MODEL,
         gatewaySttModel = this[Keys.GATEWAY_STT_MODEL] ?: Settings.DEFAULT_GATEWAY_STT_MODEL,
+        gatewaySttLive = this[Keys.GATEWAY_STT_LIVE] ?: true,
         sttLanguage = this[Keys.STT_LANGUAGE] ?: "",
         sttTimeoutSeconds = this[Keys.STT_TIMEOUT_SECONDS] ?: Settings.DEFAULT_STT_TIMEOUT_SECONDS,
+        vadEnabled = this[Keys.VAD_ENABLED] ?: true,
         cleanupEnabled = this[Keys.CLEANUP_ENABLED] ?: false,
         cleanupProviderId = this[Keys.CLEANUP_PROVIDER_ID] ?: Settings.CLEANUP_PROVIDER_VERCEL_GATEWAY,
         cleanupModel = this[Keys.CLEANUP_MODEL] ?: Settings.DEFAULT_CLEANUP_MODEL,

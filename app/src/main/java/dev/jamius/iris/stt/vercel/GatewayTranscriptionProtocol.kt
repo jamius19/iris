@@ -20,13 +20,21 @@ import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.MediaType
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody
+import okio.BufferedSink
+import okio.ByteString.Companion.encodeUtf8
+import java.util.Base64
 
 // Frame building and parsing for Vercel AI Gateway's streaming transcription WebSocket (beta), free of I/O for unit
 // tests. No public docs: the protocol follows the AI SDK source (`@ai-sdk/gateway` 4.0.143
 // `gateway-transcription-model.ts`, `gateway-realtime-auth.ts`; `@ai-sdk/provider-utils`
 // `transcription-stream-envelope.ts`) and Handy's `vercel_live_transcription.rs`.
+// Uploads after stop: https://vercel.com/docs/ai-gateway/modalities/speech-to-text and Handy's
+// `vercel_transcription.rs`.
 
-/** Upgraded to a WebSocket by OkHttp (`https` here is `wss` on the wire). */
+/** Upgraded to a WebSocket by OkHttp (`https` here is `wss` on the wire); a plain POST for an upload. */
 internal const val TRANSCRIPTION_URL = "https://ai-gateway.vercel.sh/v4/ai/transcription-model"
 
 /** Warm-up target: the public model catalog answers a keyless `HEAD` quickly with no body. */
@@ -46,9 +54,20 @@ internal const val AUDIO_DONE = """{"type":"transcription-stream.audio-done"}"""
 /** The catalog tag of models that stream over the WebSocket. */
 internal const val STREAMING_TAG = "websocket-transcription"
 
+/** A catalog transcription model: live ones stream over this WebSocket, the others take an upload after stop. */
+internal fun isTranscriptionModel(model: GatewayModel): Boolean = model.type == "transcription"
+
 /** A catalog model that streams over this WebSocket. */
 internal fun isStreamingTranscriptionModel(model: GatewayModel): Boolean =
-    model.type == "transcription" && STREAMING_TAG in model.tags
+    isTranscriptionModel(model) && STREAMING_TAG in model.tags
+
+/**
+ * Whether [model] is transcribed live (streamed while recording) rather than uploaded after stop, from its catalog
+ * entry's tags. An id not in [catalog] (typed by hand, or the catalog isn't loaded) counts as live: the WebSocket
+ * reports an unknown or non-streaming model clearly.
+ */
+internal fun gatewaySttLive(model: String, catalog: List<GatewayModel>?): Boolean =
+    catalog?.firstOrNull { it.id == model.trim() }?.let(::isStreamingTranscriptionModel) ?: true
 
 /** [baseUrl] with the model in `?ai-model-id=` (its `/` encoded). */
 internal fun streamUrl(baseUrl: String, model: String): HttpUrl =
@@ -62,15 +81,17 @@ internal fun gatewaySampleRate(model: String): Int = if (gatewayProvider(model) 
 
 /**
  * The language option for [model]'s provider (its id prefix; the AI SDK provider names the Gateway passes options
- * on to), and Grok's interim results. Null when there is nothing to send; a provider without a known language
- * option detects the language itself.
+ * on to), and Grok's interim results when [streaming]. Null when there is nothing to send; a provider without a known
+ * language option detects the language itself. As Handy's: an upload to gpt-transcribe takes a `languages` list.
  */
-internal fun providerOptions(model: String, language: String): JsonObject? {
+internal fun providerOptions(model: String, language: String, streaming: Boolean): JsonObject? {
     val provider = gatewayProvider(model)
     val code = language.trim()
     val options = buildJsonObject {
         if (code.isNotEmpty()) {
             when (provider) {
+                "openai" if !streaming && model.substringAfter('/') == "gpt-transcribe" ->
+                    putJsonObject(provider) { putJsonArray("languages") { add(code) } }
                 "openai", "mistral" -> putJsonObject(provider) { put("language", code) }
                 "elevenlabs" -> putJsonObject(provider) { put("languageCode", code) }
                 "google" -> putJsonObject(provider) { putJsonArray("languageCodes") { add(code) } }
@@ -78,7 +99,7 @@ internal fun providerOptions(model: String, language: String): JsonObject? {
         }
         // Grok STT streams only ~3 s chunks unless asked for interim results. The Gateway names the model
         // `spacexai/...` while the AI SDK adapter reads `xai`, so it goes under both.
-        if (provider == "xai" || provider == "spacexai") {
+        if (streaming && (provider == "xai" || provider == "spacexai")) {
             for (key in listOf("xai", "spacexai")) {
                 putJsonObject(key) { putJsonObject("streaming") { put("interimResults", true) } }
             }
@@ -149,6 +170,53 @@ internal fun errorPartMessage(error: JsonElement): String {
     val message = (error as? JsonObject)?.string("message")
         ?: (error as? JsonPrimitive)?.takeIf { it.isString }?.content
     return if (message.isNullOrBlank()) "AI Gateway error" else "AI Gateway error: $message"
+}
+
+/**
+ * The JSON body of an upload, `{"audio":"<base64 WAV>","mediaType":"audio/wav","providerOptions":...}`, written
+ * straight into the sink in slices: no Base64 string of a long recording in memory. Repeatable; [sent] is set once
+ * the body has been written in full (a timeout after that is the server's).
+ */
+internal class UploadBody(private val wav: ByteArray, options: JsonObject?) : RequestBody() {
+    private val prefix = "{\"audio\":\"".encodeUtf8()
+    private val suffix =
+        ("\",\"mediaType\":\"audio/wav\"" + options?.let { ",\"providerOptions\":$it" }.orEmpty() + "}").encodeUtf8()
+
+    @Volatile
+    var sent = false
+        private set
+
+    override fun contentType(): MediaType = "application/json".toMediaType()
+
+    override fun contentLength(): Long = prefix.size + (wav.size + 2L) / 3 * 4 + suffix.size
+
+    override fun writeTo(sink: BufferedSink) {
+        sent = false
+        sink.write(prefix)
+        val encoder = Base64.getEncoder()
+        var offset = 0
+        while (offset < wav.size) {
+            val end = minOf(offset + UPLOAD_SLICE_BYTES, wav.size)
+            sink.write(encoder.encode(wav.copyOfRange(offset, end)))
+            offset = end
+        }
+        sink.write(suffix)
+        sent = true
+    }
+}
+
+/** A multiple of 3, so only the last slice gets Base64 padding. */
+private const val UPLOAD_SLICE_BYTES = 48 * 1024
+
+/** The `text` of an upload's response and its `warnings` (as JSON); null without a `text`. */
+internal fun parseUploadResponse(body: String): Pair<String, List<String>>? {
+    val response = try {
+        json.parseToJsonElement(body) as? JsonObject
+    } catch (e: SerializationException) {
+        null
+    } ?: return null
+    val text = response.string("text") ?: return null
+    return text to (response["warnings"] as? JsonArray)?.map { it.toString() }.orEmpty()
 }
 
 internal fun gatewayClosedMessage(reason: String): String =

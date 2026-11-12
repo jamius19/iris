@@ -9,6 +9,7 @@ import android.content.Context
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.preferencesDataStoreFile
 import dev.jamius.iris.audio.AudioRecorder
+import dev.jamius.iris.audio.SileroVad
 import dev.jamius.iris.cleanup.CleanupProvider
 import dev.jamius.iris.cleanup.vercel.VercelGatewayCleanup
 import dev.jamius.iris.data.settings.Secret
@@ -18,7 +19,10 @@ import dev.jamius.iris.data.settings.SettingsRepository
 import dev.jamius.iris.dictation.DictationController
 import dev.jamius.iris.dictation.DictationState
 import dev.jamius.iris.stt.SpeechToTextProvider
+import dev.jamius.iris.stt.openai.OpenAiFileTranscription
 import dev.jamius.iris.stt.openai.OpenAiRealtimeSpeechToText
+import dev.jamius.iris.stt.openai.isRealtimeTranscriptionModel
+import dev.jamius.iris.stt.vercel.VercelGatewayFileTranscription
 import dev.jamius.iris.stt.vercel.VercelGatewaySpeechToText
 import kotlinx.coroutines.CoroutineScope
 import okhttp3.OkHttpClient
@@ -40,19 +44,39 @@ class AppContainer(context: Context) {
 
     private val audioRecorder = AudioRecorder(context)
 
+    // Nothing loads until the first session with VAD on.
+    private val sileroVad = SileroVad(context)
+
     private val openAiStt = OpenAiRealtimeSpeechToText(
         httpClient,
         apiKey = { secretStore.get(Secret.OPENAI_API_KEY) }
     )
 
-    // Shares the API key with cleanup.
+    private val openAiFileStt = OpenAiFileTranscription(
+        httpClient,
+        apiKey = { secretStore.get(Secret.OPENAI_API_KEY) }
+    )
+
+    // Both share the API key with cleanup.
     private val gatewayStt = VercelGatewaySpeechToText(
         httpClient,
         apiKey = { secretStore.get(Secret.GATEWAY_API_KEY) }
     )
 
-    /** The speech-to-text provider [settings] select. */
-    fun speechToText(settings: Settings): SpeechToTextProvider = if (settings.sttGateway) gatewayStt else openAiStt
+    private val gatewayFileStt = VercelGatewayFileTranscription(
+        httpClient,
+        apiKey = { secretStore.get(Secret.GATEWAY_API_KEY) }
+    )
+
+    /**
+     * The speech-to-text provider [settings] select: the model picks streaming or upload after stop (OpenAI: the
+     * Realtime models stream; Gateway: the catalog's tag, stored at save).
+     */
+    fun speechToText(settings: Settings): SpeechToTextProvider = when {
+        settings.sttGateway -> if (settings.gatewaySttLive) gatewayStt else gatewayFileStt
+        isRealtimeTranscriptionModel(settings.sttModel) -> openAiStt
+        else -> openAiFileStt
+    }
 
     val cleanup: CleanupProvider = VercelGatewayCleanup(
         httpClient,
@@ -70,5 +94,6 @@ class AppContainer(context: Context) {
         settings = settingsRepository.settings,
         warmUpCleanup = cleanup::warmUp,
         onFinalTranscript = onFinalTranscript,
+        vadModel = sileroVad::newStream,
     )
 }

@@ -7,7 +7,9 @@ package dev.jamius.iris.stt.openai
 
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.IOException
 
@@ -40,6 +42,50 @@ class RealtimeProtocolTest {
             """,
             sessionUpdate("gpt-live-transcribe", "fr")
         )
+    }
+
+    @Test
+    fun sessionUpdateUsesSingularLanguageForModelsWithoutTheList() {
+        assertJson(
+            """
+            {"type":"session.update","session":{"type":"transcription","audio":{"input":{
+              "format":{"type":"audio/pcm","rate":24000},
+              "transcription":{"model":"gpt-realtime-whisper","language":"fr"},
+              "turn_detection":null}}}}
+            """,
+            sessionUpdate("gpt-realtime-whisper", "fr")
+        )
+        val transcribe = sessionUpdate("gpt-transcribe", "fr")
+        assertTrue(""""languages":["fr"]""" in transcribe)
+        assertFalse(""""language":""" in transcribe)
+    }
+
+    @Test
+    fun realtimeModelsStreamOtherIdsUpload() {
+        listOf("gpt-live-transcribe", " gpt-transcribe ", "gpt-realtime-whisper", "whisper-1", "gpt-4o-transcribe")
+            .forEach { assertTrue(it, isRealtimeTranscriptionModel(it)) }
+        listOf("gpt-4o-transcribe-2025-03-20", "my-model", "")
+            .forEach { assertFalse(it, isRealtimeTranscriptionModel(it)) }
+    }
+
+    @Test
+    fun onlyLiveModelsHaveLiveText() {
+        listOf("gpt-live-transcribe", " gpt-realtime-whisper ").forEach { assertTrue(it, hasLiveText(it)) }
+        listOf("gpt-transcribe", "whisper-1", "gpt-4o-transcribe", "gpt-4o-mini-transcribe", "my-model", "")
+            .forEach { assertFalse(it, hasLiveText(it)) }
+    }
+
+    @Test
+    fun httpErrorMessages() {
+        assertEquals("OpenAI rejected the API key. Check it in Iris settings.", openAiHttpErrorMessage(401, ""))
+        assertEquals("OpenAI rejected the API key. Check it in Iris settings.", openAiHttpErrorMessage(403, ""))
+        assertEquals("OpenAI rate limit or quota reached", openAiHttpErrorMessage(429, ""))
+        assertEquals("OpenAI server error (HTTP 503)", openAiHttpErrorMessage(503, ""))
+        assertEquals(
+            "OpenAI error: Invalid file format.",
+            openAiHttpErrorMessage(400, """{"error":{"message":"Invalid file format.","type":"invalid_request"}}""")
+        )
+        assertEquals("OpenAI request failed (HTTP 400)", openAiHttpErrorMessage(400, "<html>"))
     }
 
     @Test

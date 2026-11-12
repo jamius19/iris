@@ -7,11 +7,16 @@ package dev.jamius.iris.stt.vercel
 
 import dev.jamius.iris.cleanup.GatewayModel
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import okio.Buffer
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.Base64
 
 class GatewayTranscriptionProtocolTest {
 
@@ -33,7 +38,7 @@ class GatewayTranscriptionProtocolTest {
             {"type":"transcription-stream.start","inputAudioFormat":{"type":"audio/pcm","rate":24000},
              "providerOptions":{"openai":{"language":"en"}}}
             """,
-            startFrame(24_000, providerOptions("openai/gpt-live-transcribe", "en"))
+            startFrame(24_000, providerOptions("openai/gpt-live-transcribe", "en", streaming = true))
         )
     }
 
@@ -44,31 +49,54 @@ class GatewayTranscriptionProtocolTest {
 
     @Test
     fun languageOptionPerProvider() {
-        assertJson("""{"openai":{"language":"fr"}}""", providerOptions("openai/gpt-transcribe", " fr ").toString())
-        assertJson("""{"mistral":{"language":"fr"}}""", providerOptions("mistral/voxtral", "fr").toString())
+        assertJson(
+            """{"openai":{"language":"fr"}}""",
+            providerOptions("openai/gpt-transcribe", " fr ", streaming = true).toString()
+        )
+        assertJson(
+            """{"mistral":{"language":"fr"}}""",
+            providerOptions("mistral/voxtral", "fr", streaming = true).toString()
+        )
         assertJson(
             """{"elevenlabs":{"languageCode":"fr"}}""",
-            providerOptions("elevenlabs/scribe-v2-realtime", "fr").toString()
+            providerOptions("elevenlabs/scribe-v2-realtime", "fr", streaming = true).toString()
         )
         assertJson(
             """{"google":{"languageCodes":["fr"]}}""",
-            providerOptions("google/gemini-3.5-transcribe-live", "fr").toString()
+            providerOptions("google/gemini-3.5-transcribe-live", "fr", streaming = true).toString()
         )
-        assertNull(providerOptions("microsoft/mai-transcribe-2-streaming", "fr"))
+        assertNull(providerOptions("microsoft/mai-transcribe-2-streaming", "fr", streaming = true))
+    }
+
+    @Test
+    fun uploadOptionsListGptTranscribesLanguageAndSkipGrokInterimResults() {
+        assertJson(
+            """{"openai":{"languages":["fr"]}}""",
+            providerOptions("openai/gpt-transcribe", "fr", streaming = false).toString()
+        )
+        assertJson(
+            """{"openai":{"language":"fr"}}""",
+            providerOptions("openai/gpt-4o-transcribe", "fr", streaming = false).toString()
+        )
+        assertJson(
+            """{"elevenlabs":{"languageCode":"fr"}}""",
+            providerOptions("elevenlabs/scribe-v2", "fr", streaming = false).toString()
+        )
+        assertNull(providerOptions("spacexai/grok-stt", "en", streaming = false))
     }
 
     @Test
     fun blankLanguageSendsNoOptions() {
-        assertNull(providerOptions("openai/gpt-live-transcribe", " "))
-        assertNull(providerOptions("google/gemini-3.5-transcribe-live", ""))
+        assertNull(providerOptions("openai/gpt-live-transcribe", " ", streaming = true))
+        assertNull(providerOptions("google/gemini-3.5-transcribe-live", "", streaming = true))
     }
 
     @Test
     fun grokAlwaysAsksForInterimResultsUnderBothNames() {
         val interim =
             """{"xai":{"streaming":{"interimResults":true}},"spacexai":{"streaming":{"interimResults":true}}}"""
-        assertJson(interim, providerOptions("spacexai/grok-stt", "").toString())
-        assertJson(interim, providerOptions("xai/grok-stt", "en").toString())
+        assertJson(interim, providerOptions("spacexai/grok-stt", "", streaming = true).toString())
+        assertJson(interim, providerOptions("xai/grok-stt", "en", streaming = true).toString())
     }
 
     @Test
@@ -82,7 +110,10 @@ class GatewayTranscriptionProtocolTest {
     @Test
     fun bareModelIdCountsAsOpenAi() {
         assertEquals(24_000, gatewaySampleRate("gpt-live-transcribe"))
-        assertJson("""{"openai":{"language":"en"}}""", providerOptions("gpt-live-transcribe", "en").toString())
+        assertJson(
+            """{"openai":{"language":"en"}}""",
+            providerOptions("gpt-live-transcribe", "en", streaming = true).toString()
+        )
     }
 
     @Test
@@ -113,6 +144,61 @@ class GatewayTranscriptionProtocolTest {
             listOf("openai/gpt-live-transcribe", "openai/gpt-realtime-whisper"),
             catalog.filter(::isStreamingTranscriptionModel).map { it.id }
         )
+    }
+
+    @Test
+    fun allTranscriptionModelsAreListedAndTheTagPicksLiveOrAfterStop() {
+        val catalog = listOf(
+            GatewayModel("elevenlabs/scribe-v2", "transcription", emptyList(), null),
+            GatewayModel("openai/gpt-6-luna", "language", emptyList(), null),
+            GatewayModel("openai/gpt-live-transcribe", "transcription", listOf(STREAMING_TAG), null),
+        )
+
+        assertEquals(
+            listOf("elevenlabs/scribe-v2", "openai/gpt-live-transcribe"),
+            catalog.filter(::isTranscriptionModel).map { it.id }
+        )
+        assertTrue(gatewaySttLive("openai/gpt-live-transcribe", catalog))
+        assertFalse(gatewaySttLive(" elevenlabs/scribe-v2 ", catalog))
+        // Not in the catalog, or no catalog: live.
+        assertTrue(gatewaySttLive("acme/custom-stt", catalog))
+        assertTrue(gatewaySttLive("elevenlabs/scribe-v2", null))
+    }
+
+    @Test
+    fun uploadBodyIsJsonWithTheBase64Wav() {
+        // Lengths 0, 1 and 2 mod 3, and more than one slice.
+        for (size in listOf(0, 1, 2, 3, 48 * 1024, 48 * 1024 + 1, 100_000)) {
+            val wav = ByteArray(size) { (it * 7).toByte() }
+            val options = providerOptions("openai/gpt-transcribe", "fr", streaming = false)
+            val body = UploadBody(wav, options)
+            val buffer = Buffer()
+
+            body.writeTo(buffer)
+
+            assertEquals(body.contentLength(), buffer.size)
+            val json = Json.parseToJsonElement(buffer.readUtf8()).jsonObject
+            assertArrayEquals(wav, Base64.getDecoder().decode(json["audio"]!!.jsonPrimitive.content))
+            assertEquals("audio/wav", json["mediaType"]!!.jsonPrimitive.content)
+            assertEquals(options, json["providerOptions"])
+            assertTrue(body.sent)
+        }
+        val plain = Buffer().also { UploadBody(byteArrayOf(1), null).writeTo(it) }.readUtf8()
+        assertEquals("""{"audio":"AQ==","mediaType":"audio/wav"}""", plain)
+    }
+
+    @Test
+    fun parsesUploadResponse() {
+        assertEquals(
+            "Hello." to listOf("\"Unsupported option\""),
+            parseUploadResponse(
+                """{"text":"Hello.","segments":[],"language":"en","durationInSeconds":1.2,
+                   "warnings":["Unsupported option"]}"""
+            )
+        )
+        assertEquals("" to emptyList<String>(), parseUploadResponse("""{"text":""}"""))
+        assertNull(parseUploadResponse("""{"segments":[]}"""))
+        assertNull(parseUploadResponse("not json"))
     }
 
     @Test

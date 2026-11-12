@@ -34,6 +34,31 @@ internal const val MIN_COMMIT_BYTES = 24_000 * 2 / 10
 
 internal const val COMMIT_AUDIO = """{"type":"input_audio_buffer.commit"}"""
 
+/**
+ * The models a Realtime transcription session accepts (`audio.input.transcription.model`, client events reference,
+ * checked 2026-11-12). Only gpt-live-transcribe and gpt-realtime-whisper stream text before the commit; the others
+ * transcribe the committed audio.
+ */
+internal val REALTIME_TRANSCRIPTION_MODELS = setOf(
+    "whisper-1",
+    "gpt-transcribe",
+    "gpt-live-transcribe",
+    "gpt-4o-mini-transcribe",
+    "gpt-4o-mini-transcribe-2025-12-15",
+    "gpt-4o-transcribe",
+    "gpt-4o-transcribe-diarize",
+    "gpt-realtime-whisper",
+)
+
+/** [model] streams over a Realtime session; any other id is uploaded after stop. */
+internal fun isRealtimeTranscriptionModel(model: String): Boolean = model.trim() in REALTIME_TRANSCRIPTION_MODELS
+
+/** [model] reports text while recording; the other Realtime models transcribe the committed buffer at stop. */
+internal fun hasLiveText(model: String): Boolean = model.trim() in setOf("gpt-live-transcribe", "gpt-realtime-whisper")
+
+/** [model] takes the `languages` array; the others take singular `language` (never both). */
+internal fun usesLanguageList(model: String): Boolean = model.trim() in setOf("gpt-transcribe", "gpt-live-transcribe")
+
 /** PCM16 mono 24 kHz input, no turn detection (gpt-live-transcribe supports no VAD; we commit on stop). */
 internal fun sessionUpdate(model: String, language: String): String = buildJsonObject {
     put("type", "session.update")
@@ -47,8 +72,11 @@ internal fun sessionUpdate(model: String, language: String): String = buildJsonO
                 }
                 putJsonObject("transcription") {
                     put("model", model)
-                    // gpt-live-transcribe takes the `languages` array; never also send singular `language`.
-                    if (language.isNotBlank()) putJsonArray("languages") { add(language) }
+                    when {
+                        language.isBlank() -> Unit
+                        usesLanguageList(model) -> putJsonArray("languages") { add(language) }
+                        else -> put("language", language)
+                    }
                 }
                 put("turn_detection", JsonNull)
             }
@@ -97,9 +125,25 @@ internal fun parseServerEvent(text: String): RealtimeEvent? {
 /** For a WebSocket failure; [httpCode] is set when the handshake got an HTTP error response. */
 internal fun connectionFailureMessage(httpCode: Int?, cause: Throwable): String = when (httpCode) {
     null -> "Network error: ${cause.message ?: cause.javaClass.simpleName}"
-    401 -> "OpenAI rejected the API key. Check it in Iris settings."
+    401 -> API_KEY_REJECTED
     else -> "Couldn't connect to OpenAI (HTTP $httpCode)"
 }
+
+/** For a non-2xx response; [body] may carry `{ "error": { "message": ... } }`. */
+internal fun openAiHttpErrorMessage(code: Int, body: String): String = when {
+    code == 401 || code == 403 -> API_KEY_REJECTED
+    code == 429 -> "OpenAI rate limit or quota reached"
+    code >= 500 -> "OpenAI server error (HTTP $code)"
+    else -> errorMessageOf(body)?.let { "OpenAI error: $it" } ?: "OpenAI request failed (HTTP $code)"
+}
+
+private fun errorMessageOf(body: String): String? = try {
+    ((json.parseToJsonElement(body) as? JsonObject)?.get("error") as? JsonObject)?.string("message")
+} catch (e: SerializationException) {
+    null
+}
+
+private const val API_KEY_REJECTED = "OpenAI rejected the API key. Check it in Iris settings."
 
 internal fun closedMessage(reason: String): String =
     "OpenAI closed the connection" + if (reason.isBlank()) "" else ": $reason"

@@ -43,10 +43,12 @@ class SettingsMappingTest {
         assertEquals(Settings.STT_PROVIDER_OPENAI, settings.sttProviderId)
         assertEquals(Settings.DEFAULT_STT_MODEL, settings.sttModel)
         assertEquals(Settings.DEFAULT_GATEWAY_STT_MODEL, settings.gatewaySttModel)
+        assertTrue(settings.gatewaySttLive)
         assertFalse(settings.sttGateway)
         assertEquals(Settings.DEFAULT_STT_MODEL, settings.activeSttModel)
         assertEquals("", settings.sttLanguage)
         assertEquals(Settings.DEFAULT_STT_TIMEOUT_SECONDS, settings.sttTimeoutSeconds)
+        assertTrue(settings.vadEnabled)
         assertFalse(settings.cleanupEnabled)
         assertEquals(Settings.CLEANUP_PROVIDER_VERCEL_GATEWAY, settings.cleanupProviderId)
         assertEquals(Settings.DEFAULT_CLEANUP_MODEL, settings.cleanupModel)
@@ -68,8 +70,10 @@ class SettingsMappingTest {
             Keys.STT_PROVIDER_ID to Settings.STT_PROVIDER_VERCEL_GATEWAY,
             Keys.STT_MODEL to "gpt-transcribe",
             Keys.GATEWAY_STT_MODEL to "google/gemini-3.5-transcribe-live",
+            Keys.GATEWAY_STT_LIVE to false,
             Keys.STT_LANGUAGE to "fr",
             Keys.STT_TIMEOUT_SECONDS to 20,
+            Keys.VAD_ENABLED to false,
             Keys.CLEANUP_ENABLED to true,
             Keys.CLEANUP_MODEL to "google/gemini-2.5-flash",
             Keys.CLEANUP_REASONING_EFFORT to "high",
@@ -87,8 +91,10 @@ class SettingsMappingTest {
         assertEquals(Settings.STT_PROVIDER_VERCEL_GATEWAY, settings.sttProviderId)
         assertEquals("gpt-transcribe", settings.sttModel)
         assertEquals("google/gemini-3.5-transcribe-live", settings.gatewaySttModel)
+        assertFalse(settings.gatewaySttLive)
         assertEquals("fr", settings.sttLanguage)
         assertEquals(20, settings.sttTimeoutSeconds)
+        assertFalse(settings.vadEnabled)
         assertTrue(settings.cleanupEnabled)
         assertEquals("google/gemini-2.5-flash", settings.cleanupModel)
         assertEquals("high", settings.cleanupReasoningEffort)

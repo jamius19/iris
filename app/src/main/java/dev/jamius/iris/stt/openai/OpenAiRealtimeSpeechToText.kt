@@ -25,6 +25,7 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import java.io.IOException
+import java.util.concurrent.TimeUnit.SECONDS
 
 /**
  * OpenAI Realtime transcription-only session over a WebSocket. Audio is appended as it is recorded; when the
@@ -41,9 +42,15 @@ class OpenAiRealtimeSpeechToText(
     // only reused for an equal Address (protocols included), so the warm-up must use exactly that client setup.
     private val warmUpClient = httpClient.newBuilder().protocols(listOf(Protocol.HTTP_1_1)).build()
 
+    // Pings keep the socket alive through long pauses VAD doesn't send (mobile NATs drop idle connections); a missed
+    // pong fails the socket. Same pool and Address as `httpClient`, so the warm-up's connection is still reused.
+    private val socketClient = httpClient.newBuilder().pingInterval(PING_INTERVAL_SECONDS, SECONDS).build()
+
     /** `System.nanoTime()` of the last warm-up whose connection is still unused, or null. */
     @Volatile
     private var warmedUpAt: Long? = null
+
+    override fun liveText(model: String): Boolean = hasLiveText(model)
 
     override suspend fun transcribe(
         audio: Flow<ByteArray>,
@@ -57,7 +64,7 @@ class OpenAiRealtimeSpeechToText(
         warmedUpAt = null // The handshake takes the warmed connection (an upgraded one never returns to the pool).
         val events = Channel<RealtimeEvent>(Channel.UNLIMITED)
         val request = Request.Builder().url(url).header("Authorization", "Bearer $key").build()
-        val socket = httpClient.newWebSocket(request, Listener(events, startedAt = System.nanoTime()))
+        val socket = socketClient.newWebSocket(request, Listener(events, startedAt = System.nanoTime()))
         var closed = false
         try {
             val text = coroutineScope {
@@ -160,6 +167,7 @@ class OpenAiRealtimeSpeechToText(
         const val NORMAL_CLOSURE = 1000
         const val DRAIN_TIMEOUT_MS = 60_000L
         const val DRAIN_POLL_MS = 10L
+        const val PING_INTERVAL_SECONDS = 30L
 
         /** Inside both OkHttp's 5 min pool keep-alive and api.openai.com's 400 s idle timeout (measured). */
         const val WARM_UP_WINDOW_MS = 180_000L

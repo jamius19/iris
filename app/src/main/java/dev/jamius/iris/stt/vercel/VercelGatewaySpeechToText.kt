@@ -29,6 +29,7 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString.Companion.toByteString
 import java.io.IOException
+import java.util.concurrent.TimeUnit.SECONDS
 
 /**
  * Vercel AI Gateway streaming transcription (beta) over a WebSocket: a start frame, then the recording as raw PCM16
@@ -48,6 +49,10 @@ class VercelGatewaySpeechToText(
     // OkHttp connects WebSockets on `httpClient.newBuilder().protocols(listOf(HTTP_1_1))`. A pooled connection is
     // only reused for an equal Address (protocols included), so the warm-up must use exactly that client setup.
     private val warmUpClient = httpClient.newBuilder().protocols(listOf(Protocol.HTTP_1_1)).build()
+
+    // Pings keep the socket alive through long pauses VAD doesn't send (mobile NATs drop idle connections); a missed
+    // pong fails the socket. Same pool and Address as `httpClient`, so the warm-up's connection is still reused.
+    private val socketClient = httpClient.newBuilder().pingInterval(PING_INTERVAL_SECONDS, SECONDS).build()
 
     /** `System.nanoTime()` of the last warm-up whose connection is still unused, or null. */
     @Volatile
@@ -83,9 +88,8 @@ class VercelGatewaySpeechToText(
             .build()
         warmedUpAt = null // The handshake takes the warmed connection (an upgraded one never returns to the pool).
         val rate = sampleRate(model)
-        val session = Session(
-            request, model, rate, startFrame(rate, providerOptions(model, language)), timeoutMs, onPartial
-        )
+        val start = startFrame(rate, providerOptions(model, language, streaming = true))
+        val session = Session(request, model, rate, start, timeoutMs, onPartial)
         var closed = false
         try {
             val text = session.run(audio)
@@ -175,7 +179,7 @@ class VercelGatewaySpeechToText(
             while (true) {
                 val input = if (drained) withTimeoutOrNull(stallTimeoutMs) { inputs.receive() } else inputs.receive()
                 if (input == null) {
-                    // A silently dead connection (no ping, no read timeout on WebSockets) only shows up here.
+                    // A silently dead connection (no read timeout on WebSockets) shows up here or by a missed pong.
                     fail(STALL_MESSAGE, retryable = true, scope)
                     continue
                 }
@@ -297,7 +301,7 @@ class VercelGatewaySpeechToText(
         private fun reconnectRemainingMs(): Long = (reconnectDeadline - System.nanoTime()) / 1_000_000
 
         /** OkHttp queues frames until the handshake completes. */
-        private fun connect(): WebSocket = httpClient.newWebSocket(request, listener).also { it.send(start) }
+        private fun connect(): WebSocket = socketClient.newWebSocket(request, listener).also { it.send(start) }
     }
 
     private sealed interface Input {
@@ -364,6 +368,7 @@ class VercelGatewaySpeechToText(
         const val STALL_MESSAGE = "Timed out waiting for the transcript"
         const val DRAIN_TIMEOUT_MS = 60_000L
         const val DRAIN_POLL_MS = 10L
+        const val PING_INTERVAL_SECONDS = 30L
         const val SEND_TIMEOUT = "Timed out sending audio to AI Gateway"
 
         /** A reconnect's base budget (as Handy's), plus [RESEND_BYTES_PER_SECOND] for the audio it resends. */

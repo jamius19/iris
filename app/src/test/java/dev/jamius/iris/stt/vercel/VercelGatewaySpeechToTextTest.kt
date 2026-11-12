@@ -320,6 +320,26 @@ class VercelGatewaySpeechToTextTest {
     }
 
     @Test(timeout = TEST_TIMEOUT_MS)
+    fun audioFailureIsRethrownWithoutPaddingOrAudioDone() {
+        val stream = upgrade(ServerStream())
+        // The controller's audio flow ends like this when VAD let nothing through.
+        val audio = flow<ByteArray> {
+            emit(CHUNK_A) // Under 100 ms: a normal end would pad it.
+            while (stream.frames.size < 2) delay(10) // The server got the start frame and the chunk.
+            throw SttException("No speech detected")
+        }
+
+        val error = assertThrows(SttException::class.java) {
+            runBlocking { stt().transcribe(audio, MODEL, "", TIMEOUT_MS, {}) }
+        }
+
+        assertEquals("No speech detected", error.message)
+        assertTrue(stream.sawClose.await(5, TimeUnit.SECONDS))
+        assertEquals(listOf(START_TYPE, CHUNK_A.toByteString()), stream.types())
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test(timeout = TEST_TIMEOUT_MS)
     fun missingApiKeyFailsWithoutConnecting() {
         val error = assertThrows(SttException::class.java) {
             runBlocking { stt(apiKey = " ").transcribe(endlessAudio, MODEL, "", TIMEOUT_MS, {}) }

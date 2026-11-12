@@ -9,11 +9,13 @@ import android.os.SystemClock
 import android.util.Log
 import dev.jamius.iris.audio.AudioCaptureException
 import dev.jamius.iris.audio.AudioChunk
+import dev.jamius.iris.audio.SpeechGate
 import dev.jamius.iris.data.settings.Settings
 import dev.jamius.iris.stt.SpeechToTextProvider
 import dev.jamius.iris.stt.SttException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -24,10 +26,14 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.produceIn
 import kotlinx.coroutines.flow.transformWhile
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlin.coroutines.CoroutineContext
 
 sealed interface DictationState {
     data object Idle : DictationState
@@ -65,6 +71,9 @@ internal const val ERROR_DISPLAY_MS = 2 * DONE_DISPLAY_MS
  *   it, and its exceptions end in Error.
  * @param warmUpCleanup if cleanup is enabled, called as recording starts and again on stop, so the cleanup call
  *   finds a warm connection. Must return at once.
+ * @param vadModel a new Silero stream (16 kHz frame -> speech probability) for each session with VAD on; it is only
+ *   called on [vadContext].
+ * @param vadContext where the VAD gate runs (model load and inference: CPU work, off the main thread).
  */
 class DictationController(
     private val scope: CoroutineScope,
@@ -73,6 +82,8 @@ class DictationController(
     private val settings: Flow<Settings>,
     private val warmUpCleanup: () -> Unit,
     private val onFinalTranscript: suspend (transcript: String) -> DictationState.Done,
+    private val vadModel: () -> (FloatArray) -> Float,
+    private val vadContext: CoroutineContext = Dispatchers.Default,
     private val clock: () -> Long = SystemClock::elapsedRealtimeNanos,
 ) {
     private val _state = MutableStateFlow<DictationState>(DictationState.Idle)
@@ -129,23 +140,58 @@ class DictationController(
                 if (cleanupEnabled) warmUpCleanup()
                 val stt = stt(config)
                 val model = config.activeSttModel
+                val rate = stt.sampleRate(model)
+                val hangoverMs =
+                    if (stt.liveText(model)) SpeechGate.STREAMING_HANGOVER_MS else SpeechGate.OFFLINE_HANGOVER_MS
+                val gate = if (config.vadEnabled) SpeechGate(rate, hangoverMs, vadModel()) else null
+                var recordedBytes = 0L
+                var sentBytes = 0L
+                // Keep-alive for a socket while the gate withholds audio (servers may end a stream that gets none).
+                val keepAlive = gate != null && stt.streams
+                var lastSentAt: Long? = null
                 val text = coroutineScope {
                     val sessionScope = this
+                    // VAD inference is CPU work: off the main thread. Every chunk still comes through (level, stop
+                    // check); the gate only decides which bytes ride along with it.
+                    val gated = audio(rate).map { it to (gate?.process(it.bytes) ?: listOf(it.bytes)) }
+                        .flowOn(vadContext)
                     // Recording runs in its own coroutine, so the audio ends (and STT commits) without waiting for
                     // the mic's next read and its release; the scope still waits for both before returning. It
                     // starts on the provider's first collect, after its API key check, so a missing key never
                     // opens the mic.
-                    val recording = flow { emitAll(audio(stt.sampleRate(model)).produceIn(sessionScope)) }
+                    val recording = flow { emitAll(gated.produceIn(sessionScope)) }
                     // Sends every chunk read before the stop tap (even if queued behind a stalled main thread), then
                     // the one during which stop was tapped, so speech up to the tap is kept.
-                    val chunks = recording.transformWhile {
-                        if (stoppedAt == null) _level.value = it.level
-                        emit(it.bytes)
-                        stoppedAt.let { stop -> stop == null || it.readAtNanos <= stop }
+                    val chunks = recording.transformWhile { (chunk, send) ->
+                        if (stoppedAt == null) _level.value = chunk.level
+                        recordedBytes += chunk.bytes.size
+                        send.forEach {
+                            sentBytes += it.size
+                            emit(it)
+                        }
+                        if (keepAlive) {
+                            val last = lastSentAt
+                            if (send.isNotEmpty() || last == null) {
+                                lastSentAt = chunk.readAtNanos
+                            } else if (chunk.readAtNanos - last >= KEEP_ALIVE_NANOS) {
+                                // Zeros, not counted as sent: a session without speech still ends with NO_SPEECH.
+                                emit(ByteArray(chunk.bytes.size))
+                                lastSentAt = chunk.readAtNanos
+                            }
+                        }
+                        stoppedAt.let { stop -> stop == null || chunk.readAtNanos <= stop }
+                    }.onCompletion { cause ->
+                        // Null only when the recording ended at the stop (not on errors or cancellation).
+                        if (gate == null || cause != null) return@onCompletion
+                        val summary = "VAD: sent ${ms(sentBytes, rate)} ms of ${ms(recordedBytes, rate)} ms"
+                        gate.failure?.let { Log.w(TAG, "$summary (VAD failed: sent everything from then on)", it) }
+                            ?: Log.d(TAG, summary)
+                        // Nothing to transcribe: fail before the provider pads or commits any audio.
+                        if (sentBytes == 0L) throw SttException(NO_SPEECH)
                     }
                     stt.transcribe(chunks, model, config.sttLanguage, config.sttTimeoutSeconds * 1000L, ::onPartial)
                 }
-                if (text.isBlank()) DictationState.Error("No speech detected") else onFinalTranscript(text)
+                if (text.isBlank()) DictationState.Error(NO_SPEECH) else onFinalTranscript(text)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -174,8 +220,15 @@ class DictationController(
         }
     }
 
+    /** Duration of [bytes] of PCM16 mono at [rate]. */
+    private fun ms(bytes: Long, rate: Int): Long = bytes * 1000 / (rate * 2)
+
     private companion object {
         const val TAG = "DictationController"
         const val GENERIC_ERROR = "Something went wrong"
+        const val NO_SPEECH = "No speech detected"
+
+        /** A chunk of zeros goes to a streaming provider after this long without sent audio. */
+        const val KEEP_ALIVE_NANOS = 5_000_000_000L
     }
 }
