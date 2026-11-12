@@ -28,6 +28,8 @@ the provider interfaces so a new provider is just a new implementation. The one 
   https://github.com/waywardgeek/sonic commit `1d7051354f32392a3b3cdb8a8bcfe56e6f8b744f` (upstream file SHA-256
   `c23fb313fafa9cdab4c9aa291bfdc2426f33a42d0e19e3e8d1cfd3f85258d7df`); only the package line changed (noted in its
   header); licence ships as `assets/sonic_LICENSE.txt`.
+- Lucide icon `audio-lines` (https://lucide.dev/icons/audio-lines, ISC) as `res/drawable/ic_audio_lines.xml`
+  (converted from the 24x24 SVG: stroke 2, round caps/joins); licence ships as `assets/lucide_LICENSE.txt`.
 - Manual DI: `AppContainer` held by the custom `Application` class `IrisApp`. No Hilt/Koin.
 - All versions live in `gradle/libs.versions.toml`.
 
@@ -341,6 +343,16 @@ Providers (settings store a provider id for each):
   after another, each with its own timeout, texts joined with `joined` (CJK-aware). Errors (`openAiHttpErrorMessage`):
   401/403 key, 429 quota, 5xx server, else `OpenAI error: <error.message>`; transport = "Network error: ...".
   Logs `Timing: upload X KB in N part(s), stop->response Y ms`.
+- OpenAI model list (`stt.openai.listOpenAiTranscriptionModels`, `OpenAiModels.kt`; Settings' OpenAI model menu via
+  `AppContainer.openAiTranscriptionModels`): verified 2026-11-12 against
+  https://developers.openai.com/api/reference/resources/models/methods/list. `GET https://api.openai.com/v1/models`,
+  `Authorization: Bearer <key>` -> `{object:"list", data:[{id, object:"model", created, owned_by, shutdown_date?}]}`
+  (no capability field). Keeps ids containing `transcribe` or `whisper` (any case), sorted
+  (`parseTranscriptionModelIds`, pure). No/blank key = "Set your OpenAI API key to load models", a key OkHttp can't
+  send as a header = "Invalid OpenAI API key" (never quoted); neither sends a request. Errors:
+  `openAiHttpErrorMessage`; no `data` array = "Unexpected response from OpenAI"; transport =
+  `modelsNetworkErrorMessage` ("Loading models timed out" / "Couldn't load models (network error)"). Default client
+  timeouts.
 - Uploads (both providers, `stt/Wav.kt`): `wavBytes` = 44-byte RIFF/WAVE header (PCM, mono, 16-bit) + the chunks,
   padded with silence to 1.25 s when under 1 s (as Handy: services reject very short files). Per upload,
   `httpClient.newBuilder().readTimeout(uploadReadTimeoutMs)` = `timeoutMs + audio duration / 4` (the server's
@@ -484,17 +496,19 @@ Providers (settings store a provider id for each):
   timed out", other transport errors = "Couldn't load models (network error)" (no raw exception in the UI); no `data`
   array = "Unexpected response from AI Gateway".
   Settings > Transcription: two radio rows (OpenAI (direct) / Vercel AI Gateway, each naming its key; the selected
-  one appends " · not set" in the error colour without its key), then the OpenAI model text field (hint "Realtime
-  models (gpt-live-transcribe, gpt-transcribe, ...) stream; other models upload after you stop. Mode: live|streams,
-  text after stop|after stop") or the Gateway model combobox (below; lists all transcription models, each item
-  labelled "live" or "after stop" (`modelLabel`, a trailing `labelSmall`); hint "Live models show text as you
-  speak; others transcribe after you stop. Mode: ..." for the saved model), then the shared language field, then a
+  one appends " · not set" in the error colour without its key), then the OpenAI model combobox (below; lists the
+  key's transcription models (OpenAI model list above); hint "Realtime models (gpt-live-transcribe, gpt-transcribe,
+  ...) stream; other models upload after you stop. Mode: live|streams, text after stop|after stop") or the Gateway
+  model combobox (lists all transcription models; hint "Live models show text as you speak; others transcribe after
+  you stop. Mode: ..." for the saved model). In both menus a streaming model's item ends with the `ic_audio_lines`
+  icon (18 dp, `onSurfaceVariant`, content description "Streams"; `streams`: OpenAI `isRealtimeTranscriptionModel`,
+  Gateway `isStreamingTranscriptionModel`), others with nothing. Then the shared language field, then a
   "Timeout" `SliderSetting` (5..30 s, step 1) for `sttTimeoutSeconds`, hint "How long to wait for the final
   transcript after you stop.", then a divider and the "Skip silence" switch row (`vadEnabled`), then a divider and
   a "Speed" `SliderSetting` (100..200 %, step 10, shown "1.0x".."2.0x") for `sttSpeedPercent`, hint "Speeds up the
   audio sent (pitch kept), so less is billed. Higher speeds can lower accuracy; services with a per-request minimum
   may not save.", saved on release.
-  Settings shows the cleanup model (and the Gateway STT model: `GatewayModelField`) as an editable M3
+  Settings shows the cleanup model (and both STT models: `ModelField`) as an editable M3
   `ExposedDropdownMenuBox` (`PrimaryEditable` field): any
   custom id can be typed; typing filters the list (case-insensitive substring); explicit Save as other fields.
   The catalog (`models`/loading/error) lives in `SettingsScreen`, shared by both model fields and the reasoning
@@ -502,7 +516,12 @@ Providers (settings store a provider id for each):
   opens with cleanup or Gateway STT on (or when either is turned on, if not loaded yet), once on a model menu's
   first open if
   still not loaded (later failures need refresh), or via refresh; one fetch at a time (a load in progress isn't
-  restarted). A failed load shows its error under the model field. The menu renders a lazy,
+  restarted). A failed load shows its error under the model field. The OpenAI list has its own state in
+  `SettingsScreen`, same lifecycle: loads when the screen opens with OpenAI selected (or when it is selected, if not
+  loaded yet), on first menu open, or via refresh. Saving or clearing the OpenAI key cancels a running load (it
+  writes nothing), drops the list and reloads at once if OpenAI is selected (else on the next switch to it); without
+  a key the error asks for one. Other load failures (e.g. the key fails to decrypt) are logged (`Log.w`) and shown
+  as "Couldn't load models". The menu renders a lazy,
   height-bounded `LazyColumn` (fixed to the field's width: the menu measures intrinsic width, which lazy lists
   don't support). Refresh is an `IconButton` beside the field (not in it), so it doesn't focus the field or
   clear the filter; the box gets `expanded` only while the field is focused, since it focuses its anchor (IME)
@@ -600,6 +619,9 @@ Not covered by unit tests; check on a real device (ideally more than one OEM) af
   `openai/gpt-4o-transcribe` or `elevenlabs/scribe-v2`): no panel while recording, spinner after stop, text
   inserted; a 2–3 min dictation on mobile data finishes within the timeout; language set; VAD on + silence = no
   upload; picking an after-stop Gateway model from the menu shows "Mode: after stop" and is used at once.
+- OpenAI model dropdown lists transcription models with your key (realtime ones with the audio-lines icon, also
+  in the Gateway menu for live models); no key shows "Set your OpenAI API key to load models"; saving a key loads
+  the list.
 - Long Gateway upload: a 10 min Gateway after-stop dictation (VAD off) succeeds; on a 413, reuse `splitAtPauses`
   for the Gateway too.
 - Gateway STT with a real voice: live text streams and the final is inserted (default model, plus a 16 kHz one:

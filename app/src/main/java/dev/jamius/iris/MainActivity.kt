@@ -14,7 +14,11 @@ class MainActivity : ComponentActivity() {
         val container = (application as IrisApp).container
         setContent {
             IrisTheme {
-                SettingsScreen(repository = container.settingsRepository, cleanup = container.cleanup)
+                SettingsScreen(
+                    repository = container.settingsRepository,
+                    cleanup = container.cleanup,
+                    openAiModels = container::openAiTranscriptionModels
+                )
             }
         }
     }

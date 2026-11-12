@@ -12,6 +12,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.util.Log
 import android.view.accessibility.AccessibilityManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -118,11 +119,14 @@ import dev.jamius.iris.data.settings.Secret
 import dev.jamius.iris.data.settings.Settings
 import dev.jamius.iris.data.settings.SettingsRepository
 import dev.jamius.iris.overlay.IrisAccessibilityService
+import dev.jamius.iris.stt.SttException
 import dev.jamius.iris.stt.openai.hasLiveText
 import dev.jamius.iris.stt.openai.isRealtimeTranscriptionModel
 import dev.jamius.iris.stt.vercel.gatewaySttLive
 import dev.jamius.iris.stt.vercel.isStreamingTranscriptionModel
 import dev.jamius.iris.stt.vercel.isTranscriptionModel
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -131,7 +135,12 @@ import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(repository: SettingsRepository, cleanup: CleanupProvider, modifier: Modifier = Modifier) {
+fun SettingsScreen(
+    repository: SettingsRepository,
+    cleanup: CleanupProvider,
+    openAiModels: suspend () -> List<String>,
+    modifier: Modifier = Modifier,
+) {
     val settings = repository.settings.collectAsState(initial = null).value
     val scope = rememberCoroutineScope()
     var editingPrompt by remember { mutableStateOf<CleanupPrompt?>(null) }
@@ -166,6 +175,53 @@ fun SettingsScreen(repository: SettingsRepository, cleanup: CleanupProvider, mod
     val sttGateway = settings?.sttGateway == true
     LaunchedEffect(cleanupEnabled, sttGateway) {
         if ((cleanupEnabled || sttGateway) && models == null) loadModels()
+    }
+
+    // OpenAI's transcription models for the OpenAI model field, listed with the user's key; in memory only.
+    var openAiSttModels by remember { mutableStateOf<List<String>?>(null) }
+    var openAiModelsLoading by remember { mutableStateOf(false) }
+    var openAiModelsError by remember { mutableStateOf<String?>(null) }
+    var openAiModelsJob by remember { mutableStateOf<Job?>(null) }
+
+    fun loadOpenAiModels() {
+        if (openAiModelsLoading) return
+        openAiModelsLoading = true
+        openAiModelsError = null
+        openAiModelsJob = scope.launch {
+            try {
+                openAiSttModels = openAiModels()
+            } catch (e: SttException) {
+                openAiModelsError = e.message
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // E.g. the stored key failed to decrypt. The exception never carries the key.
+                Log.w(TAG, "Loading OpenAI models failed", e)
+                openAiModelsError = "Couldn't load models"
+            } finally {
+                // A load cancelled by a key change leaves the state to its replacement.
+                if (openAiModelsJob === coroutineContext[Job]) openAiModelsLoading = false
+            }
+        }
+    }
+
+    // The list depends on the key: a key change drops it and cancels a running load (its result is never written),
+    // then reloads while OpenAI is selected (without a key that shows the "set your key" error, with no request).
+    // With the Gateway selected, the list loads when OpenAI is selected again.
+    fun onOpenAiKeyChanged() {
+        openAiModelsJob?.cancel()
+        openAiModelsJob = null
+        openAiModelsLoading = false
+        openAiModelsError = null
+        openAiSttModels = null
+        if (settings?.sttGateway == false) loadOpenAiModels()
+    }
+
+    // Loads when the screen opens with OpenAI transcription selected, and when it is selected before it has loaded.
+    // Without a key nothing is requested and the error asks for one.
+    val sttOpenAi = settings?.sttGateway == false
+    LaunchedEffect(sttOpenAi) {
+        if (sttOpenAi && openAiSttModels == null) loadOpenAiModels()
     }
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val screenColor = MaterialTheme.colorScheme.surfaceContainer
@@ -211,8 +267,18 @@ fun SettingsScreen(repository: SettingsRepository, cleanup: CleanupProvider, mod
                     ApiKeyField(
                         label = "OpenAI API key",
                         isSet = settings.openAiKeySet,
-                        onSave = { scope.launch { repository.setApiKey(Secret.OPENAI_API_KEY, it) } },
-                        onClear = { scope.launch { repository.clearApiKey(Secret.OPENAI_API_KEY) } }
+                        onSave = {
+                            scope.launch {
+                                repository.setApiKey(Secret.OPENAI_API_KEY, it)
+                                onOpenAiKeyChanged()
+                            }
+                        },
+                        onClear = {
+                            scope.launch {
+                                repository.clearApiKey(Secret.OPENAI_API_KEY)
+                                onOpenAiKeyChanged()
+                            }
+                        }
                     )
                     ApiKeyField(
                         label = "Vercel AI Gateway API key",
@@ -245,7 +311,7 @@ fun SettingsScreen(repository: SettingsRepository, cleanup: CleanupProvider, mod
                 CardDivider()
                 FieldsColumn {
                     if (settings.sttGateway) {
-                        GatewayModelField(
+                        ModelField(
                             value = settings.gatewaySttModel,
                             models = sttModelIds,
                             loading = modelsLoading,
@@ -254,19 +320,23 @@ fun SettingsScreen(repository: SettingsRepository, cleanup: CleanupProvider, mod
                                 sttModeText(settings.gatewaySttLive),
                             onLoad = ::loadModels,
                             onSave = { scope.launch { repository.setGatewaySttModel(it, gatewaySttLive(it, models)) } },
-                            modelLabel = { if (it in liveSttModelIds.orEmpty()) "live" else "after stop" }
+                            streams = { it in liveSttModelIds.orEmpty() }
                         )
                     } else {
-                        SavableTextField(
-                            label = "Model",
+                        ModelField(
                             value = settings.sttModel,
+                            models = openAiSttModels,
+                            loading = openAiModelsLoading,
+                            error = openAiModelsError,
                             supportingText = "Realtime models (gpt-live-transcribe, gpt-transcribe, ...) stream; " +
                                 "other models upload after you stop. " +
                                 sttModeText(
                                     live = hasLiveText(settings.sttModel),
                                     streams = isRealtimeTranscriptionModel(settings.sttModel)
                                 ),
-                            onSave = { scope.launch { repository.setSttModel(it) } }
+                            onLoad = ::loadOpenAiModels,
+                            onSave = { scope.launch { repository.setSttModel(it) } },
+                            streams = ::isRealtimeTranscriptionModel
                         )
                     }
                     SavableTextField(
@@ -347,7 +417,7 @@ fun SettingsScreen(repository: SettingsRepository, cleanup: CleanupProvider, mod
                 }
                 CardDivider()
                 FieldsColumn(modifier = Modifier.alpha(cleanupAlpha)) {
-                    GatewayModelField(
+                    ModelField(
                         value = settings.cleanupModel,
                         models = chatModelIds,
                         loading = modelsLoading,
@@ -745,14 +815,13 @@ private fun SavableTextField(
 }
 
 /**
- * Gateway model combobox: type any model id, or pick one from the Gateway's list (filtered by what was typed).
+ * Model combobox: type any model id, or pick one from the provider's list (filtered by what was typed).
  * The list ([models], [loading], [error]) is passed in; [onLoad] fetches it, on first open if not loaded yet or on
- * refresh. [modelLabel] is a short note shown at the end of a model's menu item, if any. Saves like
- * [SavableTextField].
+ * refresh. Menu items of models that [streams] end with the audio-lines icon. Saves like [SavableTextField].
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun GatewayModelField(
+private fun ModelField(
     value: String,
     models: List<String>?,
     loading: Boolean,
@@ -760,7 +829,7 @@ private fun GatewayModelField(
     supportingText: String,
     onLoad: () -> Unit,
     onSave: (String) -> Unit,
-    modelLabel: (String) -> String? = { null },
+    streams: (String) -> Boolean = { false },
 ) {
     var input by rememberSaveable(value) { mutableStateOf(value) }
     // What the user typed to filter the list; empty shows the whole list. Cleared when the field opens the menu.
@@ -872,14 +941,17 @@ private fun GatewayModelField(
                                 input = model
                                 close()
                             },
-                            trailingIcon = modelLabel(model)?.let {
+                            trailingIcon = if (streams(model)) {
                                 {
-                                    Text(
-                                        it,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    Icon(
+                                        painterResource(R.drawable.ic_audio_lines),
+                                        contentDescription = "Streams",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(18.dp)
                                     )
                                 }
+                            } else {
+                                null
                             },
                             contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding
                         )
@@ -991,6 +1063,8 @@ private fun Modifier.bringIntoViewAboveIme(contentKey: Any? = null): Modifier {
 }
 
 private const val IME_SETTLE_MS = 100L
+
+private const val TAG = "SettingsScreen"
 
 /** A speech-to-text provider choice; if selected, it flags its key as not set when [keyMissing]. */
 @Composable

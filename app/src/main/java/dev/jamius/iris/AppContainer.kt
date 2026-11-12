@@ -22,6 +22,7 @@ import dev.jamius.iris.stt.SpeechToTextProvider
 import dev.jamius.iris.stt.openai.OpenAiFileTranscription
 import dev.jamius.iris.stt.openai.OpenAiRealtimeSpeechToText
 import dev.jamius.iris.stt.openai.isRealtimeTranscriptionModel
+import dev.jamius.iris.stt.openai.listOpenAiTranscriptionModels
 import dev.jamius.iris.stt.vercel.VercelGatewayFileTranscription
 import dev.jamius.iris.stt.vercel.VercelGatewaySpeechToText
 import kotlinx.coroutines.CoroutineScope
@@ -77,6 +78,10 @@ class AppContainer(context: Context) {
         isRealtimeTranscriptionModel(settings.sttModel) -> openAiStt
         else -> openAiFileStt
     }
+
+    /** The OpenAI transcription models the stored key can use, for the settings' model menu. */
+    suspend fun openAiTranscriptionModels(): List<String> =
+        listOpenAiTranscriptionModels(httpClient, secretStore.get(Secret.OPENAI_API_KEY))
 
     val cleanup: CleanupProvider = VercelGatewayCleanup(
         httpClient,
