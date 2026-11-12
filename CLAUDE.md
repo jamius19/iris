@@ -271,7 +271,10 @@ Cleanup + insertion (CP4):
   leading space after a non-whitespace char other than `( [ { " ' “`, and a trailing space before a
   non-whitespace char other than `. , ! ? : ; ) ] } ” ’ …` (ASCII `"`/`'` still get one: they may be openers).
   `insertText`: `refresh()` the node, text = "" if `isShowingHintText` or text equals
-  `hintText`, `ACTION_SET_TEXT` with the merged text, then `ACTION_SET_SELECTION` to the end of the inserted text.
+  `hintText`. An invalid selection (`mergeInsertion`'s rule) means the text can't be trusted (checked 2026-11-12:
+  WhatsApp's empty box reports its placeholder "Message" as text, no hint, selection -1..-1, so it got
+  "Message <dictation>"): first clipboard + `ACTION_PASTE` of the unspaced text (lands at the app's real cursor);
+  only if that returns false the steps below. Otherwise `ACTION_SET_TEXT` with the merged text, then `ACTION_SET_SELECTION` to the end of the inserted text.
   If SET_TEXT returns false: clipboard + `ACTION_PASTE` of the same spaced text (previous clipboard not restored).
   A non-editable node (keyboard only) skips SET_TEXT: clipboard + `ACTION_PASTE` of the unspaced text.
   No/stale node or paste fails: text left on the clipboard, notice "Copied to clipboard".
@@ -597,6 +600,7 @@ Not covered by unit tests; check on a real device (ideally more than one OEM) af
 - Insertion in a TextView `EditText`, a Compose `TextField` and a WebView `<input>`/`<textarea>`, incl. the cursor
   mid-text and a selection; spacing and final cursor position are right.
 - Paste fallback: a field that rejects `ACTION_SET_TEXT` gets the text via clipboard + paste.
+- Empty WhatsApp / Gmail box: no placeholder ("Message") in the inserted text.
 - Rotation mid-dictation (Listening and Finalizing): bubble re-snaps, panel follows, session isn't lost.
 - Changing field during cleanup: text is copied with "field changed"; the panel is restored if the bubble re-shows.
 - Panel size: the Lines/Max width sliders change the panel (live text and notices) in another app without
