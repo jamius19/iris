@@ -67,14 +67,20 @@ internal fun doneNotice(cleanupError: String?, targetFocused: Boolean, insertion
 
 /**
  * Inserts [text] at the cursor of [node] with `ACTION_SET_TEXT` + `ACTION_SET_SELECTION`. If the field rejects
- * SET_TEXT, puts [text] (spaced as for SET_TEXT) on the clipboard and pastes it. Without a live node (null or
- * stale), or if the paste fails too, [text] is left on the clipboard: [Insertion.COPIED].
+ * SET_TEXT, puts [text] (spaced as for SET_TEXT) on the clipboard and pastes it. A non-editable [node] (the
+ * keyboard is open, but the field isn't reported as editable) only gets the paste of [text] as is. Without a live
+ * node (null or stale), or if the paste fails too, [text] is left on the clipboard: [Insertion.COPIED].
  */
 internal fun insertText(context: Context, node: AccessibilityNodeInfo?, text: String): Insertion {
     if (node != null && node.refresh()) {
-        val merged = mergeInsertion(fieldText(node), node.textSelectionStart, node.textSelectionEnd, text)
-        if (setText(node, merged)) return Insertion.INSERTED
-        copyToClipboard(context, merged.insertion)
+        val pasted = if (node.isEditable) {
+            val merged = mergeInsertion(fieldText(node), node.textSelectionStart, node.textSelectionEnd, text)
+            if (setText(node, merged)) return Insertion.INSERTED
+            merged.insertion
+        } else {
+            text
+        }
+        copyToClipboard(context, pasted)
         if (node.performAction(AccessibilityNodeInfo.ACTION_PASTE)) return Insertion.INSERTED
     }
     copyToClipboard(context, text)

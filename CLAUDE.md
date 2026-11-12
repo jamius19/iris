@@ -41,8 +41,15 @@ the provider interfaces so a new provider is just a new implementation. The one 
 
 Overlay (`overlay`, View-based, not Compose: a Compose window in a service needs lifecycle/savedstate owners):
 - `IrisAccessibilityService` re-checks `findFocus(FOCUS_INPUT)` on view-focused/window events and shows the
-  bubble only for `isEditable && !isPassword` nodes outside Iris's own package. The node is kept in
-  `focusedEditable` as the insertion target (call `refresh()` before use). IME bounds come from `windows`
+  bubble for `isEditable && !isPassword` nodes outside Iris's own package, and whenever the keyboard
+  (TYPE_INPUT_METHOD window) is open, even without an editable focused node (e.g. ChatGPT's chat box): not for a
+  password node, nor if the focused node (or, with none, the active window) is Iris's own. Keyboard open and the
+  input focus not editable (`keyboardOnly`): `findFocusedEditable` walks `rootInActiveWindow` breadth first (max
+  `MAX_TREE_NODES` = 1000) for a focused editable node and uses it if found. Checked 2026-11-12 on a phone: a freshly
+  launched ChatGPT (Compose) reports only its host `View` (not editable, no paste) until its node tree is walked
+  once; after the walk it reports the `EditText` (editable, SET_TEXT) and insertion works. The input-focused node
+  (editable, non-editable or null) is kept in `focusedField` as the insertion target (call `refresh()` before use);
+  `fieldFocused` says the bubble is wanted (also gates warm-up). IME bounds come from `windows`
   (TYPE_INPUT_METHOD). Window-change events from Iris's own overlay windows are skipped (`ownsWindow`). The
   overlay is created only once the stored bubble position has loaded.
 - `BubbleOverlay` owns two `TYPE_ACCESSIBILITY_OVERLAY` windows (bubble stack + live-text panel), positioned in
@@ -223,9 +230,10 @@ Cleanup + insertion (CP4):
   dictation). Cancelling cancels the OkHttp call (`invokeOnCancellation`). On timeout the raw transcript is inserted with the
   notice "Cleanup timeout. Pasted original text." (if it was copied instead: "Cleanup timeout." plus the clipboard
   line from `doneNotice`).
-- Target: the service snapshots `focusedEditable` when the user taps stop. At insertion, if it still equals
-  `focusedEditable` (`AccessibilityNodeInfo.equals`) the text is inserted there; else it is copied to the
-  clipboard ("Copied to clipboard — field changed"; the bubble may already be hidden). Any other hook failure
+- Target: the service snapshots `focusedField` when the user taps stop. At insertion, if it still equals
+  `focusedField` (`AccessibilityNodeInfo.equals`) the text is inserted there; else it is copied to the
+  clipboard ("Copied to clipboard — field changed"; the bubble may already be hidden). A null target (keyboard
+  only, no focused node) is never matched: it is copied ("Copied to clipboard"). Any other hook failure
   (settings read, insertion throwing) is logged and copies the text too. Never "Something went wrong" with the
   text lost. Notice wording is `doneNotice` (pure, unit tested).
 - `overlay/TextInsertion.kt`: `mergeInsertion` (pure, unit tested) replaces the selection (or inserts at the
@@ -235,6 +243,7 @@ Cleanup + insertion (CP4):
   `insertText`: `refresh()` the node, text = "" if `isShowingHintText` or text equals
   `hintText`, `ACTION_SET_TEXT` with the merged text, then `ACTION_SET_SELECTION` to the end of the inserted text.
   If SET_TEXT returns false: clipboard + `ACTION_PASTE` of the same spaced text (previous clipboard not restored).
+  A non-editable node (keyboard only) skips SET_TEXT: clipboard + `ACTION_PASTE` of the unspaced text.
   No/stale node or paste fails: text left on the clipboard, notice "Copied to clipboard".
 
 Providers (settings store a provider id for each):
@@ -547,6 +556,7 @@ Not covered by unit tests; check on a real device (ideally more than one OEM) af
   and switches direction when the IME shows/hides mid-Listening without a flicker; panel enters with the first
   words and animates out after the tick; re-show after focus loss mid-Finalizing restores spinner/panel without
   replayed animations; TalkBack reads "Start/Cancel/Stop dictation" and double-tap works on the ✕ and the pill.
+- Keyboard-only field, e.g. ChatGPT's chat box right after a fresh launch: bubble shows, text is inserted.
 - Sideloaded APK: the accessibility toggle needs App info > ⋮ > "Allow restricted settings".
 - VAD on, real voice: first and last words aren't clipped (incl. speaking right after the tap and stopping right
   after the last word); a 10 s pause mid-dictation is dropped (log `VAD: sent X ms of Y ms` with sent < recorded); a

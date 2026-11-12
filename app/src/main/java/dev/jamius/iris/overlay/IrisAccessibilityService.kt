@@ -35,7 +35,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * Shows the bubble overlay while an editable, non-password field in another app has input focus.
+ * Shows the bubble overlay while an editable, non-password field in another app has input focus, or the keyboard is
+ * open for another app (some fields, e.g. ChatGPT's chat box, report no editable input focus).
  * Focus is re-checked with `findFocus(FOCUS_INPUT)` on every focus/window event (see accessibility_service_config).
  */
 class IrisAccessibilityService : AccessibilityService() {
@@ -52,11 +53,17 @@ class IrisAccessibilityService : AccessibilityService() {
         overlay?.hide()
     }
 
-    /** The focused editable field the bubble is shown for. Call `refresh()` before acting on it. */
-    var focusedEditable: AccessibilityNodeInfo? = null
+    /** True while the bubble is wanted: an editable field has input focus, or the keyboard is open (see class doc). */
+    private var fieldFocused = false
+
+    /**
+     * The input-focused node the bubble is shown for: editable, or (keyboard only) not editable or null. Call
+     * `refresh()` before acting on it.
+     */
+    var focusedField: AccessibilityNodeInfo? = null
         private set
 
-    /** [focusedEditable] when the user tapped stop: the field the dictation is inserted into. */
+    /** [focusedField] when the user tapped stop: the field the dictation is inserted into. */
     private var target: AccessibilityNodeInfo? = null
 
     /**
@@ -88,7 +95,7 @@ class IrisAccessibilityService : AccessibilityService() {
             },
             onPillTap = {
                 if (dictation.state.value is DictationState.Listening) {
-                    target = focusedEditable
+                    target = focusedField
                     stoppedAt = SystemClock.elapsedRealtime()
                     dictation.stop()
                     haptic()
@@ -144,7 +151,8 @@ class IrisAccessibilityService : AccessibilityService() {
         overlay?.hide(animate = false)
         overlay = null
         dictation = null
-        focusedEditable = null
+        fieldFocused = false
+        focusedField = null
         target = null
         scope.cancel() // Also cancels any dictation session, which releases the mic and closes the socket.
         super.onDestroy()
@@ -152,11 +160,19 @@ class IrisAccessibilityService : AccessibilityService() {
 
     private fun refreshFocus() {
         val overlay = overlay ?: return
-        // Iris's own fields (API keys) are skipped; so is any password field.
-        val node = findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-            ?.takeIf { it.isEditable && !it.isPassword && it.packageName?.toString() != packageName }
-        focusedEditable = node
-        if (node != null) {
+        // Iris's own screens (API keys) are skipped; so is any password field. An open keyboard counts as a field
+        // (the IME window's add/remove events call this), since some apps' fields aren't reported as editable.
+        val inputFocus = findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+        val keyboardOnly = inputFocus?.isEditable != true && imeTop() != null
+        // A Compose app (e.g. ChatGPT) may report only its host view until its node tree is walked once.
+        val focused = if (keyboardOnly) rootInActiveWindow?.let(::findFocusedEditable) ?: inputFocus else inputFocus
+        fieldFocused = when {
+            focused?.isPassword == true -> false
+            focused != null -> focused.packageName?.toString() != packageName && (focused.isEditable || keyboardOnly)
+            else -> keyboardOnly && rootInActiveWindow?.packageName?.toString() != packageName
+        }
+        focusedField = focused?.takeIf { fieldFocused }
+        if (fieldFocused) {
             handler.removeCallbacks(hideBubble)
             overlay.show()
             dictation?.let { render(it.state.value) } // Restores the panel if the bubble was hidden mid-session.
@@ -166,11 +182,23 @@ class IrisAccessibilityService : AccessibilityService() {
         }
     }
 
+    /** The first focused editable node under [root], breadth first, visiting at most [MAX_TREE_NODES] nodes. */
+    private fun findFocusedEditable(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val queue = ArrayDeque(listOf(root))
+        var visited = 0
+        while (queue.isNotEmpty() && visited++ < MAX_TREE_NODES) {
+            val node = queue.removeFirst()
+            if (node.isFocused && node.isEditable) return node
+            for (i in 0 until node.childCount) node.getChild(i)?.let(queue::addLast)
+        }
+        return null
+    }
+
     /** Pre-warms the STT connection while the bubble is up and no session runs; the provider throttles repeats. */
     private fun warmUpStt() {
         val state = dictation?.state?.value ?: return
         val stt = sttWarmUp ?: return
-        if (focusedEditable == null) return
+        if (!fieldFocused) return
         if (state is DictationState.Listening || state is DictationState.Finalizing) return
         stt.warmUp()
     }
@@ -257,7 +285,8 @@ class IrisAccessibilityService : AccessibilityService() {
                 }
             }
             val target = target
-            targetFocused = target != null && target == focusedEditable
+            // A null target (keyboard only, no focused node) can't be matched: insertText copies the text.
+            targetFocused = target == null || target == focusedField
             if (targetFocused) {
                 insertText(this, target, text)
             } else {
@@ -317,6 +346,9 @@ class IrisAccessibilityService : AccessibilityService() {
 
     private companion object {
         const val TAG = "IrisAccessibilityService"
+
+        /** Caps the keyboard-only tree walk (a node is one IPC unless prefetched). */
+        const val MAX_TREE_NODES = 1000
         const val HIDE_DELAY_MS = 300L
         const val IME_CHANGES = AccessibilityEvent.WINDOWS_CHANGE_ADDED or
             AccessibilityEvent.WINDOWS_CHANGE_REMOVED or
