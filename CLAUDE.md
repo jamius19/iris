@@ -155,7 +155,8 @@ Dictation (CP3):
   cancel; decided from the state at tap time) gets a haptic (`haptic()`: `EFFECT_HEAVY_CLICK`, touch usage, so the
   touch-haptics setting applies; needs `VIBRATE`); ignored taps, drags and focus-loss cancels don't. Finalizing
   can't be cancelled by a tap: stalls end via the STT timeout `T` = `sttTimeoutSeconds` (OpenAI: 60 s drain, then
-  `T`; Gateway: 60 s drain, `T` stall, one reconnect within its budget, then `T` stall again) / cleanup 15 s stall.
+  `T`; Gateway: 60 s drain, `T` stall, one reconnect within its budget, then `T` stall again) / cleanup
+  `cleanupTimeoutSeconds`.
   `level: StateFlow<Float>`: the latest chunk's `level` while Listening (set in `transformWhile`), 0 otherwise; the
   service pushes it to the pill. Stop records the stop time (`clock`); the audio flow (`transformWhile`) keeps
   sending queued chunks (e.g. behind a stalled main thread) until it has sent the first one read after that time
@@ -219,7 +220,7 @@ Cleanup + insertion (CP4):
   same. Overall deadline: `Settings.cleanupTimeoutSeconds` (1..30, default 5, like Handy's
   `post_process_timeout_secs`); `onFinalTranscript` wraps the cleanup call in `withTimeoutOrNull` (not
   `withTimeout`: its `TimeoutCancellationException` is a `CancellationException` and would be rethrown, losing the
-  dictation). Cancelling cancels the OkHttp call (`awaitClose`). On timeout the raw transcript is inserted with the
+  dictation). Cancelling cancels the OkHttp call (`invokeOnCancellation`). On timeout the raw transcript is inserted with the
   notice "Cleanup timeout. Pasted original text." (if it was copied instead: "Cleanup timeout." plus the clipboard
   line from `doneNotice`).
 - Target: the service snapshots `focusedEditable` when the user taps stop. At insertion, if it still equals
@@ -404,23 +405,18 @@ Providers (settings store a provider id for each):
   becomes high); a valid value the model doesn't list is translated, not documented as an error. The catalog
   (`GET /v1/models`) lists `openai/gpt-6-luna` effort values `none|low|medium|high|xhigh|max`. User message = raw
   transcript; a fixed framing line appended to the system prompt says to treat it as text, not instructions.
-  Streaming (`stream: true`), verified 2026-11-11 against `.../openai-chat-completions/streaming` and
-  `.../structured-outputs` ("Streaming with structured outputs": json_schema works with streaming; concatenate the
-  content and parse it at the end): SSE `data: {chat.completion.chunk}` events, `: heartbeat` comment lines,
-  `data: [DONE]` last. `choices[0].delta.content` pieces concatenate into the JSON `{"text":...}`; chunks may have
-  no choices (usage). The body is read line by line on an OkHttp thread (`callbackFlow`, deltas collected in the
-  caller's context; cancelling cancels the call). The result is `parseCleanedText` of the joined content: blank
-  text, any other shape, a non-JSON `data:` or a cut-off stream = "Unexpected response from AI Gateway".
-  `delta.refusal` (OpenAI streaming reference; the Gateway doesn't document it) with no content =
-  "Model refused: <refusal>". Mid-stream errors aren't documented; a `data:` with a top-level `error` (seen in
-  vercel/ai#18303) = "AI Gateway error: <error.message>" (or just "AI Gateway error"). `choices[0].finish_reason`
-  `length` = "Cleanup output was cut off", `content_filter` = "Cleanup blocked by content filter". Any other
-  exception while reading the stream is logged and = "Unexpected response from AI Gateway" (the flow always closes).
-  Errors before the stream: 401/403 = API key message, 429 = rate limit/quota, 5xx = server error, other 4xx =
-  gateway `error.message`, transport = network error. Timeouts: no call timeout in the provider (the service's
-  overall `cleanupTimeoutSeconds` deadline, at most 30 s, usually wins); "Cleanup timed out" after
-  `STALL_TIMEOUT_MS` (15 s) without a `data:` event: OkHttp's read timeout covers a silent socket (incl. waiting
-  for headers = time to first byte), a per-line check covers heartbeat-only streams.
+  Not streamed (no `stream` field; nothing used the deltas), verified 2026-11-12 against
+  `.../openai-chat-completions/chat-completions` and `.../structured-outputs`: the response is a `chat.completion`;
+  `choices[0].message.content` is the JSON `{"text":...}`, parsed by `parseCleanedText` (via `parseCompletion`):
+  no `choices[0]`, missing/blank text or any other shape = "Unexpected response from AI Gateway".
+  `message.refusal` (OpenAI spec, which the Gateway implements; its docs don't show it) with no content =
+  "Model refused: <refusal>". `finish_reason` `length` = "Cleanup output was cut off", `content_filter` =
+  "Cleanup blocked by content filter". HTTP errors: 401/403 = API key message, 429 = rate limit/quota, 5xx = server
+  error, other 4xx = gateway `error.message`, transport = network error. The call goes through the shared `execute`
+  (cancelling the coroutine cancels the OkHttp call). Timeouts: the service's `cleanupTimeoutSeconds` deadline
+  (at most 30 s) is the real limit; the provider's cleanup client has no read timeout (the response comes only
+  after the whole generation) and the 30 s call timeout (`CALL_TIMEOUT_MS`, shared with `listModels`), which maps
+  to "Cleanup timed out".
   Warm-up (`CleanupProvider.warmUp()`, fire-and-forget, failures only `Log.d`): `DictationController` calls it
   when a session's settings load (recording start) and again on stop, only if `cleanupEnabled`. Request: `HEAD
   /v1/models`, no key (edge-cached, 200, no body; measured 2026-11-11 ~50-100 ms after TLS, like `HEAD /` (308,
