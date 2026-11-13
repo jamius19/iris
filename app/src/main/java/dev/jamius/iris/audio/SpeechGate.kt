@@ -11,12 +11,14 @@ package dev.jamius.iris.audio
  * samples at 16 kHz, -1..1; 24 kHz is downsampled 3:2 first) and keeps frames once [ONSET_FRAMES] in a row score
  * above [THRESHOLD], until [hangoverMs] after the last voiced one. A chunk is sent whole if a frame completed in it
  * is kept; the first kept chunk also sends the unsent chunks of the last [PRE_ROLL_MS]. If scoring throws, fails
- * open: [failure] is set and every chunk is sent from then on.
+ * open: [failure] is set and every chunk is sent from then on. With [markSegmentEnds], an empty array follows the
+ * chunk in which a segment's hangover ran out (none in fail-open mode, nor at the stop).
  */
 internal class SpeechGate(
     private val sampleRate: Int,
     hangoverMs: Int,
     private val speechProbability: (FloatArray) -> Float,
+    private val markSegmentEnds: Boolean = false,
 ) {
     init {
         require(sampleRate == 16_000 || sampleRate == 24_000) { "Unsupported rate $sampleRate" }
@@ -38,26 +40,35 @@ internal class SpeechGate(
     private var onset = 0
     private var hangover = 0
 
-    /** The bytes to send for [chunk], in order: none, `[chunk]`, or the pre-roll followed by [chunk]. */
+    /** A segment's hangover ran out in the chunk being processed (only with [markSegmentEnds]). */
+    private var segmentEnded = false
+
+    /**
+     * The bytes to send for [chunk], in order: none, `[chunk]`, or the pre-roll followed by [chunk]; then an empty
+     * array if a segment ended in [chunk] (with [markSegmentEnds]).
+     */
     fun process(chunk: ByteArray): List<ByteArray> {
         if (failure != null) return listOf(chunk)
+        segmentEnded = false
         val kept = try {
             keepsChunk(chunk)
         } catch (e: Exception) {
             failure = e
+            segmentEnded = false
             true
         }
+        val end = if (segmentEnded) listOf(ByteArray(0)) else emptyList()
         if (!kept) {
             preRoll.addLast(chunk)
             preRollSize += chunk.size
             // Drop the oldest chunks while the rest still cover the pre-roll.
             while (preRollSize - preRoll.first().size >= preRollBytes) preRollSize -= preRoll.removeFirst().size
-            return emptyList()
+            return end
         }
         val out = preRoll.toMutableList().apply { add(chunk) }
         preRoll.clear()
         preRollSize = 0
-        return out
+        return out + end
     }
 
     /** Runs every frame [chunk] completes; true if one of them is kept (or none completed while in speech). */
@@ -97,6 +108,7 @@ internal class SpeechGate(
             true
         } else {
             inSpeech = false
+            if (markSegmentEnds) segmentEnded = true
             false
         }
         else -> {

@@ -59,6 +59,7 @@ class DictationControllerTest {
         override val streams: Boolean = true,
         private val live: Boolean = streams,
         override val allowsSpeedUp: Boolean = true,
+        override val wantsSegmentEnds: Boolean = false,
         private val result: suspend () -> String,
     ) : SpeechToTextProvider {
         var calls = 0
@@ -824,6 +825,48 @@ class DictationControllerTest {
     }
 
     private fun speed(percent: Int) = emptyPreferences().toSettings(emptySet()).copy(sttSpeedPercent = percent)
+
+    /** Speech at frames 20..29 and 200..209, stopped at frame 240 (before the second segment's hangover ends). */
+    private fun TestScope.twoSegments(stt: FakeStt, settings: Settings = speed(100)) {
+        val controller = controller(stt, audio = frames, settings = settings, vadModel = speechAt(20..29, 200..209))
+        controller.start()
+        runCurrent()
+        advanceTimeBy(240 * 32L + 10)
+        controller.stop()
+        advanceTimeBy(32)
+        assertEquals(DictationState.Done("Hi"), controller.state.value)
+    }
+
+    @Test
+    fun optedInProviderGetsOneEmptyArrayBetweenSegments() = runTest {
+        val stt = FakeStt(rate = 16_000, streams = false, live = true, wantsSegmentEnds = true) { "Hi" }
+        twoSegments(stt)
+
+        val ends = stt.received.indices.filter { stt.received[it].isEmpty() }
+        // Segment 1 is 6..81 (pre-roll, speech, 52 hangover frames); frame 82 ends it and joins the pre-roll.
+        assertEquals(listOf(76), ends)
+        assertEquals((6..81).toList() + (186..241).toList(), tags(stt.received.filter { it.isNotEmpty() }))
+    }
+
+    @Test
+    fun segmentEndSurvivesTheSpeedUp() = runTest {
+        val stt = FakeStt(rate = 16_000, streams = false, live = true, wantsSegmentEnds = true) { "Hi" }
+        twoSegments(stt, speed(150))
+
+        val ends = stt.received.indices.filter { stt.received[it].isEmpty() }
+        assertEquals(1, ends.size)
+        val before = stt.received.subList(0, ends[0]).sumOf { it.size }
+        assertEquals(76 * 1024 / 1.5, before.toDouble(), 76 * 1024 * 0.02)
+    }
+
+    @Test
+    fun providerThatDidNotOptInNeverGetsAnEmptyArray() = runTest {
+        val stt = FakeStt(rate = 16_000) { "Hi" }
+        twoSegments(stt)
+
+        assertTrue(stt.received.isNotEmpty())
+        assertTrue(stt.received.none { it.isEmpty() })
+    }
 
     @Test
     fun speed100SendsTheGatedArraysUnchanged() = runTest {

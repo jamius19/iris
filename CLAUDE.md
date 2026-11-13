@@ -8,9 +8,10 @@ keyboard/screen bottom), which becomes ✕ (cancel). The partial transcript stre
 transcript is finalized, optionally cleaned up by an LLM (toggle in settings), then inserted at the cursor of the
 focused field. Models that can't stream are "after stop" ones: the recording is uploaded after the pill tap, with no
 live text (pill + waveform while recording, spinner after stop); the mode follows the model (Deepgram: a setting).
-Cloud APIs only for transcription and cleanup. On-device transcription is future scope: don't build for it, but keep
-the provider interfaces so a new provider is just a new implementation. The one on-device model is Silero VAD
-("Skip silence"): it only decides which audio is sent, to cut STT cost.
+Cloud APIs for transcription and cleanup, plus one on-device STT provider ("On device", CP14: sherpa-onnx offline
+models the user downloads in settings; pseudo-live text, each VAD phrase decoded as the user pauses). A new provider
+is just a new implementation. Silero VAD ("Skip silence") decides which audio is sent (cloud: to cut STT cost; On
+device: also where phrases end).
 
 ## Tech stack & build
 - AGP 9.x with built-in Kotlin (no separate `kotlin-android` plugin). Kotlin 2.2.10, Compose compiler plugin,
@@ -18,11 +19,28 @@ the provider interfaces so a new provider is just a new implementation. The one 
 - `minSdk 30`, `targetSdk`/`compileSdk 37`, Java 11 target. JDK 25 locally.
 - Compose foundation (custom settings UI, no Material), activity-compose 1.13.0 (`PredictiveBackHandler`), OkHttp
   (HTTP + WebSocket), kotlinx.serialization (JSON), Jetpack DataStore Preferences, Coroutines/Flow.
-- ONNX Runtime Android 1.28.0 (Silero VAD), pinned: 1.29+ adds default-on telemetry (INTERNET permission + an
-  `ai.onnxruntime.TelemetryInitializer` ContentProvider); 1.28.0's AAR manifest is empty (checked 2026-11-12: the
-  merged manifest gets nothing from it; INTERNET comes from OkHttp) and its libs are 16 KB page aligned.
-  `abiFilters` arm64-v8a + x86_64 (phones + emulator): 32-bit-only devices can't install the app. The native libs
-  are ~29 MB (arm64) + ~35 MB (x86_64), stored uncompressed: the debug APK went from 34 MB to 99.6 MB (a store
+- sherpa-onnx v2.0.1 (CP14: on-device STT and the Silero VAD), the AAR from JitPack: group
+  `com.github.k2-fsa.sherpa-onnx`, artifact `sherpa-onnx` (POM without dependencies), resolved through an
+  `exclusiveContent` JitPack repository in `settings.gradle.kts` (nothing else resolves from there). Never the
+  aggregate `com.github.k2-fsa:sherpa-onnx` POM (pulls `sherpa-onnx-jvm` + desktop native libs). Its AAR manifest is
+  empty and `proguard.txt` too; the JNI reads config fields by name, so `rules.keep` keeps `com.k2fsa.sherpa.onnx.**`
+  (checked in an R8 release build: recognizer + VAD load, a decode works). Packaged per ABI: its own ONNX Runtime
+  1.28.2 `libonnxruntime.so` (arm64 22,249,560 B, x86_64 25,581,120 B) and `libsherpa-onnx-jni.so` (4,609,320 /
+  5,053,592 B); `libsherpa-onnx-c-api.so` / `-cxx-api.so` are excluded (`packaging.jniLibs.excludes`: nothing loads
+  them). Licence: `assets/sherpa_onnx_LICENSE.txt` (Apache-2.0, `LICENSE` at tag `v2.0.1`). Pinned by Gradle
+  dependency verification (`gradle/verification-metadata.xml`, sherpa only: every other group is trusted by a regex,
+  metadata and signatures aren't verified): AAR SHA-256
+  `a8d09d1d32f3eb8520482c6d3d43fae674681c5b050385967c70a3c2c9bf0ee7` (= the GitHub release AAR, which JitPack
+  re-publishes), so a re-pointed tag or rebuild fails the build; the POM's checksum is listed but not enforced
+  (`verify-metadata` false). A version bump needs new checksums there.
+  ONNX Runtime Android (`com.microsoft.onnxruntime`, 1.28.0, the VAD's runtime until CP14) was dropped: both AARs
+  ship a `libonnxruntime.so` and only one can be packaged, but their symbols are versioned (MS 1.28.0 exports
+  `OrtGetApiBase@@VERS_1.28.0` and its JNI imports `@VERS_1.28.0`; sherpa's exports and imports `@VERS_1.28.2`;
+  `readelf --dyn-syms`, 2026-11-13), so either copy fails the other JNI (emulator: `dlopen failed: cannot locate
+  symbol "OrtGetApiBase"`); Maven Central has no `onnxruntime-android` 1.28.2 (1.29.0 adds default-on telemetry).
+  The VAD now runs through sherpa's `Vad` (see VAD). No `ai.onnxruntime.TelemetryInitializer`: INTERNET comes from
+  OkHttp. `abiFilters` arm64-v8a + x86_64 (phones + emulator): 32-bit-only devices can't install the app. Native libs
+  are stored uncompressed: debug APK 95.8 MB before CP14 (MS ORT), 89.8 MB after (release, R8: 65.3 MB; a store
   bundle would ship one ABI).
 - Sonic (time-stretch, "Speed"), vendored, no dependency: `audio/sonic/Sonic.java` (Java, Apache-2.0, Bill Cox) from
   https://github.com/waywardgeek/sonic commit `1d7051354f32392a3b3cdb8a8bcfe56e6f8b744f` (upstream file SHA-256
@@ -35,10 +53,11 @@ the provider interfaces so a new provider is just a new implementation. The one 
   (81,676 B, SHA-256 `a9a701eb18cbd5f786f28f986c16895ffc0d0337e4a9a63131b619d9542e07d4`); OFL licences ship as
   `assets/inter_OFL.txt` / `assets/blinker_OFL.txt`.
 - Lucide 1.72.0 icons (https://github.com/lucide-icons/lucide/tree/1.72.0/icons) as `res/drawable/lucide_<name>.xml`
-  (16: accessibility, mic, audio-lines, sparkles, eye, eye-off, cloud, arrow-down, arrow-right, refresh-cw, trash,
-  radio, check, chevron-left, chevron-down, plus): viewport 24, white stroke (tinted in Compose), round caps/joins,
-  circles/rects converted to paths; `android:width` = the use size and `strokeWidth` chosen so the drawn stroke
-  matches the Figma export (1.5 at 24/16 dp, 1.57 at 23, 1.64 at 22, 1.25 for sparkles, 1.6 at 15, 2.2 at 11). The
+  (17: accessibility, mic, audio-lines, sparkles, eye, eye-off, cloud, arrow-down, arrow-right, refresh-cw, trash,
+  radio, check, chevron-left, chevron-down, plus, smartphone): viewport 24, white stroke (tinted in Compose), round
+  caps/joins, circles/rects converted to paths; `android:width` = the use size and `strokeWidth` chosen so the drawn
+  stroke matches the Figma export (1.5 at 24/16 dp, 1.57 at 23, 1.64 at 22, 1.25 for sparkles, 1.6 at 15, 2.2 at 11;
+  `smartphone` 14 dp at 1.7, drawn untinted by `BrandIcon` as On device's provider icon). The
   overlay keeps its own `ic_mic`/`ic_close`/`ic_check`/`ic_exclamation`. `assets/lucide_LICENSE.txt` is the full
   upstream LICENSE (ISC + the Feather MIT block, "Copyright (c) 2013-present Cole Bemis": radio, check, chevrons,
   plus, trash, arrows are Feather-derived).
@@ -56,13 +75,13 @@ the provider interfaces so a new provider is just a new implementation. The one 
 ## Architecture
 | Package | Responsibility |
 |---|---|
-| (root) | `IrisApp` (Application), `AppContainer` (manual DI, app scope, Soniox catalogue, picks the STT and cleanup providers), `MainActivity` (hosts settings UI) |
+| (root) | `IrisApp` (Application; releases the on-device model on memory trim), `AppContainer` (manual DI, app scope, Soniox catalogue, on-device recognizer + model store, picks the STT and cleanup providers), `MainActivity` (hosts settings UI) |
 | `data.settings` | Settings model, `SettingsRepository` (DataStore), `SecretStore` (Keystore crypto) |
 | `ui.settings` | `SettingsApp` (navigation, catalogue load triggers), the four pages, `ModelCatalogs`, `SettingsText` (pure copy/format helpers), `Favicons` (custom providers' icons) |
 | `ui.components` | The design system: cards, rows, buttons, switch, slider, text fields, dropdowns, page scaffold, `Saver`, pure `commitDecision` / `dropdownPlacement` / `sliderValue` / `filterModels` |
 | `ui.theme` | `IrisTheme` (own CompositionLocals, no Material): `IrisColors` (light + derived dark), `IrisType` (Inter + Blinker) |
-| `audio` | PCM16 mono recorder (rate per session); `SileroVad` (ORT wrapper), `SpeechGate` (pure VAD gate); `timeStretched` (Sonic speed-up) |
-| `stt` | `SpeechToTextProvider`; `stt.openai` / `stt.vercel` / `stt.deepgram` / `stt.soniox` streaming + upload providers; `Wav.kt` (upload helpers) |
+| `audio` | PCM16 mono recorder (rate per session); `SileroVad` (sherpa `Vad` wrapper), `SpeechGate` (pure VAD gate); `timeStretched` (Sonic speed-up) |
+| `stt` | `SpeechToTextProvider`; `stt.openai` / `stt.vercel` / `stt.deepgram` / `stt.soniox` streaming + upload providers; `stt.ondevice` (On device: `OnDeviceModels` catalogue, `OnDeviceModelStore` downloads, `OnDeviceRecognizer` sherpa holder, `OnDeviceSpeechToText` provider); `Wav.kt` (upload helpers) |
 | `cleanup` | `CleanupProvider` interface, `parseProviderOptions`; `cleanup.vercel` / `cleanup.openrouter` / `cleanup.compatible` (user-added OpenAI-compatible) implementations (Chat Completions helpers shared in `GatewayProtocol.kt`) |
 | `dictation` | Session state machine/controller: audio -> STT -> cleanup -> insertion |
 | `overlay` | AccessibilityService, bubble overlay view, live-text panel |
@@ -171,14 +190,16 @@ Dictation (CP3):
   list (the controller passes `Settings.activeSttLanguage`: `sonioxLanguages` for Soniox, else the shared
   `sttLanguage`). `timeoutMs`: how long to wait for the final transcript once all audio is sent;
   the controller passes `Settings.sttTimeoutSeconds` (5..30, default 10; min 5 so a too-short wait can't fail
-  every dictation) per session, all providers use it (below). Failures are `SttException` with a user-readable
-  message; exceptions from `audio` propagate unchanged (the VAD no-speech path relies on it). `warmUp()`:
-  fire-and-forget pre-connect, throttled by the provider (below). `sampleRate(model)`: the rate `audio` must have
-  (default 24 000; the Gateway and upload providers override it). `streams` (default true): sends audio while
-  recording over a socket (gets the VAD keep-alive); false = uploads after stop, never calls `onPartial` (the upload
-  providers). `liveText(model)` (default `streams`; OpenAI realtime: `hasLiveText(model)`): reports text while
-  recording; it picks the VAD hangover. `allowsSpeedUp` (default true; Soniox real-time false): the audio may be
-  sped up (Speed, below).
+  every dictation) per session, all cloud providers use it (below; On device ignores it). Failures are
+  `SttException` with a user-readable message; exceptions from `audio` propagate unchanged (the VAD no-speech path
+  relies on it). `warmUp()`: fire-and-forget pre-connect, throttled by the provider (below). `sampleRate(model)`: the
+  rate `audio` must have (default 24 000; the Gateway and upload providers override it). `streams` (default true): sends
+  audio while recording over a socket (gets the VAD keep-alive); false = no socket while recording, so no keep-alive:
+  the upload providers (upload after stop, never call `onPartial`) and On device. `liveText(model)` (default `streams`;
+  OpenAI realtime: `hasLiveText(model)`; On device: true): reports text while recording; it picks the VAD hangover.
+  `allowsSpeedUp` (default true; Soniox real-time false): the audio may be sped up (Speed, below). `wantsSegmentEnds`
+  (default false; On device true): `audio` carries an empty `ByteArray` at the end of each speech segment the VAD gate
+  detects (Segment ends, below); no other provider ever sees one (an empty frame would close Deepgram's stream).
 - `dictation.DictationController` (one per service, main thread, built by `AppContainer.dictationController`;
   `audio: (sampleRate) -> Flow<AudioChunk>` = `audioRecorder::chunks`, `stt: (Settings) -> SpeechToTextProvider` =
   `AppContainer::speechToText`, picked once per session after the settings load, with `Settings.activeSttModel`;
@@ -219,14 +240,24 @@ VAD ("Skip silence", CP7):
   (https://github.com/snakers4/silero-vad/raw/v6.2.3/src/silero_vad/data/silero_vad.onnx, 2,327,524 bytes, SHA-256
   `1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3`), MIT; its licence ships as
   `assets/silero_vad_LICENSE.txt` (attribution: Silero Team, https://github.com/snakers4/silero-vad).
-- `audio.SileroVad` (one per app in `AppContainer`, not unit tested: needs native ORT): `OrtSession` with 1 intra-
-  and 1 inter-op thread, `ALL_OPT`, loaded lazily on the first frame (off main, on `vadContext`; emulator log
-  `SileroVad: Model loaded in ~160 ms`) and never closed (process lifetime). `newStream()` = a closure with zeroed
-  state/context. I/O as the official `OnnxWrapper` (`silero_vad/utils_vad.py` v6.2.3, checked 2026-11-12): `input`
-  float32 `[1, 576]` = the previous input's last 64 samples + the 512-sample frame, `state` float32 `[2, 1, 128]`
-  (fed back from output 1), `sr` int64 0-d tensor 16000; output 0 = probability. Load failure (incl.
-  `LinkageError`: `UnsatisfiedLinkError`, `ExceptionInInitializerError`, `NoClassDefFoundError`) is logged once and
-  the stream throws on every frame.
+- `audio.SileroVad` (one per app in `AppContainer`, not unit tested: native): since CP14 on sherpa-onnx's ONNX
+  Runtime (Tech stack: MS ORT and sherpa can't share one `libonnxruntime.so`). One `com.k2fsa.sherpa.onnx.Vad`
+  (`VadModelConfig(SileroVadModelConfig(model = "silero_vad.onnx" from assets, windowSize = 512), sampleRate =
+  16000, numThreads = 1)`), loaded lazily on the first frame (off main, on `vadContext`; emulator log `SileroVad:
+  Model loaded in 115-251 ms`, plus sherpa's own `W sherpa-onnx: VadModelConfig(...)` line) and never closed
+  (process lifetime). Only `Vad.compute(samples)` is used: one model run with the LSTM state kept natively, `sr` from
+  the config (sherpa v2.0.1 `silero-vad-model.cc` `RunV5`: `x` = `[1, n]` of exactly the samples passed, checked
+  2026-11-13); sherpa's own segmentation (`acceptWaveform`, thresholds) is unused. I/O as the official `OnnxWrapper`
+  (`silero_vad/utils_vad.py` v6.2.3): the closure passes the previous input's last 64 samples + the 512-sample frame
+  (576), so the model sees the same input as before CP14. sherpa's own `acceptWaveform` also feeds 512 + 64-sample
+  windows; only `compute()` passes the given samples through unchanged, so the closure adds the context itself.
+  `newStream()` = a closure with its own zeroed context; the native state is reset (`Vad.reset()`) on the first frame of
+  a stream other than the last one that ran (`synchronized`, so an ended session finishing a frame can't run
+  concurrently). Java-level load failures (`LinkageError`, the API's `require(ptr != 0L)`) are logged once and the
+  stream throws on every frame (the gate fails open); native load errors in sherpa's `Vad` constructor
+  (`Vad_newFromAsset` has no try/catch: an `Ort::Exception`, `bad_alloc` or its model checks) abort the process instead.
+  Not verified with real speech since the switch (emulator mic is silent): VAD v6.2.3 under sherpa needs a device check
+  (below).
 - `audio.SpeechGate` (pure, unit tested), Handy's `SmoothedVad` (`src-tauri/src/audio_toolkit/vad/`): 32 ms frames
   (512 samples at 16 kHz; a 24 kHz frame of 768 samples is decimated to 512 for the VAD only: `s0, (s1+s2)/2` per 3;
   the STT always gets the original audio), frame remainders carried across chunks. Voiced = probability `> 0.3`;
@@ -252,8 +283,18 @@ VAD ("Skip silence", CP7):
   silence. Zeros don't count in `sentBytes`: a session with no speech still ends with "No speech detected" and no commit
   / `audio-done` (if it ran >= 5 s, the socket got only keep-alive zeros). Upload providers get none.
 - Setting `Settings.vadEnabled` (`vad_enabled`, default on): Transcription Provider > Audio > "Skip Silence" switch,
-  subtitle "Detects speech on-device and sends only that, to cut cost." (same for every model; on Soniox real-time it
-  saves nothing, since that is billed by session length).
+  subtitle "Detects speech on-device and sends only that, to cut cost." (same for every cloud model; on Soniox
+  real-time it saves nothing, since that is billed by session length); On device: "Detects speech on-device and
+  transcribes each phrase as you pause.".
+- Segment ends (CP14, only for a provider with `wantsSegmentEnds`): `SpeechGate(..., markSegmentEnds = true)` (the
+  controller passes `stt.wantsSegmentEnds`) sets a flag when a segment's hangover runs out (`keepsFrame` flips
+  `inSpeech` off); `process()` then returns its bytes plus one empty array (`[chunk, empty]` if the chunk was kept,
+  else `[empty]` alone) and clears it. In-band, so the order survives the `flowOn`/`produceIn` buffers and Sonic (a
+  side channel would race them). Size 0: `sentBytes`, `NO_SPEECH` and the speed log are untouched. None in fail-open
+  mode or at the stop (the provider decodes the rest when the flow completes). `timeStretched` flushes Sonic on an
+  empty input, emits that output, then passes the empty array on (unit tested: the audio before it ≈ the segment /
+  speed). Unit tested in `SpeechGateTest`, `TimeStretchTest` and `DictationControllerTest` (exactly one empty array
+  between two segments, also at 1.5x; none for a provider that didn't opt in).
 
 Speed (CP8):
 - `audio.timeStretched(sampleRate, speed)` (`TimeStretch.kt`, pure, unit tested): `Flow<ByteArray>` of PCM16 mono
@@ -261,7 +302,9 @@ Speed (CP8):
   quality 0, pitch/rate/volume 1, so only `changeSpeed` runs and pitch is kept). Output rate = input rate (WAV
   headers, start frame and `session.update` rates stay right). Sonic holds back up to ~30 ms; `flushStream()` emits
   that tail (measured 12-27 ms of output) when upstream completes normally; an upstream error propagates unchanged
-  with no flush. Never emits empty arrays.
+  with no flush. Never emits empty arrays except an empty input (a segment end), passed on after a mid-stream flush
+  (`flushStream` pads with silence, trims to the expected count and resets its input buffers; the stream stays
+  usable; it lands in hangover silence).
 - Placement: after `onCompletion` (VAD), before `stt.transcribe`, only when `sttSpeedPercent != 100` and
   `stt.allowsSpeedUp` (otherwise no Sonic object, the same arrays). Soniox real-time is never stretched (billed by
   wall-clock stream time, wants real-time pace) and the "Audio Speed" slider is hidden for a live Soniox model. After
@@ -316,12 +359,15 @@ Cleanup + insertion (CP4):
 
 Providers (settings store a provider id for each):
 - STT provider: `Settings.sttProviderId` (`stt_provider_id`): `openai` (default) = OpenAI (direct),
-  `vercel-gateway` = Vercel AI Gateway, `deepgram` = Deepgram (direct), or `soniox` = Soniox (direct); an unknown
-  id means OpenAI. Each has its own model setting (`sttModel`, `gatewaySttModel`, default
+  `vercel-gateway` = Vercel AI Gateway, `deepgram` = Deepgram (direct), `soniox` = Soniox (direct), or `on-device` =
+  On device (`sttOnDevice`; model `onDeviceSttModel` / `on_device_stt_model`, default `parakeet-unified-en`, an
+  unknown id = the default model; no key, so `sttKeySet` is true; uses the shared `sttLanguage`); an unknown id means
+  OpenAI. Each has its own model setting (`sttModel`, `gatewaySttModel`, default
   `openai/gpt-live-transcribe`, `deepgramSttModel`, default `nova-3`, `sonioxSttModel`, default `stt-rt-v6`) and key
   (Soniox also `sonioxRegion`, default `us`); `activeSttModel` / `sttKeySet` follow the selection; the language
-  setting is shared except Soniox's own `sonioxLanguages` (`activeSttLanguage`). `AppContainer` builds six
-  providers plus two per Soniox region; `speechToText(settings)` picks one by mode: Soniox -> the region's
+  setting is shared except Soniox's own `sonioxLanguages` (`activeSttLanguage`). `AppContainer` builds seven
+  providers plus two per Soniox region; `speechToText(settings)` picks one by mode: On device -> the one on-device
+  provider (every model); Soniox -> the region's
   `sonioxStreams(sonioxSttModel, catalogue)` ? streaming : upload; Deepgram ->
   `deepgramUpload` ? upload : streaming; Gateway -> `gatewaySttLive` ? streaming : upload; OpenAI ->
   `isRealtimeTranscriptionModel(sttModel)` ? realtime : upload. The service's warm-up cache follows the selection
@@ -584,6 +630,86 @@ Providers (settings store a provider id for each):
   trimmed on save), separate from the shared `sttLanguage` (other providers take one code).
 - Soniox pricing (2026-11-13): real-time ~$0.12/h, billed by wall-clock stream time (VAD gaps don't cut it, so a
   long pause still costs); async ~$0.10/h by audio duration (VAD and Speed cut it).
+- STT, On device (CP14, `stt.ondevice`): sherpa-onnx offline recognizers on CPU, models downloaded in settings; no
+  network while dictating. Catalogue (`OnDeviceModels.kt`, pure, unit tested; menu order; files pinned to a Hugging
+  Face commit, `https://huggingface.co/<repo>/resolve/<commit>/<file>`; sizes + SHA-256 re-checked against the HF API
+  2026-11-13):
+
+  | id | label / languages | engine | repo @ commit | size | licence |
+  |---|---|---|---|---|---|
+  | `parakeet-unified-en` (default) | Parakeet Unified EN / English | `NEMO_TRANSDUCER` | `csukuangfj2/sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-non-streaming` @ `8c3a10fb` | 663,043,117 B | NVIDIA Open Model License |
+  | `parakeet-tdt-v3` | Parakeet TDT v3 / 25 European languages | `NEMO_TRANSDUCER` | `csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8` @ `ed5d7456` | 670,576,784 B | CC BY 4.0 |
+  | `whisper-small` | Whisper Small / 99 languages | `WHISPER` | `csukuangfj/sherpa-onnx-whisper-small` @ `8f3c18b3` | 375,485,327 B | MIT (OpenAI) |
+  | `moonshine-base-en` | Moonshine Base EN / English, fastest | `MOONSHINE_V2` | `csukuangfj2/sherpa-onnx-moonshine-base-en-quantized-2026-02-27` @ `8f4d6c58` | 141,300,566 B | MIT (Moonshine AI) |
+
+  Full commits, file names, sizes and hashes are in `ON_DEVICE_MODELS`; the licence line (with its link) shows under
+  the download in settings. Configs (`OnDeviceRecognizer`, sherpa Kotlin API v2.0.1): `FeatureConfig(16000, 80)`
+  (the NeMo impl takes its feature dim, 128, from model metadata: `offline-recognizer-transducer-nemo-impl.h`
+  `PostInit`), `numThreads = 2` (sherpa's Android examples; more threads land on little cores), `greedy_search`;
+  transducer `encoder/decoder/joiner` + `modelType = "nemo_transducer"`; Whisper `encoder/decoder`, `language`,
+  `task = "transcribe"`, `modelType = "whisper"` (`tailPaddings` default); Moonshine v2 `encoder` + `mergedDecoder`
+  (no `modelType`). Whisper language: `whisperLanguage(sttLanguage)` = trimmed + lowercased if in `WHISPER_LANGUAGES`
+  (the 99 codes of Whisper Small's `all_language_codes` metadata, no `yue`), else "" (auto-detect): sherpa calls
+  `SHERPA_ONNX_EXIT(-1)` (kills the process) on a language Whisper doesn't know, so nothing else may reach it. The
+  other engines get "". A failed `OfflineRecognizer(null, config)` (`require(ptr != 0L)`, e.g. a missing file) is an
+  `IllegalArgumentException`, not a native exit.
+  `OnDeviceSpeechToText`: 16 kHz, `streams = false` (no socket, no keep-alive), `liveText = true` (1650 ms hangover:
+  each segment is decoded in isolation, so 450 ms would cut sentences at breaths), `wantsSegmentEnds = true`,
+  `allowsSpeedUp` default (Speed just shortens the decode). `transcribe`: an undownloaded model throws "Download the
+  <label> model in Iris settings" before collecting (the mic never opens); `preload(model, language)`; audio is
+  collected on main into a buffer; an empty array (segment end) queues the buffer; a buffer past `MAX_SEGMENT_BYTES`
+  (20 s of model input, stretched bytes: Parakeet's README suggests 15-20 s chunks, Whisper truncates > ~29.5 s,
+  Moonshine is trained on short utterances) is cut with `splitAtPauses(buffer, 20 s, 8 s)` and all parts but the last
+  are queued. With Skip Silence off there are no segment ends: text comes every ~20 s (the cap) and the rest after
+  stop (decided). Queued segments go through a `Channel(UNLIMITED)` to one decoder coroutine (collection never waits
+  for a decode: the mic would overflow), which calls `onPartial(joined text)` after each (`joined`, CJK-aware; blanks
+  skipped). After the audio ends the buffer is queued, then `withTimeoutOrNull(60 s + 2 x pending audio)` wraps the
+  decoder (pending = queued + buffered audio not decoded yet; covers a model load after stop plus RTF <= 2); expiry =
+  "On-device transcription timed out" (a hung native decode would otherwise spin the bubble forever). `timeoutMs` is
+  ignored (no network to stall; a native decode can't be aborted, so a short timeout only throws text away), and the
+  Timeout slider is hidden for On device. Logs `Timing: stop->final X ms, N segments`. `warmUp()` reads the stored
+  model + language on `appScope` and preloads it if downloaded. Unit tested with fake lambdas
+  (`OnDeviceSpeechToTextTest`, virtual time).
+  `OnDeviceRecognizer` (native, not unit tested, like `SileroVad`): one `OfflineRecognizer` at a time (key `id|lang`;
+  switching model or Whisper language releases the old one before loading). Load, decode, unload and release all
+  run on `Dispatchers.IO.limitedParallelism(1)` with its own `SupervisorJob` scope: decodes are serialized across
+  sessions (Whisper mutates shared decoder state), a session started during a load waits for it, an unload never
+  runs mid-decode. `decode` = `scope.async { ... }.await()`: a cancelled session returns at once, the native decode
+  finishes on the worker and its result is dropped. Errors: load failure (`Exception`/`LinkageError`, `Log.e`) =
+  "Couldn't load the on-device model"; decode failure = "On-device transcription failed". Memory: preloaded by
+  `warmUp` (bubble shown / state changes; the service's `sttKeySet` gate is true for On device); the service calls
+  `setBubbleShown(true)` in `refreshFocus` and `(false)` in the `hideBubble` runnable and `onDestroy`: hidden, the
+  model is released once unused for 5 min (re-armed while decodes still run, e.g. Finalizing after focus loss);
+  `IrisApp.onTrimMemory(>= TRIM_MEMORY_BACKGROUND)` releases it too (with a bound accessibility service this may
+  rarely fire). Logs `Loaded <id> in X ms`, `Decoded X ms of audio in Y ms` (no text), `Released <id>`. Emulator
+  (x86_64, 2026-11-13, Moonshine Base EN): load 1.2-1.9 s, 3-4 s of silence decoded in 109-130 ms, `stop->final`
+  ~180 ms; release build PSS ~244 MB with it loaded (native heap ~204 MB).
+- Model downloads (`OnDeviceModelStore`, `AppContainer.onDeviceModels`, unit tested with MockWebServer): one at a
+  time, on `appScope` (outlives the screen), OkHttp with a 30 s read timeout, files in
+  `noBackupFilesDir/models/<modelId>/` (never backed up; no backup-rule change). `init` scans off main: a model is
+  downloaded when every final file exists with its catalogue size (hashes are checked once, at download). Download:
+  free space (`StatFs.availableBytes`) must cover what is missing + 50 MB, else "Not enough storage: needs N MB
+  free." (no request). Per file: a final file of the right size counts as done (wrong size: deleted); a `<name>.tmp`
+  longer than the file is deleted; `GET` with `Range: bytes=<tmp length>-` if a tmp exists (HF `resolve` 302s to its
+  CDN, which honours Range; OkHttp keeps the header across the redirect). `206` with `Content-Range` starting at the
+  tmp length: the tmp is hashed, then appended to; `200`: restarted from 0; a `206` at another start: the tmp is deleted
+  and the file re-requested once without `Range` (a second one: "Download failed (HTTP 206)."); `416`: a tmp of the
+  full size goes straight to the check, else it is deleted and retried once from 0; other codes "Download failed
+  (HTTP n).". A body longer than the file stops being written there (the size/hash check decides). 64 KiB reads, SHA-256
+  on the fly, progress at most every 512 KiB (and at once on a resume). Size or hash mismatch: tmp deleted, "Download
+  was corrupted. Try again."; else renamed. Network `IOException` = "Download failed (network error). Tap Download to
+  resume." (tmp kept, so the next Download resumes, also after an app restart); a file write failure = "Couldn't save
+  the model (storage error).". Cancelling the coroutine cancels the `Call` (a watcher child calls `Call.cancel()`, which
+  unblocks the blocking read). Cancel deletes the model's `*.tmp` files, no error (the state reset runs inside the
+  `NonCancellable` block: a cancelled coroutine never resumes after `withContext`). Starting a download deletes the
+  `*.tmp` files of every OTHER model (an abandoned partial would otherwise use up to ~670 MB until app data is cleared;
+  its resume is lost), never the downloading model's own partials or any final files. `delete(id)` sets `State.deleting`
+  at once (cleared in a `finally` after the delete; `download(id)` is ignored meanwhile, so a Download can't "complete"
+  from files about to be wiped), cancels its download, marks it not downloaded, waits for `OnDeviceRecognizer.unload`
+  (after any queued decode), then deletes the directory. Logs `Downloaded <id> in X s`. No WorkManager, no notification:
+  a download stops when the process dies (the next Download resumes it). Emulator: Moonshine Base EN (141 MB) in 48 s;
+  after a force-stop mid-file the next Download resumed (206 append: the 31 MB encoder finished seconds after the
+  restart and passed the hash).
 - Cleanup provider: `Settings.cleanupProviderId` (`cleanup_provider_id`): `vercel-gateway` (default),
   `openrouter`, or a saved custom provider's id; any other id (e.g. dangling after a delete or a crash mid-write) is
   read as the Gateway (`toSettings`). `AppContainer.cleanup(settings)` picks the provider: `activeCustomCleanup`,
@@ -734,25 +860,39 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
   accessibility also shows the restricted-settings hint); both re-checked on `ON_RESUME`), then nav cards
   Transcription Provider (audio-lines), Post Processing Provider (sparkles), Appearance (eye); footer
   "Version <versionName>" (PackageManager), pinned to the bottom while the content is short.
-- Transcription Provider: picker card (cloud icon, "Transcription Provider" black dropdown: OpenAI, Vercel AI Gateway,
-  Deepgram, Soniox, each with its brand mark in a `ProviderIconBox` (Gateway: the Vercel mark; `SelectField`'s
-  `optionIcon`); an unknown stored id shows as OpenAI); "Provider Settings": the selected provider's "API Key"
-  (Gateway helper "(shared with post processing)"), Soniox "Region" dropdown (`SonioxRegion.label`, hint "Your Soniox
-  project's region. The API key has to be region-specific as well."); "Model Settings": "Speech-to-text Model"
-  combobox (per provider; helper = the provider's mode hint: OpenAI "Realtime models stream; other models upload
-  after you stop.", Gateway "Live models show text as you speak; others transcribe after you stop." (save passes
-  `gatewaySttLive(model, catalog)`), Deepgram "Deepgram models stream live by default unless realtime streaming is
-  disabled below." (static `DEEPGRAM_MODELS`, no refresh button), Soniox "Real-time models stream; other models
-  upload after you stop." + `sttModeText` of the SAVED model (Soniox only)), Deepgram-only "Disable Realtime
-  Streaming" switch ("Transcribe after you stop, about 44% cheaper."), "Language Code" (placeholder "en", helper
-  "Setting a language can improve accuracy. Leave blank to auto-detect.") or Soniox's "Language Codes"
-  (`sonioxLanguages`, placeholder "en, es, …", helper "Comma-separated language codes. Leave blank to
-  auto-detect."), "Timeout" slider (5..30 s, "How long to wait for the final transcript after you
-  stop."); "Audio": "Skip Silence" switch, "Audio Speed" slider (100..200 step 10, "1.0x".."2.0x", "Speeds up the
-  audio sent (pitch kept), so less is billed.", helper "Higher speeds can lower accuracy; services with a
-  per-request minimum may not save."; hidden for a live Soniox model). Menu items of streaming models end with the
-  Lucide `radio` icon ("Streams"; OpenAI `isRealtimeTranscriptionModel`, Gateway `isStreamingTranscriptionModel`,
-  Deepgram every model while `deepgramUpload` is off, Soniox `sonioxStreams`).
+- Transcription Provider: picker card (cloud icon, "Transcription Provider" black dropdown: On device, OpenAI, Vercel
+  AI Gateway, Deepgram, Soniox, each with its brand mark in a `ProviderIconBox` (On device: Lucide `smartphone`;
+  Gateway: the Vercel mark; `SelectField`'s `optionIcon`); an unknown stored id shows as OpenAI); "Provider
+  Settings": the selected provider's "API Key" (Gateway helper "(shared with post processing)"), Soniox "Region"
+  dropdown (`SonioxRegion.label`, hint "Your Soniox project's region. The API key has to be region-specific as well.");
+  "Model Settings": "Speech-to-text Model" combobox (per provider; helper = the provider's mode hint: OpenAI "Realtime
+  models stream; other models upload after you stop.", Gateway "Live models show text as you speak; others transcribe
+  after you stop." (save passes `gatewaySttLive(model, catalog)`), Deepgram "Deepgram models stream live by default
+  unless realtime streaming is disabled below." (static `DEEPGRAM_MODELS`, no refresh button), Soniox "Real-time models
+  stream; other models upload after you stop." + `sttModeText` of the SAVED model (Soniox only)), Deepgram-only "Disable
+  Realtime Streaming" switch ("Transcribe after you stop, about 44% cheaper."), "Language Code" (placeholder "en",
+  helper "Setting a language can improve accuracy. Leave blank to auto-detect.") or Soniox's "Language Codes"
+  (`sonioxLanguages`, placeholder "en, es, …", helper "Comma-separated language codes. Leave blank to auto-detect."),
+  "Timeout" slider (5..30 s, "How long to wait for the final transcript after you stop."); "Audio": "Skip Silence"
+  switch, "Audio Speed" slider (100..200 step 10, "1.0x".."2.0x", "Speeds up the audio sent (pitch kept), so less is
+  billed.", helper "Higher speeds can lower accuracy; services with a per-request minimum may not save."; hidden for a
+  live Soniox model). Menu items of streaming models end with the Lucide `radio` icon ("Streams"; OpenAI
+  `isRealtimeTranscriptionModel`, Gateway `isStreamingTranscriptionModel`, Deepgram every model while `deepgramUpload`
+  is off, Soniox `sonioxStreams`).
+- Transcription Provider with On device (CP14): no "Provider Settings" section (no key); "Model Settings" =
+  `OnDeviceModelSettings` (`ui/settings/OnDeviceSettings.kt`): "Speech-to-text Model" read-only dropdown (catalogue
+  order, labels `onDeviceModelLabel`: "Parakeet Unified EN · 663 MB" or "· Downloaded"; helper "<languages>. Runs
+  offline on this phone."), then "Download": this model downloading -> `ProgressBar` (`ui.components`, 3 dp line
+  like the slider track, `progressBarRangeInfo`) + "120 / 663 MB" (`downloadProgressText`) + "Cancel"; another
+  model downloading -> helper "Another model is downloading."; being deleted -> "Deleting…" (muted, no button);
+  downloaded -> "Downloaded" (enabled colour) +
+  "Delete" (`DangerButton`, no confirmation); else "Download (663 MB)" (`megabytesText`: 10^6 B, rounded); the
+  store's error for this model in the error slot. Then the licence line (helper style, muted, underlined link).
+  "Language Code" only for Whisper (helper "Leave blank to auto-detect. Codes Whisper doesn't know auto-detect
+  too."); no Timeout. Audio: Skip Silence subtitle "Detects speech on-device and transcribes each phrase as you
+  pause."; Audio Speed subtitle "Speeds up the audio (pitch kept), so it transcribes faster." and helper "Higher
+  speeds can lower accuracy.". `SettingsApp` collects `onDeviceModels.state` (app-level, like the Soniox catalogue)
+  and doesn't load the OpenAI list while On device is selected.
 - Post Processing Provider: "AI Cleanup" switch card (sparkles, "Polish the transcript with an LLM before it's
   inserted."); everything below is dimmed (alpha 0.38, animated) while off but stays editable: picker card ("Vercel
   AI Gateway" / "OpenRouter" / custom providers, see CP13 below), "Provider Settings" key (Gateway: "(shared with
@@ -888,7 +1028,13 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
   autosaved), so a half-typed URL or key is never used.
 - **Deepgram's mode follows a setting, not the model** (the one exception): every Nova model does both, so the
   Deepgram-only "Disable realtime streaming (cheaper)" switch picks the ~44 % cheaper pre-recorded upload.
-- **VAD on device (Silero, ONNX Runtime 1.28.0 pinned)** to cut STT cost; fails open, never loses dictation.
+- **VAD on device (Silero)** to cut STT cost; fails open, never loses dictation. Since CP14 it runs on sherpa-onnx's
+  ONNX Runtime (`Vad.compute`), not `onnxruntime-android`: the two AARs' `libonnxruntime.so` copies have different
+  symbol versions (1.28.0 vs 1.28.2) and only one can be packaged (Tech stack).
+- **On-device transcription (CP14) is a provider, not future scope**: sherpa-onnx (one AAR with a Kotlin API for
+  NeMo transducers, Whisper and Moonshine, CPU, its own ONNX Runtime shared with the VAD), offline models downloaded
+  on demand (hundreds of MB: not bundled), per-phrase pseudo-live text (each VAD segment decoded as the user pauses)
+  instead of streaming models. The segment marker is a provider member (`wantsSegmentEnds`), not a new abstraction.
 - **Speed-up after the VAD gate with vendored Sonic** (pitch kept) to cut billed audio; 1.0x = untouched. Not
   media3's `SonicAudioProcessor` (`@UnstableApi`, pulls Guava).
 - **API keys are user-entered** in Settings and encrypted with an Android Keystore AES/GCM key; ciphertext is
@@ -986,6 +1132,14 @@ Not covered by unit tests; check on a real device (ideally more than one OEM) af
   transcription may remain until Soniox's 30-day auto-delete); (6) EU region with an EU key works, a US key on EU =
   key error; (7) app start offline, then a dictation online: the catalogue is fetched at session start. Speed hidden
   for `stt-rt-*`, shown for async; console usage matches (real-time = wall-clock stream time).
+- On device (CP14): each model (Parakeet Unified EN, Parakeet TDT v3, Whisper Small, Moonshine Base EN) downloads
+  and transcribes a real voice; with Skip Silence on, text appears per phrase as you pause; a phrase over 20 s is
+  split without lost words; Whisper with `de` and with a blank language; speed 1.5x; the VAD (now on sherpa's ORT)
+  still detects real speech and keeps first/last words (emulator only showed silence); memory (`adb shell dumpsys
+  meminfo dev.jamius.iris`) after the preload and 5 min after the bubble hides (log `Released <id>`); load time of
+  the Parakeet models on a mid-range phone (and that Finalizing stays within the 60 s + 2 x audio deadline);
+  deleting the selected model (next dictation: "Download the ... model"); a release build on arm64 loads sherpa and
+  the VAD; a download over mobile data that drops resumes.
 - Long Gateway upload: a 10 min Gateway after-stop dictation (VAD off) succeeds; on a 413, reuse `splitAtPauses`
   for the Gateway too.
 - Gateway STT with a real voice: live text streams and the final is inserted (default model, plus a 16 kHz one:
@@ -1037,8 +1191,22 @@ Checked 2026-11-11 on `emulator-5554` (AVD `Medium_Phone_API_37.0`, API 37, 1080
 - Accessibility service: `adb shell settings put secure enabled_accessibility_services
   dev.jamius.iris/dev.jamius.iris.overlay.IrisAccessibilityService` (binds at once). `am force-stop
   dev.jamius.iris` clears that setting, so re-run it after a force-stop.
-- VAD (checked 2026-11-12): with Skip silence on, a no-speech dictation ends right after the stop tap with "No
-  speech detected"; logcat `SileroVad: Model loaded in X ms` and `DictationController: VAD: sent 0 ms of Y ms`.
+- VAD (checked 2026-11-12; again on sherpa 2026-11-13): with Skip silence on, a no-speech dictation ends right
+  after the stop tap with "No speech detected"; logcat `SileroVad: Model loaded in X ms` and `DictationController:
+  VAD: sent 0 ms of Y ms`.
+- On device (checked 2026-11-13, debug and an R8 release build signed with the debug key): Moonshine Base EN
+  downloaded from settings (cancel removed the `.tmp`, a force-stop mid-download resumed); model files via
+  `MSYS_NO_PATHCONV=1 adb shell run-as dev.jamius.iris ls -la no_backup/models/moonshine-base-en`. In one process
+  the recognizer (`Loaded moonshine-base-en`) and the VAD (`SileroVad: Model loaded`) both load in either order
+  (preload first, or both concurrently); with Skip silence off a silent dictation logs `Decoded X ms of audio in Y
+  ms` and ends "No speech detected". MCP `tap` didn't open the Compose dropdowns on this AVD; `adb shell input tap`
+  did.
+- On device, the other three models (checked 2026-11-13, debug build, Skip silence off, silence from the emulator
+  mic, the app force-stopped before each so the model loads fresh): downloaded from settings (Parakeet Unified EN
+  288 s, Parakeet TDT v3 299 s, Whisper Small 162 s), then loaded and decoded with no crash or native abort:
+  Parakeet Unified EN load 4.8 s, 5 s of audio decoded in 585 ms (8.5 s in 1.0 s); Parakeet TDT v3 load 3.6 s, 5 s
+  in 547 ms; Whisper Small (blank language) load 2.0 s, 4.9 s in 4.1 s. Switching the provider to OpenAI logged
+  `Released whisper-small` at once.
 - No speech input: the emulator mic opens (session reaches the STT, "No speech detected"), but host audio isn't
   forwarded (host TTS played through speakers wasn't heard). Transcript/cleanup/insertion paths need a device or
   Extended controls > Microphone > "Virtual microphone uses host audio input" plus a real voice.
@@ -1062,3 +1230,4 @@ Update this section as checkpoints land.
 | CP11 | OpenRouter cleanup provider + provider options | Done (device check pending) |
 | CP12 | Settings UI redesign (Figma) | Done (emulator-checked; device check pending) |
 | CP13 | Custom OpenAI-compatible cleanup providers | Done (device check pending) |
+| CP14 | On-device STT (sherpa-onnx) | Done (emulator-checked with silence; real-voice device check pending) |

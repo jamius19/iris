@@ -25,6 +25,9 @@ import dev.jamius.iris.dictation.DictationState
 import dev.jamius.iris.stt.SpeechToTextProvider
 import dev.jamius.iris.stt.deepgram.DeepgramFileTranscription
 import dev.jamius.iris.stt.deepgram.DeepgramSpeechToText
+import dev.jamius.iris.stt.ondevice.OnDeviceModelStore
+import dev.jamius.iris.stt.ondevice.OnDeviceRecognizer
+import dev.jamius.iris.stt.ondevice.OnDeviceSpeechToText
 import dev.jamius.iris.stt.openai.OpenAiFileTranscription
 import dev.jamius.iris.stt.openai.OpenAiRealtimeSpeechToText
 import dev.jamius.iris.stt.openai.isRealtimeTranscriptionModel
@@ -131,6 +134,28 @@ class AppContainer(context: Context) {
         }
     }
 
+    // Never backed up (noBackupFilesDir): hundreds of MB, re-downloadable.
+    private val modelsDir = File(context.noBackupFilesDir, "models")
+
+    /** The loaded on-device model (sessions; the service's bubble visibility and memory trims release it). */
+    val onDeviceRecognizer = OnDeviceRecognizer { File(modelsDir, it) }
+
+    /** On-device model downloads, for the settings screen and the provider's download check. */
+    val onDeviceModels = OnDeviceModelStore(
+        httpClient,
+        modelsDir,
+        appScope,
+        beforeDelete = onDeviceRecognizer::unload
+    )
+
+    private val onDeviceStt = OnDeviceSpeechToText(
+        onDeviceModels::isDownloaded,
+        onDeviceRecognizer::preload,
+        onDeviceRecognizer::decode,
+        selection = { settingsRepository.settings.first().let { it.onDeviceSttModel to it.sttLanguage } },
+        scope = appScope
+    )
+
     // One pair per region: a provider's URLs are fixed.
     private val sonioxStt = SonioxRegion.entries.associateWith {
         SonioxSpeechToText(
@@ -151,12 +176,14 @@ class AppContainer(context: Context) {
     }
 
     /**
-     * The speech-to-text provider [settings] select: the model picks streaming or upload after stop (OpenAI: the
-     * Realtime models stream; Gateway: the catalog's tag, stored at save). Deepgram: every model streams, so its
-     * own setting picks the cheaper upload instead. Soniox: the catalogue's `transcription_mode` (id rule `stt-rt-*`
-     * until it loads), on the region's domains.
+     * The speech-to-text provider [settings] select: On device (a downloaded model, one provider for all of them), or
+     * a cloud one whose model picks streaming or upload after stop (OpenAI: the Realtime models stream; Gateway: the
+     * catalog's tag, stored at save). Deepgram: every model streams, so its own setting picks the cheaper upload
+     * instead. Soniox: the catalogue's `transcription_mode` (id rule `stt-rt-*` until it loads), on the region's
+     * domains.
      */
     fun speechToText(settings: Settings): SpeechToTextProvider = when {
+        settings.sttOnDevice -> onDeviceStt
         settings.sttSoniox -> sonioxRegion(settings.sonioxRegion).let { region ->
             if (sonioxStreams(settings.sonioxSttModel, sonioxCatalog.state.value.models)) sonioxStt.getValue(region)
             else sonioxFileStt.getValue(region)

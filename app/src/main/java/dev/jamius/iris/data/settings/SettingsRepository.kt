@@ -62,6 +62,10 @@ class SettingsRepository(
         dataStore.edit { it[Keys.SONIOX_LANGUAGES] = languages.trim() }
     }
 
+    suspend fun setOnDeviceSttModel(id: String) {
+        dataStore.edit { it[Keys.ON_DEVICE_STT_MODEL] = id }
+    }
+
     suspend fun setSttLanguage(language: String) {
         dataStore.edit { it[Keys.STT_LANGUAGE] = language.trim() }
     }
@@ -224,6 +228,7 @@ internal object Keys {
     val SONIOX_STT_MODEL = stringPreferencesKey("soniox_stt_model")
     val SONIOX_REGION = stringPreferencesKey("soniox_region")
     val SONIOX_LANGUAGES = stringPreferencesKey("soniox_languages")
+    val ON_DEVICE_STT_MODEL = stringPreferencesKey("on_device_stt_model")
     val STT_LANGUAGE = stringPreferencesKey("stt_language")
     val STT_TIMEOUT_SECONDS = intPreferencesKey("stt_timeout_seconds")
     val VAD_ENABLED = booleanPreferencesKey("vad_enabled")
@@ -282,6 +287,7 @@ internal fun Preferences.toSettings(storedSecrets: Set<Secret>): Settings {
         sonioxSttModel = this[Keys.SONIOX_STT_MODEL] ?: Settings.DEFAULT_SONIOX_STT_MODEL,
         sonioxRegion = this[Keys.SONIOX_REGION] ?: Settings.DEFAULT_SONIOX_REGION,
         sonioxLanguages = this[Keys.SONIOX_LANGUAGES] ?: "",
+        onDeviceSttModel = this[Keys.ON_DEVICE_STT_MODEL] ?: Settings.DEFAULT_ON_DEVICE_STT_MODEL,
         sttLanguage = this[Keys.STT_LANGUAGE] ?: "",
         sttTimeoutSeconds = this[Keys.STT_TIMEOUT_SECONDS] ?: Settings.DEFAULT_STT_TIMEOUT_SECONDS,
         vadEnabled = this[Keys.VAD_ENABLED] ?: true,

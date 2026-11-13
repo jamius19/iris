@@ -147,7 +147,8 @@ class DictationController(
                 val rate = stt.sampleRate(model)
                 val hangoverMs =
                     if (stt.liveText(model)) SpeechGate.STREAMING_HANGOVER_MS else SpeechGate.OFFLINE_HANGOVER_MS
-                val gate = if (config.vadEnabled) SpeechGate(rate, hangoverMs, vadModel()) else null
+                val gate =
+                    if (config.vadEnabled) SpeechGate(rate, hangoverMs, vadModel(), stt.wantsSegmentEnds) else null
                 var recordedBytes = 0L
                 var sentBytes = 0L
                 // Keep-alive for a socket while the gate withholds audio (servers may end a stream that gets none).

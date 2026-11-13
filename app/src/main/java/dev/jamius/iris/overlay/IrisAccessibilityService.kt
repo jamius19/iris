@@ -52,6 +52,7 @@ class IrisAccessibilityService : AccessibilityService() {
     private val hideBubble = Runnable {
         dictation?.onFocusLost()
         overlay?.hide()
+        (application as IrisApp).container.onDeviceRecognizer.setBubbleShown(false)
     }
 
     /** True while the bubble is wanted: an editable field has input focus, or the keyboard is open (see class doc). */
@@ -107,6 +108,7 @@ class IrisAccessibilityService : AccessibilityService() {
         scope.launch {
             repository.settings.collect {
                 sttWarmUp = if (it.sttKeySet) container.speechToText(it) else null
+                if (!it.sttOnDevice) container.onDeviceRecognizer.release() // No-op when nothing is loaded.
                 overlay.setPanelSize(it.panelLines, it.panelWidthPercent) // Skips unchanged values.
             }
         }
@@ -149,6 +151,7 @@ class IrisAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         handler.removeCallbacks(hideBubble)
+        (application as IrisApp).container.onDeviceRecognizer.setBubbleShown(false)
         overlay?.hide(animate = false)
         overlay = null
         dictation = null
@@ -177,6 +180,7 @@ class IrisAccessibilityService : AccessibilityService() {
             handler.removeCallbacks(hideBubble)
             overlay.show()
             dictation?.let { render(it.state.value) } // Restores the panel if the bubble was hidden mid-session.
+            (application as IrisApp).container.onDeviceRecognizer.setBubbleShown(true)
             warmUpStt()
         } else if (!handler.hasCallbacks(hideBubble)) {
             handler.postDelayed(hideBubble, HIDE_DELAY_MS)

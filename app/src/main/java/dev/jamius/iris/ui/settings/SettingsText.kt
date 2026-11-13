@@ -8,6 +8,7 @@ package dev.jamius.iris.ui.settings
 import dev.jamius.iris.cleanup.parseProviderOptions
 import dev.jamius.iris.data.settings.CustomCleanupProvider
 import dev.jamius.iris.data.settings.Settings
+import dev.jamius.iris.stt.ondevice.OnDeviceModel
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /** The saved model's mode, for Soniox's model field helper; [streams] without [live]: text after stop. */
@@ -25,6 +26,7 @@ fun reasoningEffortLabel(effort: String?): String = when (effort) {
 
 /** The transcription providers in menu order; an unknown stored id shows as OpenAI. */
 val STT_PROVIDERS = listOf(
+    Settings.STT_PROVIDER_ON_DEVICE,
     Settings.STT_PROVIDER_OPENAI,
     Settings.STT_PROVIDER_VERCEL_GATEWAY,
     Settings.STT_PROVIDER_DEEPGRAM,
@@ -32,6 +34,7 @@ val STT_PROVIDERS = listOf(
 )
 
 fun sttProviderLabel(id: String): String = when (id) {
+    Settings.STT_PROVIDER_ON_DEVICE -> "On device"
     Settings.STT_PROVIDER_VERCEL_GATEWAY -> "Vercel AI Gateway"
     Settings.STT_PROVIDER_DEEPGRAM -> "Deepgram"
     Settings.STT_PROVIDER_SONIOX -> "Soniox"
@@ -86,6 +89,17 @@ fun baseUrlError(baseUrl: String): String? {
 fun speedText(percent: Int): String = "${percent / 100f}x"
 
 fun secondsText(seconds: Int): String = "$seconds s"
+
+/** Whole megabytes (10^6 bytes, rounded): "663 MB". */
+fun megabytesText(bytes: Long): String = "${(bytes + 500_000) / 1_000_000} MB"
+
+/** A download's progress: "120 / 663 MB". */
+fun downloadProgressText(doneBytes: Long, totalBytes: Long): String =
+    "${(doneBytes + 500_000) / 1_000_000} / ${megabytesText(totalBytes)}"
+
+/** An on-device model in the model menu: its size, or "Downloaded". */
+fun onDeviceModelLabel(model: OnDeviceModel, downloaded: Boolean): String =
+    "${model.label} · ${if (downloaded) "Downloaded" else megabytesText(model.sizeBytes)}"
 
 fun percentText(percent: Int): String = "$percent%"
 

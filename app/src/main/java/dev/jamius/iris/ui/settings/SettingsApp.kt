@@ -41,6 +41,7 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import dev.jamius.iris.cleanup.GatewayModel
 import dev.jamius.iris.data.settings.CustomCleanupProvider
 import dev.jamius.iris.data.settings.SettingsRepository
+import dev.jamius.iris.stt.ondevice.OnDeviceModelStore
 import dev.jamius.iris.stt.soniox.SonioxCatalog
 import dev.jamius.iris.ui.components.Saver
 import dev.jamius.iris.ui.theme.IrisTheme
@@ -63,11 +64,14 @@ fun SettingsApp(
     openAiModels: suspend () -> List<String>,
     customModels: suspend (CustomCleanupProvider) -> List<GatewayModel>,
     sonioxCatalog: SonioxCatalog,
+    onDeviceModels: OnDeviceModelStore,
     favicons: Favicons,
 ) {
     val settings = repository.settings.collectAsState(initial = null).value
     // App-level (sessions use it too); it reloads itself when the Soniox key or region changes.
     val sonioxState by sonioxCatalog.state.collectAsState()
+    // App-level too: downloads outlive the screen.
+    val onDeviceState by onDeviceModels.state.collectAsState()
     val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
     val catalogs = remember { ModelCatalogs(scope, gatewayModels, openRouterModels, openAiModels, customModels) }
@@ -92,7 +96,8 @@ fun SettingsApp(
     }
     // OpenAI list: when OpenAI transcription is selected. Without a key nothing is requested and the error asks for
     // one.
-    val sttOpenAi = settings != null && !settings.sttGateway && !settings.sttDeepgram && !settings.sttSoniox
+    val sttOpenAi = settings != null && !settings.sttGateway && !settings.sttDeepgram && !settings.sttSoniox &&
+        !settings.sttOnDevice
     LaunchedEffect(sttOpenAi) {
         if (sttOpenAi && catalogs.openAiModels == null) catalogs.loadOpenAi()
     }
@@ -162,6 +167,8 @@ fun SettingsApp(
                         catalogs,
                         sonioxState,
                         sonioxCatalog,
+                        onDeviceModels,
+                        onDeviceState,
                         onBack = back
                     )
                     Page.PostProcessing -> PostProcessingPage(

@@ -17,8 +17,8 @@ interface SpeechToTextProvider {
     fun sampleRate(model: String): Int = 24_000
 
     /**
-     * Sends audio while recording (holds a socket: gets VAD keep-alive audio); false = uploads the recording after
-     * stop (no `onPartial`).
+     * Sends audio while recording (holds a socket: gets VAD keep-alive audio); false = no socket while recording, so
+     * no keep-alive: upload providers (no `onPartial`) and the on-device one.
      */
     val streams: Boolean get() = true
 
@@ -32,9 +32,16 @@ interface SpeechToTextProvider {
     val allowsSpeedUp: Boolean get() = true
 
     /**
+     * [transcribe]'s audio carries an empty array at the end of each speech segment the VAD gate detects (Skip Silence
+     * on); for providers that decode per segment.
+     */
+    val wantsSegmentEnds: Boolean get() = false
+
+    /**
      * Streams [audio] (PCM16 mono chunks at [sampleRate] of [model]) to the service and reports the whole live
      * transcript through [onPartial] whenever it changes. Once [audio] completes, finalizes and returns the final
-     * transcript. Cancel the calling coroutine to abort and discard the session.
+     * transcript. Cancel the calling coroutine to abort and discard the session. [audio] holds empty arrays (segment
+     * ends) only with [wantsSegmentEnds].
      *
      * Throws [SttException] on provider failures; exceptions from [audio] propagate unchanged.
      * [onPartial] runs in the caller's context.

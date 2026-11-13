@@ -16,4 +16,10 @@ class IrisApp : Application() {
         super.onCreate()
         container = AppContainer(this)
     }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        // The on-device model takes hundreds of MB; it reloads at the next session.
+        if (level >= TRIM_MEMORY_BACKGROUND) container.onDeviceRecognizer.release()
+    }
 }

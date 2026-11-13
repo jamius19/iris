@@ -84,7 +84,7 @@ fun HomePage(onOpen: (Page) -> Unit) {
         NavCard(
             R.drawable.lucide_audio_lines,
             "Transcription Provider",
-            "Set up cloud transcription provider settings"
+            "Set up transcription provider settings"
         ) { onOpen(Page.Transcription) }
         NavCard(
             R.drawable.lucide_sparkles,

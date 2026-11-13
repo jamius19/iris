@@ -26,6 +26,7 @@ class MainActivity : ComponentActivity() {
                     openAiModels = container::openAiTranscriptionModels,
                     customModels = container::customCleanupModels,
                     sonioxCatalog = container.sonioxCatalog,
+                    onDeviceModels = container.onDeviceModels,
                     favicons = container.favicons
                 )
             }

@@ -19,6 +19,11 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        // sherpa-onnx (on-device STT) is only on JitPack; nothing else may resolve from there.
+        exclusiveContent {
+            forRepository { maven("https://jitpack.io") }
+            filter { includeGroup("com.github.k2-fsa.sherpa-onnx") }
+        }
     }
 }
 

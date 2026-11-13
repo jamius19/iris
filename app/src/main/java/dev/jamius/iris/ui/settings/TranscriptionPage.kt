@@ -13,6 +13,9 @@ import dev.jamius.iris.data.settings.Secret
 import dev.jamius.iris.data.settings.Settings
 import dev.jamius.iris.data.settings.SettingsRepository
 import dev.jamius.iris.stt.deepgram.DEEPGRAM_MODELS
+import dev.jamius.iris.stt.ondevice.OnDeviceEngine
+import dev.jamius.iris.stt.ondevice.OnDeviceModelStore
+import dev.jamius.iris.stt.ondevice.onDeviceModel
 import dev.jamius.iris.stt.openai.hasLiveText
 import dev.jamius.iris.stt.openai.isRealtimeTranscriptionModel
 import dev.jamius.iris.stt.soniox.SonioxCatalog
@@ -38,6 +41,7 @@ import dev.jamius.iris.ui.components.SwitchRow
 /**
  * Transcription Provider: the provider, its key (and Soniox region), model, language and timeout, then the audio
  * options (Skip Silence, Audio Speed). Each provider's fields are separate calls, so unsaved input never carries over.
+ * On device has no key or timeout: its model, download and licence instead (language for Whisper only).
  */
 @Composable
 fun TranscriptionPage(
@@ -47,9 +51,12 @@ fun TranscriptionPage(
     catalogs: ModelCatalogs,
     sonioxState: SonioxCatalog.State,
     sonioxCatalog: SonioxCatalog,
+    onDeviceModels: OnDeviceModelStore,
+    onDeviceState: OnDeviceModelStore.State,
     onBack: () -> Unit,
 ) {
     val provider = when {
+        settings.sttOnDevice -> Settings.STT_PROVIDER_ON_DEVICE
         settings.sttGateway -> Settings.STT_PROVIDER_VERCEL_GATEWAY
         settings.sttDeepgram -> Settings.STT_PROVIDER_DEEPGRAM
         settings.sttSoniox -> Settings.STT_PROVIDER_SONIOX
@@ -74,7 +81,8 @@ fun TranscriptionPage(
             }
         }
 
-        Section("Provider Settings") {
+        // On device has no key.
+        if (!settings.sttOnDevice) Section("Provider Settings") {
             // The Gateway key is the same one the Post Processing page shows.
             when (provider) {
                 Settings.STT_PROVIDER_VERCEL_GATEWAY -> ApiKeyField(
@@ -140,6 +148,14 @@ fun TranscriptionPage(
         Section("Model Settings") {
             // The mode always describes the saved model, not the text being typed.
             when (provider) {
+                Settings.STT_PROVIDER_ON_DEVICE -> OnDeviceModelSettings(
+                    settings,
+                    repository,
+                    saver,
+                    onDeviceModels,
+                    onDeviceState
+                )
+
                 Settings.STT_PROVIDER_VERCEL_GATEWAY -> ModelCombobox(
                     label = MODEL_LABEL,
                     stored = settings.gatewaySttModel,
@@ -208,7 +224,10 @@ fun TranscriptionPage(
                     saver = saver
                 )
             }
-            Separator()
+            // On device: only Whisper takes a language.
+            val takesLanguage =
+                !settings.sttOnDevice || onDeviceModel(settings.onDeviceSttModel).engine == OnDeviceEngine.WHISPER
+            if (takesLanguage) Separator()
             // Soniox has its own setting: it takes several languages, which other providers may not.
             if (settings.sttSoniox) {
                 AutosaveTextField(
@@ -219,33 +238,44 @@ fun TranscriptionPage(
                     placeholder = "en, es, …",
                     helper = "Comma-separated language codes. Leave blank to auto-detect."
                 )
-            } else {
+            } else if (takesLanguage) {
                 AutosaveTextField(
                     label = "Language Code",
                     stored = settings.sttLanguage,
                     onSave = { repository.setSttLanguage(it) },
                     saver = saver,
                     placeholder = "en",
-                    helper = "Setting a language can improve accuracy. Leave blank to auto-detect."
+                    helper = if (settings.sttOnDevice) {
+                        "Leave blank to auto-detect. Codes Whisper doesn't know auto-detect too."
+                    } else {
+                        "Setting a language can improve accuracy. Leave blank to auto-detect."
+                    }
                 )
             }
-            Separator()
-            SliderGroup(
-                label = "Timeout",
-                subtitle = "How long to wait for the final transcript after you stop.",
-                value = settings.sttTimeoutSeconds,
-                range = Settings.STT_TIMEOUT_RANGE,
-                step = 1,
-                valueText = ::secondsText,
-                onSave = { repository.setSttTimeoutSeconds(it) },
-                saver = saver
-            )
+            // No network to wait for on device, and a native decode can't be stopped.
+            if (!settings.sttOnDevice) {
+                Separator()
+                SliderGroup(
+                    label = "Timeout",
+                    subtitle = "How long to wait for the final transcript after you stop.",
+                    value = settings.sttTimeoutSeconds,
+                    range = Settings.STT_TIMEOUT_RANGE,
+                    step = 1,
+                    valueText = ::secondsText,
+                    onSave = { repository.setSttTimeoutSeconds(it) },
+                    saver = saver
+                )
+            }
         }
 
         Section("Audio") {
             SwitchRow(
                 title = "Skip Silence",
-                subtitle = "Detects speech on-device and sends only that, to cut cost.",
+                subtitle = if (settings.sttOnDevice) {
+                    "Detects speech on-device and transcribes each phrase as you pause."
+                } else {
+                    "Detects speech on-device and sends only that, to cut cost."
+                },
                 checked = settings.vadEnabled,
                 onSave = { repository.setVadEnabled(it) },
                 saver = saver
@@ -255,14 +285,22 @@ fun TranscriptionPage(
                 Separator()
                 SliderGroup(
                     label = "Audio Speed",
-                    subtitle = "Speeds up the audio sent (pitch kept), so less is billed.",
+                    subtitle = if (settings.sttOnDevice) {
+                        "Speeds up the audio (pitch kept), so it transcribes faster."
+                    } else {
+                        "Speeds up the audio sent (pitch kept), so less is billed."
+                    },
                     value = settings.sttSpeedPercent,
                     range = Settings.STT_SPEED_PERCENT_RANGE,
                     step = 10,
                     valueText = ::speedText,
                     onSave = { repository.setSttSpeedPercent(it) },
                     saver = saver,
-                    helper = "Higher speeds can lower accuracy; services with a per-request minimum may not save."
+                    helper = if (settings.sttOnDevice) {
+                        "Higher speeds can lower accuracy."
+                    } else {
+                        "Higher speeds can lower accuracy; services with a per-request minimum may not save."
+                    }
                 )
             }
         }
@@ -275,6 +313,7 @@ private const val MODEL_LABEL = "Speech-to-text Model"
 /** A transcription provider's brand mark in the provider menu. */
 @DrawableRes
 private fun sttProviderIcon(id: String): Int = when (id) {
+    Settings.STT_PROVIDER_ON_DEVICE -> R.drawable.lucide_smartphone
     Settings.STT_PROVIDER_VERCEL_GATEWAY -> R.drawable.provider_vercel
     Settings.STT_PROVIDER_DEEPGRAM -> R.drawable.provider_deepgram
     Settings.STT_PROVIDER_SONIOX -> R.drawable.provider_soniox

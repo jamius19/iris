@@ -19,7 +19,8 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        // ONNX Runtime (VAD) ships native libs per ABI: 64-bit phones and the x86_64 emulator only.
+        // sherpa-onnx (on-device STT and the VAD, with its ONNX Runtime) ships native libs per ABI: 64-bit phones and
+        // the x86_64 emulator only.
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
         }
@@ -39,6 +40,12 @@ android {
     }
     buildFeatures {
         compose = true
+    }
+    packaging {
+        jniLibs {
+            // Only libsherpa-onnx-jni.so is loaded; it needs only libonnxruntime.so.
+            excludes += setOf("**/libsherpa-onnx-c-api.so", "**/libsherpa-onnx-cxx-api.so")
+        }
     }
     testOptions {
         // android.util.Log calls (e.g. DictationController) return defaults instead of throwing in JVM tests.
@@ -60,7 +67,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.okhttp)
-    implementation(libs.onnxruntime.android)
+    implementation(libs.sherpa.onnx)
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.okhttp.mockwebserver)

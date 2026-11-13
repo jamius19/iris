@@ -20,7 +20,8 @@ class SpeechGateTest {
         hangoverMs: Int = SpeechGate.STREAMING_HANGOVER_MS,
         rate: Int = 16_000,
         model: (FloatArray) -> Float = this.model,
-    ) = SpeechGate(rate, hangoverMs, model)
+        markSegmentEnds: Boolean = false,
+    ) = SpeechGate(rate, hangoverMs, model, markSegmentEnds)
 
     /** One 32 ms frame at 16 kHz, tagged with [id] in its first sample (0 = silence). */
     private fun frame(id: Int = 0) = ByteArray(1024).also { it[0] = id.toByte() }
@@ -170,6 +171,50 @@ class SpeechGateTest {
         val later = frame()
         assertEquals(listOf(later), gate.process(later))
         assertEquals(3, calls)
+    }
+
+    @Test
+    fun segmentEndIsMarkedAloneWhenTheChunkIsWithheld() {
+        val gate = gate(SpeechGate.OFFLINE_HANGOVER_MS, markSegmentEnds = true)
+        gate.process(frame(1))
+        assertEquals(2, gate.process(frame(1)).size)
+        repeat(15) { assertEquals(1, gate.process(frame()).size) }
+
+        val end = gate.process(frame())
+
+        assertEquals(1, end.size)
+        assertTrue(end[0].isEmpty())
+        repeat(5) { assertTrue(gate.process(frame()).isEmpty()) }
+    }
+
+    @Test
+    fun segmentEndFollowsTheLastKeptChunk() {
+        val gate = gate(SpeechGate.OFFLINE_HANGOVER_MS, markSegmentEnds = true)
+        // Two frames per chunk: frame 16 after the speech (the end) shares a chunk with the last hangover frame.
+        val speech = ByteArray(2048).also {
+            it[0] = 1
+            it[1024] = 1
+        }
+        assertEquals(listOf(speech), gate.process(speech))
+        repeat(7) { assertEquals(1, gate.process(ByteArray(2048)).size) }
+        val last = ByteArray(2048)
+
+        val sent = gate.process(last)
+
+        assertEquals(2, sent.size)
+        assertSame(last, sent[0])
+        assertTrue(sent[1].isEmpty())
+        assertTrue(gate.process(ByteArray(2048)).isEmpty())
+    }
+
+    @Test
+    fun noSegmentEndWithoutTheFlag() {
+        val gate = gate(SpeechGate.OFFLINE_HANGOVER_MS)
+        gate.process(frame(1))
+        gate.process(frame(1))
+        val sent = (0 until 30).flatMap { gate.process(frame()) }
+        assertEquals(15, sent.size)
+        assertTrue(sent.none { it.isEmpty() })
     }
 
     @Test

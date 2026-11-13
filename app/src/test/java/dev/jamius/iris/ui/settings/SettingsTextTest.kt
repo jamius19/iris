@@ -7,6 +7,7 @@ package dev.jamius.iris.ui.settings
 
 import dev.jamius.iris.data.settings.CustomCleanupProvider
 import dev.jamius.iris.data.settings.Settings
+import dev.jamius.iris.stt.ondevice.onDeviceModel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -39,6 +40,17 @@ class SettingsTextTest {
     }
 
     @Test
+    fun onDeviceTexts() {
+        assertEquals("663 MB", megabytesText(663_043_117))
+        assertEquals("141 MB", megabytesText(141_300_566))
+        assertEquals("0 MB", megabytesText(0))
+        assertEquals("120 / 663 MB", downloadProgressText(120_400_000, 663_043_117))
+        val parakeet = onDeviceModel("parakeet-unified-en")
+        assertEquals("Parakeet Unified EN · 663 MB", onDeviceModelLabel(parakeet, downloaded = false))
+        assertEquals("Parakeet Unified EN · Downloaded", onDeviceModelLabel(parakeet, downloaded = true))
+    }
+
+    @Test
     fun apiKeyHelpers() {
         assertEquals("API key saved. Enter a new one to replace it.", apiKeyHelper(true))
         assertEquals("Not set", apiKeyHelper(false))
@@ -67,6 +79,8 @@ class SettingsTextTest {
 
     @Test
     fun providerLabels() {
+        assertEquals(Settings.STT_PROVIDER_ON_DEVICE, STT_PROVIDERS.first())
+        assertEquals("On device", sttProviderLabel(Settings.STT_PROVIDER_ON_DEVICE))
         assertEquals("OpenAI", sttProviderLabel(Settings.STT_PROVIDER_OPENAI))
         assertEquals("Vercel AI Gateway", sttProviderLabel(Settings.STT_PROVIDER_VERCEL_GATEWAY))
         assertEquals("Deepgram", sttProviderLabel(Settings.STT_PROVIDER_DEEPGRAM))

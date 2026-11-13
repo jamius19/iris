@@ -69,6 +69,8 @@ class SettingsMappingTest {
         val settings = emptyPreferences().toSettings(emptySet())
 
         assertEquals(Settings.STT_PROVIDER_OPENAI, settings.sttProviderId)
+        assertFalse(settings.sttOnDevice)
+        assertEquals("parakeet-unified-en", settings.onDeviceSttModel)
         assertEquals(Settings.DEFAULT_STT_MODEL, settings.sttModel)
         assertEquals(Settings.DEFAULT_GATEWAY_STT_MODEL, settings.gatewaySttModel)
         assertTrue(settings.gatewaySttLive)
@@ -237,6 +239,16 @@ class SettingsMappingTest {
         assertFalse(soniox.sttKeySet)
         assertTrue(prefs.toSettings(setOf(Secret.SONIOX_API_KEY)).sttKeySet)
         assertEquals("en, bn", soniox.activeSttLanguage)
+
+        prefs[Keys.STT_PROVIDER_ID] = Settings.STT_PROVIDER_ON_DEVICE
+        val onDevice = prefs.toSettings(emptySet())
+        assertTrue(onDevice.sttOnDevice)
+        assertFalse(onDevice.sttSoniox)
+        assertEquals(Settings.DEFAULT_ON_DEVICE_STT_MODEL, onDevice.activeSttModel)
+        assertTrue(onDevice.sttKeySet) // No key.
+        assertEquals("fr", onDevice.activeSttLanguage)
+        prefs[Keys.ON_DEVICE_STT_MODEL] = "whisper-small"
+        assertEquals("whisper-small", prefs.toSettings(emptySet()).activeSttModel)
 
         prefs[Keys.STT_PROVIDER_ID] = "unknown"
         val unknown = prefs.toSettings(setOf(Secret.OPENAI_API_KEY))

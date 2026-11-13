@@ -60,6 +60,8 @@ data class Settings(
     val sonioxRegion: String,
     /** Soniox language hints: comma-separated codes; blank means auto-detect. Soniox only (not [sttLanguage]). */
     val sonioxLanguages: String,
+    /** The on-device model: a catalogue id in `stt.ondevice`; an unknown id means the default model. */
+    val onDeviceSttModel: String,
     /** ISO-639-1 code; blank means auto-detect. */
     val sttLanguage: String,
     /** How long to wait for the final transcript once the audio is sent; past it the session fails. */
@@ -114,9 +116,13 @@ data class Settings(
     /** Speech-to-text goes through Soniox (direct). */
     val sttSoniox: Boolean get() = sttProviderId == STT_PROVIDER_SONIOX
 
+    /** Speech-to-text runs on this device (sherpa-onnx, a downloaded model). */
+    val sttOnDevice: Boolean get() = sttProviderId == STT_PROVIDER_ON_DEVICE
+
     /** The selected provider's model (an unknown provider id means OpenAI). */
     val activeSttModel: String
         get() = when {
+            sttOnDevice -> onDeviceSttModel
             sttGateway -> gatewaySttModel
             sttDeepgram -> deepgramSttModel
             sttSoniox -> sonioxSttModel
@@ -127,9 +133,10 @@ data class Settings(
     val activeSttLanguage: String
         get() = if (sttSoniox) sonioxLanguages else sttLanguage
 
-    /** The selected speech-to-text provider's API key is set. */
+    /** The selected speech-to-text provider's API key is set (On device has none: always true). */
     val sttKeySet: Boolean
         get() = when {
+            sttOnDevice -> true
             sttGateway -> gatewayKeySet
             sttDeepgram -> deepgramKeySet
             sttSoniox -> sonioxKeySet
@@ -172,6 +179,7 @@ data class Settings(
         const val STT_PROVIDER_VERCEL_GATEWAY = "vercel-gateway"
         const val STT_PROVIDER_DEEPGRAM = "deepgram"
         const val STT_PROVIDER_SONIOX = "soniox"
+        const val STT_PROVIDER_ON_DEVICE = "on-device"
         const val CLEANUP_PROVIDER_VERCEL_GATEWAY = "vercel-gateway"
         const val CLEANUP_PROVIDER_OPENROUTER = "openrouter"
 
@@ -180,6 +188,7 @@ data class Settings(
         const val DEFAULT_DEEPGRAM_STT_MODEL = "nova-3"
         const val DEFAULT_SONIOX_STT_MODEL = "stt-rt-v6"
         const val DEFAULT_SONIOX_REGION = "us"
+        const val DEFAULT_ON_DEVICE_STT_MODEL = "parakeet-unified-en"
         /** Both cleanup providers (same id on OpenRouter). */
         const val DEFAULT_CLEANUP_MODEL = "openai/gpt-6-luna"
 

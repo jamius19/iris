@@ -115,6 +115,23 @@ class TimeStretchTest {
     }
 
     @Test
+    fun anEmptyInputFlushesThenIsPassedOn() {
+        val first = voice(16_000, seconds = 1)
+        val second = voice(16_000, seconds = 1)
+
+        val output = stretch(first + listOf(ByteArray(0)) + second, 16_000, 2f)
+
+        val ends = output.indices.filter { output[it].isEmpty() }
+        assertEquals(1, ends.size)
+        // Everything of the first segment came out before the marker, the second's after it.
+        val before = output.subList(0, ends[0]).sumOf { it.size }
+        val expected = first.sumOf { it.size } / 2.0
+        assertTrue("$before of $expected", abs(before - expected) <= expected * 0.01)
+        val after = output.subList(ends[0] + 1, output.size).sumOf { it.size }
+        assertTrue("$after of $expected", abs(after - expected) <= expected * 0.01)
+    }
+
+    @Test
     fun pitchIsKept() {
         val input = samples(sine(16_000).reduce(ByteArray::plus))
         val output = samples(stretch(sine(16_000), 16_000, 2f).reduce(ByteArray::plus))
