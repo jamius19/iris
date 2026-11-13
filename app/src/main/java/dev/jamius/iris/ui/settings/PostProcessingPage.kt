@@ -390,7 +390,7 @@ private fun CustomProviderSettings(
             label = "Provider Type",
             options = listOf(CustomCleanupProvider.TYPE_OPENAI_COMPATIBLE),
             selected = form.type,
-            optionLabel = { "OpenAI-compatible" },
+            optionLabel = { "OpenAI Compatible" },
             onSelect = { form.type = it }
         )
     }
@@ -410,7 +410,7 @@ private fun CustomProviderSettings(
         placeholder = "https://api.example.com/v1",
         error = form.errors.baseUrl,
         onEdited = { form.errors = form.errors.copy(baseUrl = null) },
-        helper = "Include the version path; /chat/completions and /models are appended."
+        helper = "Enter your OpenAI-compatible base URL here."
     )
     Separator()
     DraftApiKeyField(

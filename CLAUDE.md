@@ -789,8 +789,8 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
   fetch. The plus makes one in-memory draft (plain `remember`, "Unnamed Provider", selected in the UI only,
   never used for cleanup; a second plus focuses its Name); picking any provider, leaving the page or closing the app
   discards it. Provider Settings for custom providers (draft and saved) is a form committed only by "Save" (dark
-  `SmallButton`): "Provider Type" (one option "OpenAI-compatible"), "Provider Name" ("My provider"), "Provider Base
-  URL" ("https://api.example.com/v1", "Include the version path; /chat/completions and /models are appended."), "API
+  `SmallButton`): "Provider Type" (one option "OpenAI Compatible"), "Provider Name" ("My provider"), "Provider Base
+  URL" ("https://api.example.com/v1", "Enter your OpenAI-compatible base URL here."), "API
   Key" (`DraftApiKeyField`). Save checks `providerDraftErrors` (name, `baseUrlError`: blank / not https / unparseable,
   key input or a stored key not marked for removal); errors show per field and clear on edit; success stores, selects
   it, clears the key input and reloads its catalog. Saved providers keep their last saved values; unsaved form edits
