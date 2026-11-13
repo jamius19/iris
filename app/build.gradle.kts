@@ -15,19 +15,41 @@ android {
         minSdk = 30
         targetSdk = 37
         versionCode = 1
-        versionName = "1.0"
+        versionName = "0.9.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
 
-        // sherpa-onnx (on-device STT and the VAD, with its ONNX Runtime) ships native libs per ABI: 64-bit phones and
-        // the x86_64 emulator only.
-        ndk {
-            abiFilters += listOf("arm64-v8a", "x86_64")
+    // Release signing (PKCS12 keystore; its key shares the store password). Without IRIS_KEYSTORE_FILE the release
+    // APK is left unsigned.
+    val releaseKeystore = providers.environmentVariable("IRIS_KEYSTORE_FILE").orNull
+    signingConfigs {
+        if (releaseKeystore != null) {
+            create("release") {
+                storeFile = file(releaseKeystore)
+                storeType = "pkcs12"
+                storePassword = providers.environmentVariable("IRIS_KEYSTORE_PASSWORD").get()
+                keyAlias = providers.environmentVariable("IRIS_KEY_ALIAS").get()
+                keyPassword = storePassword
+            }
         }
     }
 
+    // sherpa-onnx (on-device STT and the VAD, with its ONNX Runtime) ships native libs per ABI: 64-bit phones, plus
+    // the x86_64 emulator in debug builds (~31 MB of uncompressed libs).
     buildTypes {
+        debug {
+            ndk {
+                abiFilters += listOf("arm64-v8a", "x86_64")
+            }
+        }
         release {
+            ndk {
+                abiFilters += listOf("arm64-v8a")
+            }
+            if (releaseKeystore != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             optimization {
                 enable = true
                 packageScope = setOf("androidx.**", "kotlin.**", "kotlinx.**")

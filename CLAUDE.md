@@ -39,7 +39,8 @@ device: also where phrases end).
   `readelf --dyn-syms`, 2026-11-13), so either copy fails the other JNI (emulator: `dlopen failed: cannot locate
   symbol "OrtGetApiBase"`); Maven Central has no `onnxruntime-android` 1.28.2 (1.29.0 adds default-on telemetry).
   The VAD now runs through sherpa's `Vad` (see VAD). No `ai.onnxruntime.TelemetryInitializer`: INTERNET comes from
-  OkHttp. `abiFilters` arm64-v8a + x86_64 (phones + emulator): 32-bit-only devices can't install the app. Native libs
+  OkHttp. `abiFilters` per build type: debug arm64-v8a + x86_64 (phones + emulator), release arm64-v8a only
+  (~31 MB less): 32-bit-only devices can't install the app, and a release build won't install on the x86_64 emulator. Native libs
   are stored uncompressed: debug APK 95.8 MB before CP14 (MS ORT), 89.8 MB after (release, R8: 65.3 MB; a store
   bundle would ship one ABI).
 - Sonic (time-stretch, "Speed"), vendored, no dependency: `audio/sonic/Sonic.java` (Java, Apache-2.0, Bill Cox) from
@@ -1056,6 +1057,14 @@ Run from repo root in Git Bash on Windows:
 ./gradlew assembleDebug testDebugUnitTest --console=plain -q
 ```
 Both build and unit tests must pass before reporting work as done.
+
+Release signing: `assembleRelease` signs with a PKCS12 keystore when `IRIS_KEYSTORE_FILE`,
+`IRIS_KEYSTORE_PASSWORD` and `IRIS_KEY_ALIAS` are set (key password = store password), else leaves the APK
+unsigned. `.github/workflows/release.yml` (every push to `main`, GitHub environment `release` with secrets
+`IRIS_KEYSTORE_B64` / `IRIS_KEYSTORE_PASSWORD` / `IRIS_KEY_ALIAS`): builds + runs unit tests, uploads
+`iris-<versionName>-arm64-v8a-<sha7>.apk` as an artifact, and if tag `v<versionName>` doesn't exist creates it on
+the pushed commit with a GitHub Release (`iris-<versionName>-arm64-v8a.apk`). The version comes from AGP's `output-metadata.json`. Bump
+`versionCode` with `versionName`.
 
 ## Conventions
 - Every new Kotlin file starts with this header (date = file creation date, `dd/MM/yyyy`):
