@@ -105,10 +105,13 @@ fun ServicesDivider() {
     )
 }
 
+/** Extra space above a [Section], on top of the page's 15 dp item gap. */
+val SectionTopPadding = 14.dp
+
 /** A section heading (no inset) over one card. */
 @Composable
 fun Section(title: String, content: @Composable ColumnScope.() -> Unit) {
-    Column(modifier = Modifier.padding(top = 14.dp), verticalArrangement = Arrangement.spacedBy(15.dp)) {
+    Column(modifier = Modifier.padding(top = SectionTopPadding), verticalArrangement = Arrangement.spacedBy(15.dp)) {
         Text(title, IrisTheme.type.sectionHeading, Modifier.semantics { heading() })
         Card(content = content)
     }

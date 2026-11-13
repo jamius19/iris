@@ -145,7 +145,7 @@ fun savedPercent(recordedMs: Long, billedMs: Long): Int {
 
 /** The Audio Sent row's subtitle. */
 fun audioSavedText(percent: Int): String =
-    if (percent > 0) "$percent% less than recorded (Skip Silence, Audio Speed)." else "As recorded: nothing saved."
+    if (percent > 0) "$percent% less than recorded." else "Same as recorded duration. Nothing saved."
 
 /** A duration, floored: "35 s", "47 min", "3 h 12 min", "2 h"; a negative one is "0 s". */
 fun durationText(ms: Long): String {

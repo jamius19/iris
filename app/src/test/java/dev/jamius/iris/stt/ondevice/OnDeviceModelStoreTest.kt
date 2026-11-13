@@ -9,13 +9,16 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.job
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import mockwebserver3.MockResponse
+import mockwebserver3.MockResponseBody
 import mockwebserver3.MockWebServer
 import mockwebserver3.SocketEffect
 import okhttp3.OkHttpClient
 import okio.Buffer
+import okio.BufferedSink
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -28,6 +31,7 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
 import java.security.MessageDigest
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.random.Random
 
@@ -70,20 +74,43 @@ class OnDeviceModelStoreTest {
     private val root get() = File(folder.root, "models")
     private val dir get() = File(root, "m")
 
-    private fun CoroutineScope.store(
+    /**
+     * A store whose initial scan has ended: the scan runs on another thread, so a late result could otherwise land
+     * after the test's download or delete (e.g. re-add a model the test just deleted).
+     */
+    private suspend fun CoroutineScope.store(
         freeBytes: Long = Long.MAX_VALUE,
         beforeDelete: suspend (String) -> Unit = { deleted += it },
-    ) = OnDeviceModelStore(
-        OkHttpClient(),
-        root,
-        this,
-        beforeDelete = beforeDelete,
-        freeBytes = { freeBytes },
-        models = models,
-        url = { m, f -> server.url("/${m.id}/${f.name}").toString() }
-    )
+    ): OnDeviceModelStore {
+        val store = OnDeviceModelStore(
+            OkHttpClient(),
+            root,
+            this,
+            beforeDelete = beforeDelete,
+            freeBytes = { freeBytes },
+            models = models,
+            url = { m, f -> server.url("/${m.id}/${f.name}").toString() }
+        )
+        this.coroutineContext.job.children.forEach { it.join() } // The store's only coroutine so far: the scan.
+        return store
+    }
 
     private fun ok(bytes: ByteArray) = MockResponse.Builder().body(Buffer().write(bytes)).build()
+
+    /** Sends [bytes] up to [gate], then the rest only once [release] opens. */
+    private class GatedBody(
+        private val bytes: ByteArray,
+        private val gate: Int,
+        private val release: CountDownLatch,
+    ) : MockResponseBody {
+        override val contentLength = bytes.size.toLong()
+
+        override fun writeTo(sink: BufferedSink) {
+            sink.write(bytes, 0, gate).flush()
+            release.await(10, TimeUnit.SECONDS)
+            sink.write(bytes, gate, bytes.size - gate)
+        }
+    }
 
     /** Downloads [id] and waits until it ends. */
     private suspend fun OnDeviceModelStore.downloadAndWait(id: String = "m"): OnDeviceModelStore.State {
@@ -98,7 +125,15 @@ class OnDeviceModelStoreTest {
         assertTrue(tmpFiles().isEmpty())
     }
 
-    private fun tmpFiles() = dir.listFiles { f -> f.name.endsWith(".tmp") }.orEmpty().toList()
+    /**
+     * The model's files the store writes ([partial] only: `<name>.tmp`) that exist. Only these names: on Windows an
+     * on-access scanner can briefly add its own file to the directory (seen: `ENCODER.ORT.TMP.tmp`, 0 bytes).
+     */
+    private fun modelFiles(partial: Boolean = false) = models[0].files
+        .flatMap { f -> listOfNotNull(File(dir, f.name + ".tmp"), File(dir, f.name).takeUnless { partial }) }
+        .filter { it.exists() }
+
+    private fun tmpFiles() = modelFiles(partial = true)
 
     private fun enqueueDecoderAndTokens() {
         server.enqueue(ok(decoderBytes))
@@ -267,21 +302,19 @@ class OnDeviceModelStoreTest {
 
     @Test
     fun cancelDeletesTheTmpWithoutAnError() = runBlocking {
-        server.enqueue(
-            MockResponse.Builder()
-                .body(Buffer().write(encoderBytes))
-                .throttleBody(500, 200, TimeUnit.MILLISECONDS)
-                .build()
-        )
+        val release = CountDownLatch(1)
+        server.enqueue(MockResponse.Builder().body(GatedBody(encoderBytes, 1_000, release)).build())
         val store = store()
         store.download("m")
         val tmp = File(dir, "encoder.ort.tmp")
-        withTimeout(5_000) {
-            while (tmp.length() == 0L) delay(10)
+        // The rest of the body waits for the gate, so the download stays mid-file until the cancel.
+        withTimeout(10_000) {
+            while (tmp.length() < 1_000L) delay(10)
         }
 
         store.cancel()
-        val state = withTimeout(5_000) { store.state.first { it.downloading == null } }
+        val state = withTimeout(10_000) { store.state.first { it.downloading == null } }
+        release.countDown()
 
         assertNull(state.error)
         assertFalse(store.isDownloaded("m"))
@@ -310,13 +343,12 @@ class OnDeviceModelStoreTest {
         val store = store()
         store.downloadAndWait()
 
-        store.delete("m")
-        withTimeout(5_000) {
-            while (dir.exists()) delay(10)
-        }
+        store.delete("m") // Sets deleting at once, so the wait below can't see a stale null.
+        withTimeout(10_000) { store.state.first { it.deleting == null } }
 
         assertEquals(listOf("m"), deleted)
         assertFalse(store.isDownloaded("m"))
+        assertTrue(modelFiles().isEmpty())
     }
 
     @Test
@@ -338,7 +370,7 @@ class OnDeviceModelStoreTest {
         val state = withTimeout(5_000) { store.state.first { it.deleting == null } }
 
         assertFalse("m" in state.downloaded)
-        assertFalse(dir.exists())
+        assertTrue(modelFiles().isEmpty())
         assertEquals(3, server.requestCount)
     }
 

@@ -201,8 +201,8 @@ class SettingsTextTest {
     fun statsBasisTexts() {
         assertEquals("From your last dictation.", statsBasisText(1))
         assertEquals("From your last 12 dictations.", statsBasisText(12))
-        assertEquals("From your last cleanup.", statsBasisText(1, "cleanup"))
-        assertEquals("From your last 5 cleanups.", statsBasisText(5, "cleanup"))
+        assertEquals("From your last post processing request.", statsBasisText(1, "post processing request"))
+        assertEquals("From your last 5 post processing requests.", statsBasisText(5, "post processing request"))
     }
 
     @Test
@@ -227,8 +227,8 @@ class SettingsTextTest {
 
     @Test
     fun audioSavedTexts() {
-        assertEquals("38% less than recorded (Skip Silence, Audio Speed).", audioSavedText(38))
-        assertEquals("As recorded: nothing saved.", audioSavedText(0))
+        assertEquals("38% less than recorded.", audioSavedText(38))
+        assertEquals("Same as recorded duration. Nothing saved.", audioSavedText(0))
     }
 
     @Test

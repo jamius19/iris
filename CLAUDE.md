@@ -1013,8 +1013,8 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
   Summary card (only with `totals.recordedMs > 0`; `Card(color = statsCard)`, #0061F3 in both modes, white text): two
   `weight(1f)` columns, each merged for TalkBack: value (`pageTitle`) + label (`subtitle`): `durationText(recordedMs)`
   "Time Transcribed" and `durationText(savedMs)` "Time Saved" (`durationText`: floored "35 s" / "47 min" / "3 h 12 min"
-  / "2 h"; negative = "0 s"). Helper below it: "Since statistics began or your last reset. Time saved compares
-  dictating with typing the same words at 38 words per minute." (CP16 users' totals start at CP17.)
+  / "2 h"; negative = "0 s"). Helper below it (`TOTALS_HELPER`): "Time saved compared to typing on a keyboard."
+  (CP16 users' totals start at CP17.)
   Totals (`Totals(recordedMs, savedMs)`), per dictation with text (the controller's `record`, every provider):
   recordedMs += the recording; savedMs += `typingSavedMs(words, recordedMs, doneMs)` = words x 60,000 / `TYPING_WPM`
   (38) - (recording + stop -> done), net (may be negative per dictation); words = `wordCount(Done.text)`
@@ -1027,7 +1027,7 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
   1.0; verdict and text both use the factor rounded to one decimal, `roundToTenth`, so 1.45 is "Keeps up" with
   "1.5×"), "Transcription Time" (`medianWaitMs` = `median` (`OnDeviceStats.kt`, also used for cloud), even count =
   mean of the middle two;
-  `tenthsText` "4.8 s"; "Median time from stopping to the final text."), "Model Load" (last load, if known; "Last time
+  `tenthsText` "4.8 s"; "Typical time the transcription took."), "Model Load" (last load, if known; "Last time
   the model was loaded into memory."), then `statsBasisText` ("From your last dictation." / "From your last N
   dictations."). The on-device provider records only its own sample (`recordOnDevice`); totals come from the
   controller, so nothing counts twice.
@@ -1035,22 +1035,28 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
   `|upload` for Deepgram with `deepgramUpload`; title `cloudTitle` "OpenAI · gpt-live-transcribe", "Deepgram · nova-3
   (upload)", provider labels from `sttProviderLabel`), last 20 `CloudSample(waitMs, recordedMs, billedMs)`:
   "Transcription Time" (median waitMs, same subtitle as on-device), "Audio Sent" (`minutesText(Σ billed)` "12.4 min";
-  subtitle `audioSavedText(savedPercent(Σ recorded, Σ billed))`: "38% less than recorded (Skip Silence, Audio
-  Speed)." or, at 0, "As recorded: nothing saved."; `savedPercent` floored: 0 only when nothing was saved or without
+  subtitle `audioSavedText(savedPercent(Σ recorded, Σ billed))`: "38% less than recorded." or, at 0, "Same as
+  recorded duration. Nothing saved."; `savedPercent` floored: 0 only when nothing was saved or without
   a recording, 100 only when nothing was billed, else 1..99; Soniox real-time is always 0 %), then
   `statsBasisText(n)`.
   Cleanup section per provider + model (`cleanupKey` = `cleanupProviderId|activeCleanupModel`, a custom one by its
   UUID; title `cleanupTitle` "Vercel AI Gateway · openai/gpt-6-luna", "<custom name> · <model>" via
   `cleanupProviderLabel`), last 20 successful cleanup times (`timedCleanup`, the span the service logs as `cleanup X
-  ms`): "Cleanup Time (p75)" ("3 in 4 cleanups finished within this.") and "Cleanup Time (p90)" ("9 in 10 cleanups
-  finished within this."), `percentileMs` by nearest rank (rank = ceil(p x n / 100)), then `statsBasisText(n,
-  "cleanup")`. Titles are stored and refreshed on each record (the page needs no settings); a deleted custom
-  provider's stats stay under its last name until Reset.
-  Helpers, each only if its group shows: the speed helper; cloud "Audio Sent is roughly what the service bills, after
-  Skip Silence and Audio Speed. Soniox real-time bills the whole stream, so nothing is saved there."; cleanup "Only
-  cleanups that finished count; failed and timed-out ones are left out." Then "Reset Statistics" (`DangerButton`, no
-  confirmation: clears everything, totals included). Nothing at all: a card "No statistics yet" / "Dictate to see
-  transcription and cleanup times, audio sent and how on-device models run on this phone."; before the first read
+  ms`): "Post Processing Time (p75)" ("3 in 4 requests finished within this time.") and "Post Processing Time
+  (p90)" ("9 in 10 requests finished within this time."), `percentileMs` by nearest rank (rank = ceil(p x n / 100)),
+  then `statsBasisText(n, "post processing request")` ("From your last post processing request." / "From your last
+  N post processing requests."). Titles are stored and refreshed on each record (the page needs no settings); a
+  deleted custom provider's stats stay under its last name until Reset.
+  Helpers, each only if its group shows, in one column below the last section, spaced from it like a section
+  (`Modifier.padding(top = SectionTopPadding)`, the `Section` top padding from `Surfaces.kt`, 14 dp; 15 dp between
+  helpers), so they don't read as part of its card: speed (`SPEED_HELPER`) "Speed compares how long you spoke with
+  how long the model took to transcribe it. At 1.5× or more it keeps up. Below 1× the transcription falls behind.";
+  cloud (`CLOUD_HELPER`) "Audio Sent is roughly what the service bills, after skipping silences and applying audio
+  speed. Soniox real-time bills the whole stream, so nothing is saved there."; cleanup (`CLEANUP_HELPER`) "Only post
+  processing requests that finished count. Failed and timed-out ones are left out." Then "Reset Statistics"
+  (`DangerButton`, no confirmation: clears everything, totals included). Nothing at all: a card "No statistics yet" /
+  "Dictate to see transcription and post-processing times, audio sent and how on-device models run on this phone.";
+  before the first read
   only the header shows (no empty-state flash). Rows are `StatRow`s (title + value right, subtitle; merged for
   TalkBack). `SettingsApp` collects `statistics.stats` (a `StatsSnapshot`, like `onDeviceModels.state`) and passes
   the value (null until the first read) to the page, so it is read before the page slides in and re-opening doesn't

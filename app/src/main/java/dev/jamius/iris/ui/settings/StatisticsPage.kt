@@ -8,13 +8,13 @@ package dev.jamius.iris.ui.settings
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import dev.jamius.iris.dictation.StatsSnapshot
-import dev.jamius.iris.dictation.TYPING_WPM
 import dev.jamius.iris.dictation.Totals
 import dev.jamius.iris.dictation.percentileMs
 import dev.jamius.iris.stt.ondevice.SpeedVerdict
@@ -27,6 +27,7 @@ import dev.jamius.iris.ui.components.Card
 import dev.jamius.iris.ui.components.DangerButton
 import dev.jamius.iris.ui.components.PageScaffold
 import dev.jamius.iris.ui.components.Section
+import dev.jamius.iris.ui.components.SectionTopPadding
 import dev.jamius.iris.ui.components.Separator
 import dev.jamius.iris.ui.components.Text
 import dev.jamius.iris.ui.theme.IrisTheme
@@ -52,8 +53,8 @@ fun StatisticsPage(stats: StatsSnapshot?, onReset: () -> Unit, onBack: () -> Uni
                 Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                     Text("No statistics yet", type.title)
                     Text(
-                        "Dictate to see transcription and cleanup times, audio sent and how on-device models run " +
-                            "on this phone.",
+                        "Dictate to see transcription and post-processing times, audio sent and how on-device models " +
+                            "run on this phone.",
                         type.subtitle,
                         color = colors.muted
                     )
@@ -80,7 +81,7 @@ fun StatisticsPage(stats: StatsSnapshot?, onReset: () -> Unit, onBack: () -> Uni
                     "Transcription Time",
                     tenthsText(checkNotNull(s.medianWaitMs())),
                     colors.text,
-                    "Median time from stopping to the final text."
+                    "Typical time the transcription took."
                 )
                 s.lastLoadMs?.let {
                     Separator()
@@ -97,7 +98,7 @@ fun StatisticsPage(stats: StatsSnapshot?, onReset: () -> Unit, onBack: () -> Uni
                     "Transcription Time",
                     tenthsText(checkNotNull(median(c.samples.map { it.waitMs }))),
                     colors.text,
-                    "Median time from stopping to the final text."
+                    "Typical time the transcription took."
                 )
                 Separator()
                 StatRow(
@@ -112,24 +113,29 @@ fun StatisticsPage(stats: StatsSnapshot?, onReset: () -> Unit, onBack: () -> Uni
         for (c in cleanup) {
             Section(c.title) {
                 StatRow(
-                    "Cleanup Time (p75)",
+                    "Post Processing Time (p75)",
                     tenthsText(checkNotNull(percentileMs(c.samplesMs, 75))),
                     colors.text,
-                    "3 in 4 cleanups finished within this."
+                    "3 in 4 requests finished within this time."
                 )
                 Separator()
                 StatRow(
-                    "Cleanup Time (p90)",
+                    "Post Processing Time (p90)",
                     tenthsText(checkNotNull(percentileMs(c.samplesMs, 90))),
                     colors.text,
-                    "9 in 10 cleanups finished within this."
+                    "9 in 10 requests finished within this time."
                 )
-                Text(statsBasisText(c.samplesMs.size, "cleanup"), type.helper, color = colors.muted)
+                Text(statsBasisText(c.samplesMs.size, "post processing request"), type.helper, color = colors.muted)
             }
         }
-        if (models.isNotEmpty()) Text(SPEED_HELPER, type.helper, color = colors.muted)
-        if (cloud.isNotEmpty()) Text(CLOUD_HELPER, type.helper, color = colors.muted)
-        if (cleanup.isNotEmpty()) Text(CLEANUP_HELPER, type.helper, color = colors.muted)
+        // Spaced from the last section like a section, so they don't read as part of its card.
+        if (models.isNotEmpty() || cloud.isNotEmpty() || cleanup.isNotEmpty()) {
+            Column(Modifier.padding(top = SectionTopPadding), verticalArrangement = Arrangement.spacedBy(15.dp)) {
+                if (models.isNotEmpty()) Text(SPEED_HELPER, type.helper, color = colors.muted)
+                if (cloud.isNotEmpty()) Text(CLOUD_HELPER, type.helper, color = colors.muted)
+                if (cleanup.isNotEmpty()) Text(CLEANUP_HELPER, type.helper, color = colors.muted)
+            }
+        }
         DangerButton("Reset Statistics", onClick = onReset)
     }
 }
@@ -171,13 +177,13 @@ private fun StatRow(title: String, value: String, valueColor: Color, subtitle: S
     }
 }
 
-private const val TOTALS_HELPER = "Since statistics began or your last reset. Time saved compares dictating with " +
-    "typing the same words at $TYPING_WPM words per minute."
+private const val TOTALS_HELPER = "Time saved compared to typing on a keyboard."
 
-private const val CLOUD_HELPER = "Audio Sent is roughly what the service bills, after Skip Silence and Audio Speed. " +
-    "Soniox real-time bills the whole stream, so nothing is saved there."
+private const val CLOUD_HELPER = "Audio Sent is roughly what the service bills, after skipping silences and " +
+    "applying audio speed. Soniox real-time bills the whole stream, so nothing is saved there."
 
-private const val CLEANUP_HELPER = "Only cleanups that finished count; failed and timed-out ones are left out."
+private const val CLEANUP_HELPER = "Only post processing requests that finished count. Failed and timed-out ones " +
+    "are left out."
 
 private const val SPEED_HELPER = "Speed compares how long you spoke with how long the model took to transcribe it. " +
-    "At 1.5× or more it keeps up; below 1× the text falls behind you."
+    "At 1.5× or more it keeps up. Below 1× the transcription falls behind."
