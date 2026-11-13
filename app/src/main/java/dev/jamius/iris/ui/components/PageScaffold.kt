@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
@@ -75,7 +76,7 @@ fun PageScaffold(title: String?, onBack: (() -> Unit)?, content: @Composable Col
                 .verticalScroll(rememberScrollState())
                 .heightIn(min = viewport)
                 .pointerInput(Unit) { detectTapGestures { focusManager.clearFocus() } }
-                .padding(start = 21.dp, end = 21.dp, top = 28.dp, bottom = navBarBottom + 28.dp)
+                .padding(start = 18.dp, end = 18.dp, top = 18.dp, bottom = navBarBottom + 28.dp)
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(15.dp)) {
                 if (title == null) {
@@ -89,8 +90,11 @@ fun PageScaffold(title: String?, onBack: (() -> Unit)?, content: @Composable Col
                 } else {
                     Row(Modifier.heightIn(min = ControlHeight), verticalAlignment = Alignment.CenterVertically) {
                         if (onBack != null) {
-                            IconAction(R.drawable.lucide_chevron_left, "Back", colors.text, onBack)
-                            Spacer(Modifier.width(4.dp))
+                            IconAction(
+                                R.drawable.lucide_chevron_left, "Back", colors.text, onBack,
+                                iconModifier = Modifier.offset(y = 1.dp)   // positive = down
+                            )
+                            Spacer(Modifier.width(2.dp))
                         }
                         Text(title, type.pageTitle, Modifier.semantics { heading() })
                     }
