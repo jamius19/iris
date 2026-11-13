@@ -10,7 +10,7 @@ import dev.jamius.iris.data.settings.CustomCleanupProvider
 import dev.jamius.iris.data.settings.Settings
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
-/** The saved transcription model's mode, for the model field's helper; [streams] without [live]: text after stop. */
+/** The saved model's mode, for Soniox's model field helper; [streams] without [live]: text after stop. */
 fun sttModeText(live: Boolean, streams: Boolean = live): String = when {
     live -> "Mode: live"
     streams -> "Mode: streams, text after stop"

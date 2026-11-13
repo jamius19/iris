@@ -252,8 +252,8 @@ VAD ("Skip silence", CP7):
   silence. Zeros don't count in `sentBytes`: a session with no speech still ends with "No speech detected" and no commit
   / `audio-done` (if it ran >= 5 s, the socket got only keep-alive zeros). Upload providers get none.
 - Setting `Settings.vadEnabled` (`vad_enabled`, default on): Transcription Provider > Audio > "Skip Silence" switch,
-  subtitle "Detects speech on-device and sends only that, to cut cost." (live Soniox model: "Detects speech on-device
-  and sends only that; no saving on Soniox real-time (billed by session length).").
+  subtitle "Detects speech on-device and sends only that, to cut cost." (same for every model; on Soniox real-time it
+  saves nothing, since that is billed by session length).
 
 Speed (CP8):
 - `audio.timeStretched(sampleRate, speed)` (`TimeStretch.kt`, pure, unit tested): `Flow<ByteArray>` of PCM16 mono
@@ -372,8 +372,8 @@ Providers (settings store a provider id for each):
   Realtime models (`REALTIME_TRANSCRIPTION_MODELS`, client events reference checked 2026-11-12): `whisper-1`,
   `gpt-transcribe`, `gpt-live-transcribe`, `gpt-4o-mini-transcribe`, `gpt-4o-mini-transcribe-2025-12-15`,
   `gpt-4o-transcribe`, `gpt-4o-transcribe-diarize`, `gpt-realtime-whisper`; all stream (decided: less wait at stop),
-  but only gpt-live-transcribe and gpt-realtime-whisper send text before the commit (`hasLiveText`: live hangover
-  and "Mode: live"; the others get the short hangover). Any other id (trimmed) uploads.
+  but only gpt-live-transcribe and gpt-realtime-whisper send text before the commit (`hasLiveText`: live hangover;
+  the others get the short hangover). Any other id (trimmed) uploads.
 - STT, OpenAI file upload (`stt.openai.OpenAiFileTranscription`, ids outside the realtime list): verified 2026-11-12
   against https://developers.openai.com/api/docs/guides/speech-to-text and
   https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create.
@@ -738,16 +738,16 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
   Deepgram, Soniox, each with its brand mark in a `ProviderIconBox` (Gateway: the Vercel mark; `SelectField`'s
   `optionIcon`); an unknown stored id shows as OpenAI); "Provider Settings": the selected provider's "API Key"
   (Gateway helper "(shared with post processing)"), Soniox "Region" dropdown (`SonioxRegion.label`, hint "Your Soniox
-  project's region (data residency); its key works only there."); "Model Settings": "Speech-to-text Model" combobox
-  (per provider; helper = the provider's mode hint + `sttModeText` of the SAVED model: OpenAI "Realtime models
-  (gpt-live-transcribe, gpt-transcribe, …) stream; other models upload after you stop.", Gateway "Live models show
-  text as you speak; others transcribe after you stop." (save passes `gatewaySttLive(model, catalog)`), Deepgram
-  "Deepgram models stream unless realtime streaming is disabled below." (static `DEEPGRAM_MODELS`, no refresh
-  button), Soniox "Real-time models (stt-rt-…) stream; async models upload after you stop."), Deepgram-only "Disable
-  Realtime Streaming" switch ("Uploads after you stop: no live text, about 44% cheaper."), "Language Code"
-  (placeholder "en", helper "Setting a language can improve accuracy. Leave blank to auto-detect.") or Soniox's
-  "Language Codes" (`sonioxLanguages`, placeholder "en, es, …", helper "Comma-separated; Soniox sticks to these.
-  Leave blank to auto-detect."), "Timeout" slider (5..30 s, "How long to wait for the final transcript after you
+  project's region. The API key has to be region-specific as well."); "Model Settings": "Speech-to-text Model"
+  combobox (per provider; helper = the provider's mode hint: OpenAI "Realtime models stream; other models upload
+  after you stop.", Gateway "Live models show text as you speak; others transcribe after you stop." (save passes
+  `gatewaySttLive(model, catalog)`), Deepgram "Deepgram models stream live by default unless realtime streaming is
+  disabled below." (static `DEEPGRAM_MODELS`, no refresh button), Soniox "Real-time models stream; other models
+  upload after you stop." + `sttModeText` of the SAVED model (Soniox only)), Deepgram-only "Disable Realtime
+  Streaming" switch ("Transcribe after you stop, about 44% cheaper."), "Language Code" (placeholder "en", helper
+  "Setting a language can improve accuracy. Leave blank to auto-detect.") or Soniox's "Language Codes"
+  (`sonioxLanguages`, placeholder "en, es, …", helper "Comma-separated language codes. Leave blank to
+  auto-detect."), "Timeout" slider (5..30 s, "How long to wait for the final transcript after you
   stop."); "Audio": "Skip Silence" switch, "Audio Speed" slider (100..200 step 10, "1.0x".."2.0x", "Speeds up the
   audio sent (pitch kept), so less is billed.", helper "Higher speeds can lower accuracy; services with a
   per-request minimum may not save."; hidden for a live Soniox model). Menu items of streaming models end with the
@@ -774,7 +774,7 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
   outlined plus ("New prompt", 16 dp Lucide plus in the text colour, same box as the trash; `newPromptName`: "New
   prompt", "New prompt 2", …; the default prompt's text; made active; its Name field gets focus with the text
   selected) + outlined trash ("Delete prompt <name>", disabled for the last prompt, no confirmation), then "Name"
-  and "Prompt" (text area, "Instructions the model gets; your transcript is sent with them.") of the active prompt
+  and "Prompt" (text area, "Instructions for the post-processing model.") of the active prompt
   (`key(id)`; trimmed; blank = error, not saved). Gateway and OpenRouter fields are separate calls (as are the four
   STT providers' fields), so unsaved input never carries over.
 - Custom cleanup providers (CP13): the picker is `FieldGroup` + `SelectDropdown` (built-ins, saved custom ones, the
@@ -967,7 +967,7 @@ Not covered by unit tests; check on a real device (ideally more than one OEM) af
 - Upload models: an after-stop model on each provider (OpenAI: an id outside the realtime list; Gateway e.g.
   `openai/gpt-4o-transcribe` or `elevenlabs/scribe-v2`): no panel while recording, spinner after stop, text
   inserted; a 2–3 min dictation on mobile data finishes within the timeout; language set; VAD on + silence = no
-  upload; picking an after-stop Gateway model from the menu shows "Mode: after stop" and is used at once.
+  upload; picking an after-stop Gateway model from the menu is used at once (no radio icon on it).
 - OpenAI model dropdown lists transcription models with your key (realtime ones with the radio icon, also
   in the Gateway menu for live models); no key shows "Set your OpenAI API key to load models"; saving a key loads
   the list.

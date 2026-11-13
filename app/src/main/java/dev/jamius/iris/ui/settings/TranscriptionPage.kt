@@ -55,7 +55,8 @@ fun TranscriptionPage(
         settings.sttSoniox -> Settings.STT_PROVIDER_SONIOX
         else -> Settings.STT_PROVIDER_OPENAI
     }
-    val sonioxLive = settings.sttSoniox && sonioxStreams(settings.sonioxSttModel, sonioxState.models)
+    val sonioxLive =
+        settings.sttSoniox && sonioxStreams(settings.sonioxSttModel, sonioxState.models)
 
     PageScaffold(title = "Transcription Provider", onBack = onBack) {
         Card(verticalPadding = 15.dp) {
@@ -85,6 +86,7 @@ fun TranscriptionPage(
                     onClear = { repository.clearApiKey(Secret.GATEWAY_API_KEY) },
                     saver = saver
                 )
+
                 Settings.STT_PROVIDER_DEEPGRAM -> ApiKeyField(
                     isSet = settings.deepgramKeySet,
                     placeholder = KEY_PLACEHOLDER,
@@ -104,6 +106,7 @@ fun TranscriptionPage(
                     onClear = { repository.clearApiKey(Secret.SONIOX_API_KEY) },
                     saver = saver
                 )
+
                 else -> ApiKeyField(
                     isSet = settings.openAiKeySet,
                     placeholder = "sk-…",
@@ -129,7 +132,7 @@ fun TranscriptionPage(
                     optionLabel = { it.label },
                     onSave = { repository.setSonioxRegion(it.id) },
                     saver = saver,
-                    helper = "Your Soniox project's region (data residency); its key works only there."
+                    helper = "Your Soniox project's region. The API key has to be region-specific as well."
                 )
             }
         }
@@ -143,10 +146,14 @@ fun TranscriptionPage(
                     models = catalogs.sttModelIds,
                     loading = catalogs.gatewayLoading,
                     loadError = catalogs.gatewayError,
-                    helper = "Live models show text as you speak; others transcribe after you stop. " +
-                        sttModeText(settings.gatewaySttLive),
+                    helper = "Live models show text as you speak; others transcribe after you stop.",
                     onLoad = catalogs::loadGateway,
-                    onSave = { repository.setGatewaySttModel(it, gatewaySttLive(it, catalogs.gatewayModels)) },
+                    onSave = {
+                        repository.setGatewaySttModel(
+                            it,
+                            gatewaySttLive(it, catalogs.gatewayModels)
+                        )
+                    },
                     saver = saver,
                     streams = { it in catalogs.liveSttModelIds.orEmpty() }
                 )
@@ -157,35 +164,34 @@ fun TranscriptionPage(
                     models = DEEPGRAM_MODELS,
                     loading = false,
                     loadError = null,
-                    helper = "Deepgram models stream unless realtime streaming is disabled below. " +
-                        sttModeText(!settings.deepgramUpload),
+                    helper = "Deepgram models stream live by default unless realtime streaming is disabled below.",
                     onLoad = null,
                     onSave = { repository.setDeepgramSttModel(it) },
                     saver = saver,
                     streams = { !settings.deepgramUpload }
                 )
+
                 Settings.STT_PROVIDER_SONIOX -> ModelCombobox(
                     label = MODEL_LABEL,
                     stored = settings.sonioxSttModel,
                     models = sonioxState.models?.map { it.id },
                     loading = sonioxState.loading,
                     loadError = sonioxState.error,
-                    helper = "Real-time models (stt-rt-…) stream; async models upload after you stop. " +
-                        sttModeText(sonioxLive),
+                    helper = "Real-time models stream; other models upload after you stop. " +
+                            sttModeText(sonioxLive),
                     onLoad = sonioxCatalog::refresh,
                     onSave = { repository.setSonioxSttModel(it) },
                     saver = saver,
                     streams = { sonioxStreams(it, sonioxState.models) }
                 )
+
                 else -> ModelCombobox(
                     label = MODEL_LABEL,
                     stored = settings.sttModel,
                     models = catalogs.openAiModels,
                     loading = catalogs.openAiLoading,
                     loadError = catalogs.openAiError,
-                    helper = "Realtime models (gpt-live-transcribe, gpt-transcribe, …) stream; other models upload " +
-                        "after you stop. " +
-                        sttModeText(hasLiveText(settings.sttModel), isRealtimeTranscriptionModel(settings.sttModel)),
+                    helper = "Realtime models stream; other models upload after you stop.",
                     onLoad = catalogs::loadOpenAi,
                     onSave = { repository.setSttModel(it) },
                     saver = saver,
@@ -196,7 +202,7 @@ fun TranscriptionPage(
                 Separator()
                 SwitchRow(
                     title = "Disable Realtime Streaming",
-                    subtitle = "Uploads after you stop: no live text, about 44% cheaper.",
+                    subtitle = "Transcribe after you stop, about 44% cheaper.",
                     checked = settings.deepgramUpload,
                     onSave = { repository.setDeepgramUpload(it) },
                     saver = saver
@@ -211,7 +217,7 @@ fun TranscriptionPage(
                     onSave = { repository.setSonioxLanguages(it) },
                     saver = saver,
                     placeholder = "en, es, …",
-                    helper = "Comma-separated; Soniox sticks to these. Leave blank to auto-detect."
+                    helper = "Comma-separated language codes. Leave blank to auto-detect."
                 )
             } else {
                 AutosaveTextField(
@@ -239,12 +245,7 @@ fun TranscriptionPage(
         Section("Audio") {
             SwitchRow(
                 title = "Skip Silence",
-                subtitle = if (sonioxLive) {
-                    "Detects speech on-device and sends only that; no saving on Soniox real-time (billed by session " +
-                        "length)."
-                } else {
-                    "Detects speech on-device and sends only that, to cut cost."
-                },
+                subtitle = "Detects speech on-device and sends only that, to cut cost.",
                 checked = settings.vadEnabled,
                 onSave = { repository.setVadEnabled(it) },
                 saver = saver

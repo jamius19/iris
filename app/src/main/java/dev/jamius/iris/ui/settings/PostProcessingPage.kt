@@ -220,8 +220,7 @@ fun PostProcessingPage(
                         extraField = {
                             SwitchRow(
                                 title = "Send JSON Schema",
-                                subtitle = "Requests structured output (strict JSON schema). Off: the reply is " +
-                                    "inserted, minus a leading <think> block.",
+                                subtitle = "Requests structured output (strict JSON schema).",
                                 checked = custom.sendJsonSchema,
                                 onSave = { on ->
                                     repository.updateCustomCleanupProvider(custom.id) { it.copy(sendJsonSchema = on) }
@@ -655,7 +654,7 @@ private fun PromptsCard(settings: Settings, repository: SettingsRepository, save
             stored = active.systemPrompt,
             onSave = { repository.savePrompt(latest.copy(systemPrompt = it)) },
             saver = saver,
-            subtitle = "Instructions the model gets; your transcript is sent with them.",
+            subtitle = "Instructions for the post-processing model.",
             placeholder = "Instructions for the model",
             validate = { if (it.isBlank()) "Prompt can't be empty." else null },
             clearable = false,
