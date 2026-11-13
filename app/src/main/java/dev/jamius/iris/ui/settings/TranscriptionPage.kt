@@ -271,11 +271,9 @@ fun TranscriptionPage(
         Section("Audio") {
             SwitchRow(
                 title = "Skip Silence",
-                subtitle = if (settings.sttOnDevice) {
-                    "Detects speech on-device and transcribes each phrase as you pause."
-                } else {
-                    "Detects speech on-device and sends only that, to cut cost."
-                },
+                subtitle = skipSilenceSubtitle(
+                    if (settings.sttOnDevice) onDeviceModel(settings.onDeviceSttModel) else null
+                ),
                 checked = settings.vadEnabled,
                 onSave = { repository.setVadEnabled(it) },
                 saver = saver

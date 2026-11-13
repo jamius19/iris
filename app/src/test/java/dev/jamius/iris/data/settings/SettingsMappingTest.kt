@@ -70,7 +70,7 @@ class SettingsMappingTest {
 
         assertEquals(Settings.STT_PROVIDER_OPENAI, settings.sttProviderId)
         assertFalse(settings.sttOnDevice)
-        assertEquals("parakeet-unified-en", settings.onDeviceSttModel)
+        assertEquals("nemotron-streaming-en", settings.onDeviceSttModel)
         assertEquals(Settings.DEFAULT_STT_MODEL, settings.sttModel)
         assertEquals(Settings.DEFAULT_GATEWAY_STT_MODEL, settings.gatewaySttModel)
         assertTrue(settings.gatewaySttLive)

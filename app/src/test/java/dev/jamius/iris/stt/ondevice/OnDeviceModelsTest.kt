@@ -16,7 +16,7 @@ class OnDeviceModelsTest {
     fun idsAreUniqueAndTheDefaultExists() {
         assertEquals(ON_DEVICE_MODELS.size, ON_DEVICE_MODELS.map { it.id }.toSet().size)
         assertEquals(Settings.DEFAULT_ON_DEVICE_STT_MODEL, ON_DEVICE_MODELS.first().id)
-        assertEquals("parakeet-unified-en", Settings.DEFAULT_ON_DEVICE_STT_MODEL)
+        assertEquals("nemotron-streaming-en", Settings.DEFAULT_ON_DEVICE_STT_MODEL)
     }
 
     @Test
@@ -30,16 +30,24 @@ class OnDeviceModelsTest {
                 assertTrue(file.name, Regex("[0-9a-f]{64}").matches(file.sha256))
                 assertTrue(file.name, file.sizeBytes > 0)
             }
-            assertEquals(model.id, model.engine == OnDeviceEngine.NEMO_TRANSDUCER, model.joiner != null)
+            val transducer = model.engine == OnDeviceEngine.NEMO_TRANSDUCER ||
+                model.engine == OnDeviceEngine.NEMO_STREAMING
+            assertEquals(model.id, transducer, model.joiner != null)
         }
     }
 
     @Test
     fun totalsMatchTheCatalogue() {
+        assertEquals(661_919_419L, onDeviceModel("nemotron-streaming-en").sizeBytes)
         assertEquals(663_043_117L, onDeviceModel("parakeet-unified-en").sizeBytes)
         assertEquals(670_576_784L, onDeviceModel("parakeet-tdt-v3").sizeBytes)
         assertEquals(375_485_327L, onDeviceModel("whisper-small").sizeBytes)
         assertEquals(141_300_566L, onDeviceModel("moonshine-base-en").sizeBytes)
+    }
+
+    @Test
+    fun onlyNemotronStreams() {
+        assertEquals(listOf("nemotron-streaming-en"), ON_DEVICE_MODELS.filter { it.streams }.map { it.id })
     }
 
     @Test

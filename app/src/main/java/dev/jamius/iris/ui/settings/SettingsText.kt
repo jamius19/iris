@@ -101,6 +101,20 @@ fun downloadProgressText(doneBytes: Long, totalBytes: Long): String =
 fun onDeviceModelLabel(model: OnDeviceModel, downloaded: Boolean): String =
     "${model.label} · ${if (downloaded) "Downloaded" else megabytesText(model.sizeBytes)}"
 
+/** The helper under the on-device model menu. */
+fun onDeviceModelHelper(model: OnDeviceModel): String = if (model.streams) {
+    "This streaming model only supports English."
+} else {
+    "${model.languages}. Runs offline on this phone."
+}
+
+/** The Skip Silence switch's subtitle; [onDeviceModel] is the selected one with On device, else null. */
+fun skipSilenceSubtitle(onDeviceModel: OnDeviceModel?): String = when {
+    onDeviceModel == null -> "Detects speech on-device and sends only that, to cut cost."
+    onDeviceModel.streams -> "Detects speech on-device and transcribes only that."
+    else -> "Detects speech on-device and transcribes each phrase as you pause."
+}
+
 fun percentText(percent: Int): String = "$percent%"
 
 /** The API key field's helper; [sharedWith] names the other page using the same key (the Gateway key). */

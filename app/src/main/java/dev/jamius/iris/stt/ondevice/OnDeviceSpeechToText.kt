@@ -13,6 +13,7 @@ import dev.jamius.iris.stt.splitAtPauses
 import dev.jamius.iris.stt.vercel.joined
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
@@ -25,11 +26,15 @@ internal const val MAX_SEGMENT_BYTES = 20 * 16_000 * 2
 private const val SPLIT_SEARCH_BYTES = 8 * 16_000 * 2
 
 /**
- * On-device transcription with a downloaded sherpa-onnx model (offline recognizers): each speech segment (ended by
- * the VAD gate's empty arrays, or cut at a pause past [maxSegmentBytes]) is decoded while recording continues, and
- * the joined text so far goes to `onPartial`; the rest is decoded after stop. No network: `timeoutMs` is ignored.
+ * On-device transcription with a downloaded sherpa-onnx model. Offline models: each speech segment (ended by the VAD
+ * gate's empty arrays, or cut at a pause past [maxSegmentBytes]) is decoded while recording continues, and the joined
+ * text so far goes to `onPartial`; the rest is decoded after stop. A streaming model ([OnDeviceModel.streams]): one
+ * recognizer stream for the whole dictation, segment ends skipped, its text to `onPartial` whenever it changes. No
+ * network: `timeoutMs` is ignored.
  *
  * @param decode the text of a segment; serialized and cancellable (the recognizer's).
+ * @param stream a streaming model's text: one emission per chunk taken from the channel, then the final text once it
+ *   closes; cancellable (the recognizer's).
  * @param selection the stored (model id, language) for [warmUp].
  * @param scope where [warmUp] reads [selection] (the app scope).
  */
@@ -37,6 +42,7 @@ class OnDeviceSpeechToText(
     private val isDownloaded: (String) -> Boolean,
     private val preload: (OnDeviceModel, language: String) -> Unit,
     private val decode: suspend (OnDeviceModel, language: String, FloatArray) -> String,
+    private val stream: (OnDeviceModel, ReceiveChannel<ByteArray>) -> Flow<String>,
     private val selection: suspend () -> Pair<String, String>,
     private val scope: CoroutineScope,
     private val maxSegmentBytes: Int = MAX_SEGMENT_BYTES,
@@ -46,7 +52,8 @@ class OnDeviceSpeechToText(
 
     override val streams: Boolean get() = false
 
-    // Segments are decoded in isolation: the long hangover keeps whole phrases together.
+    // Per-phrase models decode segments in isolation: the long hangover keeps whole phrases together. The streaming
+    // model just keeps it: the pause, and a whole window, reach its stream.
     override fun liveText(model: String): Boolean = true
 
     override val wantsSegmentEnds: Boolean get() = true
@@ -63,6 +70,7 @@ class OnDeviceSpeechToText(
         if (!isDownloaded(m.id)) throw SttException("Download the ${m.label} model in Iris settings")
         val lang = languageFor(m, language)
         preload(m, lang)
+        if (m.streams) return streamed(audio, m, onPartial)
         return coroutineScope {
             val segments = Channel<List<ByteArray>>(Channel.UNLIMITED)
             var text = ""
@@ -116,6 +124,43 @@ class OnDeviceSpeechToText(
             Log.d(TAG, "Timing: stop->final ${SystemClock.elapsedRealtime() - stoppedAt} ms, $count segments")
             text
         }
+    }
+
+    /** One recognizer stream for the whole dictation (context kept across phrases): segment ends are skipped. */
+    private suspend fun streamed(
+        audio: Flow<ByteArray>,
+        m: OnDeviceModel,
+        onPartial: (String) -> Unit,
+    ): String = coroutineScope {
+        val chunks = Channel<ByteArray>(Channel.UNLIMITED)
+        // Bytes per chunk not decoded yet, oldest first, for the deadline after stop.
+        val queued = ArrayDeque<Int>()
+        var pendingBytes = 0L
+        var text = ""
+        val decoder = launch {
+            stream(m, chunks).collect {
+                // The final emission has no chunk.
+                queued.removeFirstOrNull()?.let { bytes -> pendingBytes -= bytes }
+                val t = it.trim()
+                if (t != text) {
+                    text = t
+                    onPartial(t)
+                }
+            }
+        }
+        audio.collect { chunk ->
+            if (chunk.isEmpty()) return@collect
+            queued.addLast(chunk.size)
+            pendingBytes += chunk.size
+            chunks.trySend(chunk)
+        }
+        val stoppedAt = SystemClock.elapsedRealtime()
+        chunks.close()
+        val pendingMs = pendingBytes * 1000 / (SAMPLE_RATE * 2)
+        withTimeoutOrNull(BASE_DEADLINE_MS + 2 * pendingMs) { decoder.join() }
+            ?: throw SttException("On-device transcription timed out")
+        Log.d(TAG, "Timing: stop->final ${SystemClock.elapsedRealtime() - stoppedAt} ms, streamed")
+        text
     }
 
     override fun warmUp() {

@@ -8,10 +8,10 @@ keyboard/screen bottom), which becomes ✕ (cancel). The partial transcript stre
 transcript is finalized, optionally cleaned up by an LLM (toggle in settings), then inserted at the cursor of the
 focused field. Models that can't stream are "after stop" ones: the recording is uploaded after the pill tap, with no
 live text (pill + waveform while recording, spinner after stop); the mode follows the model (Deepgram: a setting).
-Cloud APIs for transcription and cleanup, plus one on-device STT provider ("On device", CP14: sherpa-onnx offline
-models the user downloads in settings; pseudo-live text, each VAD phrase decoded as the user pauses). A new provider
-is just a new implementation. Silero VAD ("Skip silence") decides which audio is sent (cloud: to cut STT cost; On
-device: also where phrases end).
+Cloud APIs for transcription and cleanup, plus one on-device STT provider ("On device", CP14: sherpa-onnx offline models
+the user downloads in settings; pseudo-live text, each VAD phrase decoded as the user pauses; CP15: one true streaming
+model, Nemotron, the default, decoded chunk by chunk while recording). A new provider is just a new implementation.
+Silero VAD ("Skip silence") decides which audio is sent (cloud: to cut STT cost; On device: also where phrases end).
 
 ## Tech stack & build
 - AGP 9.x with built-in Kotlin (no separate `kotlin-android` plugin). Kotlin 2.2.10, Compose compiler plugin,
@@ -19,17 +19,17 @@ device: also where phrases end).
 - `minSdk 30`, `targetSdk`/`compileSdk 37`, Java 11 target. JDK 25 locally.
 - Compose foundation (custom settings UI, no Material), activity-compose 1.13.0 (`PredictiveBackHandler`), OkHttp
   (HTTP + WebSocket), kotlinx.serialization (JSON), Jetpack DataStore Preferences, Coroutines/Flow.
-- sherpa-onnx v2.0.1 (CP14: on-device STT and the Silero VAD), the AAR from JitPack: group
-  `com.github.k2-fsa.sherpa-onnx`, artifact `sherpa-onnx` (POM without dependencies), resolved through an
-  `exclusiveContent` JitPack repository in `settings.gradle.kts` (nothing else resolves from there). Never the
-  aggregate `com.github.k2-fsa:sherpa-onnx` POM (pulls `sherpa-onnx-jvm` + desktop native libs). Its AAR manifest is
-  empty and `proguard.txt` too; the JNI reads config fields by name, so `rules.keep` keeps `com.k2fsa.sherpa.onnx.**`
-  (checked in an R8 release build: recognizer + VAD load, a decode works). Packaged per ABI: its own ONNX Runtime
-  1.28.2 `libonnxruntime.so` (arm64 22,249,560 B, x86_64 25,581,120 B) and `libsherpa-onnx-jni.so` (4,609,320 /
-  5,053,592 B); `libsherpa-onnx-c-api.so` / `-cxx-api.so` are excluded (`packaging.jniLibs.excludes`: nothing loads
-  them). Licence: `assets/sherpa_onnx_LICENSE.txt` (Apache-2.0, `LICENSE` at tag `v2.0.1`). Pinned by Gradle
-  dependency verification (`gradle/verification-metadata.xml`, sherpa only: every other group is trusted by a regex,
-  metadata and signatures aren't verified): AAR SHA-256
+- sherpa-onnx v2.0.1 (CP14: on-device STT (offline recognizers; CP15: one online/streaming recognizer) and the Silero
+  VAD), the AAR from JitPack: group `com.github.k2-fsa.sherpa-onnx`, artifact `sherpa-onnx` (POM without dependencies),
+  resolved through an `exclusiveContent` JitPack repository in `settings.gradle.kts` (nothing else resolves from there).
+  Never the aggregate `com.github.k2-fsa:sherpa-onnx` POM (pulls `sherpa-onnx-jvm` + desktop native libs). Its AAR
+  manifest is empty and `proguard.txt` too; the JNI reads config fields by name, so `rules.keep` keeps
+  `com.k2fsa.sherpa.onnx.**` (checked in an R8 release build: recognizer + VAD load, a decode works). Packaged per ABI:
+  its own ONNX Runtime 1.28.2 `libonnxruntime.so` (arm64 22,249,560 B, x86_64 25,581,120 B) and `libsherpa-onnx-jni.so`
+  (4,609,320 / 5,053,592 B); `libsherpa-onnx-c-api.so` / `-cxx-api.so` are excluded (`packaging.jniLibs.excludes`:
+  nothing loads them). Licence: `assets/sherpa_onnx_LICENSE.txt` (Apache-2.0, `LICENSE` at tag `v2.0.1`). Pinned by
+  Gradle dependency verification (`gradle/verification-metadata.xml`, sherpa only: every other group is trusted by a
+  regex, metadata and signatures aren't verified): AAR SHA-256
   `a8d09d1d32f3eb8520482c6d3d43fae674681c5b050385967c70a3c2c9bf0ee7` (= the GitHub release AAR, which JitPack
   re-publishes), so a re-pointed tag or rebuild fails the build; the POM's checksum is listed but not enforced
   (`verify-metadata` false). A version bump needs new checksums there.
@@ -200,7 +200,8 @@ Dictation (CP3):
   OpenAI realtime: `hasLiveText(model)`; On device: true): reports text while recording; it picks the VAD hangover.
   `allowsSpeedUp` (default true; Soniox real-time false): the audio may be sped up (Speed, below). `wantsSegmentEnds`
   (default false; On device true): `audio` carries an empty `ByteArray` at the end of each speech segment the VAD gate
-  detects (Segment ends, below); no other provider ever sees one (an empty frame would close Deepgram's stream).
+  detects (Segment ends, below); no other provider ever sees one (an empty frame would close Deepgram's stream). On
+  device's streaming model (CP15) skips them (one stream for the whole dictation).
 - `dictation.DictationController` (one per service, main thread, built by `AppContainer.dictationController`;
   `audio: (sampleRate) -> Flow<AudioChunk>` = `audioRecorder::chunks`, `stt: (Settings) -> SpeechToTextProvider` =
   `AppContainer::speechToText`, picked once per session after the settings load, with `Settings.activeSttModel`;
@@ -286,7 +287,8 @@ VAD ("Skip silence", CP7):
 - Setting `Settings.vadEnabled` (`vad_enabled`, default on): Transcription Provider > Audio > "Skip Silence" switch,
   subtitle "Detects speech on-device and sends only that, to cut cost." (same for every cloud model; on Soniox
   real-time it saves nothing, since that is billed by session length); On device: "Detects speech on-device and
-  transcribes each phrase as you pause.".
+  transcribes each phrase as you pause.", or with the streaming model "Detects speech on-device and transcribes only
+  that." (`skipSilenceSubtitle`, pure, unit tested).
 - Segment ends (CP14, only for a provider with `wantsSegmentEnds`): `SpeechGate(..., markSegmentEnds = true)` (the
   controller passes `stt.wantsSegmentEnds`) sets a flag when a segment's hangover runs out (`keepsFrame` flips
   `inSpeech` off); `process()` then returns its bytes plus one empty array (`[chunk, empty]` if the chunk was kept,
@@ -295,7 +297,8 @@ VAD ("Skip silence", CP7):
   mode or at the stop (the provider decodes the rest when the flow completes). `timeStretched` flushes Sonic on an
   empty input, emits that output, then passes the empty array on (unit tested: the audio before it ≈ the segment /
   speed). Unit tested in `SpeechGateTest`, `TimeStretchTest` and `DictationControllerTest` (exactly one empty array
-  between two segments, also at 1.5x; none for a provider that didn't opt in).
+  between two segments, also at 1.5x; none for a provider that didn't opt in). On device's streaming model (CP15)
+  drops them in the provider: the gate still only decides which audio is decoded.
 
 Speed (CP8):
 - `audio.timeStretched(sampleRate, speed)` (`TimeStretch.kt`, pure, unit tested): `Flow<ByteArray>` of PCM16 mono
@@ -361,7 +364,7 @@ Cleanup + insertion (CP4):
 Providers (settings store a provider id for each):
 - STT provider: `Settings.sttProviderId` (`stt_provider_id`): `openai` (default) = OpenAI (direct),
   `vercel-gateway` = Vercel AI Gateway, `deepgram` = Deepgram (direct), `soniox` = Soniox (direct), or `on-device` =
-  On device (`sttOnDevice`; model `onDeviceSttModel` / `on_device_stt_model`, default `parakeet-unified-en`, an
+  On device (`sttOnDevice`; model `onDeviceSttModel` / `on_device_stt_model`, default `nemotron-streaming-en`, an
   unknown id = the default model; no key, so `sttKeySet` is true; uses the shared `sttLanguage`); an unknown id means
   OpenAI. Each has its own model setting (`sttModel`, `gatewaySttModel`, default
   `openai/gpt-live-transcribe`, `deepgramSttModel`, default `nova-3`, `sonioxSttModel`, default `stt-rt-v6`) and key
@@ -631,14 +634,15 @@ Providers (settings store a provider id for each):
   trimmed on save), separate from the shared `sttLanguage` (other providers take one code).
 - Soniox pricing (2026-11-13): real-time ~$0.12/h, billed by wall-clock stream time (VAD gaps don't cut it, so a
   long pause still costs); async ~$0.10/h by audio duration (VAD and Speed cut it).
-- STT, On device (CP14, `stt.ondevice`): sherpa-onnx offline recognizers on CPU, models downloaded in settings; no
-  network while dictating. Catalogue (`OnDeviceModels.kt`, pure, unit tested; menu order; files pinned to a Hugging
-  Face commit, `https://huggingface.co/<repo>/resolve/<commit>/<file>`; sizes + SHA-256 re-checked against the HF API
-  2026-11-13):
+- STT, On device (CP14, `stt.ondevice`): sherpa-onnx offline recognizers (CP15: plus one online recognizer for the
+  streaming model) on CPU, models downloaded in settings; no network while dictating. Catalogue
+  (`OnDeviceModels.kt`, pure, unit tested; menu order; files pinned to a Hugging Face commit,
+  `https://huggingface.co/<repo>/resolve/<commit>/<file>`; sizes + SHA-256 re-checked against the HF API 2026-11-13):
 
   | id | label / languages | engine | repo @ commit | size | licence |
   |---|---|---|---|---|---|
-  | `parakeet-unified-en` (default) | Parakeet Unified EN / English | `NEMO_TRANSDUCER` | `csukuangfj2/sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-non-streaming` @ `8c3a10fb` | 663,043,117 B | NVIDIA Open Model License |
+  | `nemotron-streaming-en` (default, CP15) | Nemotron Streaming English / English | `NEMO_STREAMING` | `csukuangfj2/sherpa-onnx-nemotron-speech-streaming-en-0.6b-1120ms-int8-2026-04-25` @ `b0b6bae3` | 661,919,419 B | NVIDIA Open Model License |
+  | `parakeet-unified-en` | Parakeet Unified EN / English | `NEMO_TRANSDUCER` | `csukuangfj2/sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-non-streaming` @ `8c3a10fb` | 663,043,117 B | NVIDIA Open Model License |
   | `parakeet-tdt-v3` | Parakeet TDT v3 / 25 European languages | `NEMO_TRANSDUCER` | `csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8` @ `ed5d7456` | 670,576,784 B | CC BY 4.0 |
   | `whisper-small` | Whisper Small / 99 languages | `WHISPER` | `csukuangfj/sherpa-onnx-whisper-small` @ `8f3c18b3` | 375,485,327 B | MIT (OpenAI) |
   | `moonshine-base-en` | Moonshine Base EN / English, fastest | `MOONSHINE_V2` | `csukuangfj2/sherpa-onnx-moonshine-base-en-quantized-2026-02-27` @ `8f4d6c58` | 141,300,566 B | MIT (Moonshine AI) |
@@ -654,8 +658,14 @@ Providers (settings store a provider id for each):
   `SHERPA_ONNX_EXIT(-1)` (kills the process) on a language Whisper doesn't know, so nothing else may reach it. The
   other engines get "". A failed `OfflineRecognizer(null, config)` (`require(ptr != 0L)`, e.g. a missing file) is an
   `IllegalArgumentException`, not a native exit.
+  Streaming (CP15, `OnDeviceModel.streams` = engine `NEMO_STREAMING`): `OnlineRecognizer(null,
+  OnlineRecognizerConfig(FeatureConfig(16000, 80), OnlineModelConfig(transducer = encoder/decoder/joiner, tokens,
+  numThreads = 2), enableEndpoint = false, greedy_search))`, no `modelType` (the NeMo streaming impl's `PostInit`
+  takes feature dim 128, window and mel settings from the model; `ChunkSize()` / `ChunkShift()` = the encoder's
+  metadata `window_size` 121 / `chunk_shift` 112 frames, i.e. 1120 ms chunks). Its language is always "".
   `OnDeviceSpeechToText`: 16 kHz, `streams = false` (no socket, no keep-alive), `liveText = true` (1650 ms hangover:
-  each segment is decoded in isolation, so 450 ms would cut sentences at breaths), `wantsSegmentEnds = true`,
+  per-phrase models decode each segment in isolation, so 450 ms would cut sentences at breaths; the streaming model
+  just keeps it, so the pause and a whole window reach its stream), `wantsSegmentEnds = true`,
   `allowsSpeedUp` default (Speed just shortens the decode). `transcribe`: an undownloaded model throws "Download the
   <label> model in Iris settings" before collecting (the mic never opens); `preload(model, language)`; audio is
   collected on main into a buffer; an empty array (segment end) queues the buffer; a buffer past `MAX_SEGMENT_BYTES`
@@ -671,14 +681,36 @@ Providers (settings store a provider id for each):
   Timeout slider is hidden for On device. Logs `Timing: stop->final X ms, N segments`. `warmUp()` reads the stored
   model + language on `appScope` and preloads it if downloaded. Unit tested with fake lambdas
   (`OnDeviceSpeechToTextTest`, virtual time).
-  `OnDeviceRecognizer` (native, not unit tested, like `SileroVad`): one `OfflineRecognizer` at a time (key `id|lang`;
-  switching model or Whisper language releases the old one before loading). Load, decode, unload and release all
+  Streaming model (CP15, `transcribe` after `preload` -> `streamed`): one recognizer stream for the whole dictation
+  (context kept across phrases); empty arrays (segment ends) are skipped, every other chunk goes through a
+  `Channel(UNLIMITED)` to `stream(model, channel)` (the recognizer's; one emission per chunk taken, then the final
+  text), collected in one decoder coroutine: `onPartial(trimmed text)` only when it changed, the result is the last
+  text. Deadline after stop as above, pending = the chunks not yet answered by an emission (a deque of their sizes,
+  popped per emission; the final emission pops none). Logs `Timing: stop->final X ms, streamed`.
+  With Skip Silence on and Speed >= ~1.6x the unscaled hangover (1650 / speed ms of model input) falls below one
+  112-frame window shift, so up to 112 - hangover frames of a phrase's end stay undecoded until more audio comes: its
+  last words show live only when the next phrase starts or at stop (accepted); the final text is whole (stop padding).
+  `OnDeviceRecognizer` (native, not unit tested, like `SileroVad`): one recognizer at a time (`Loaded` holds an
+  `OfflineRecognizer` or, for the streaming model, an `OnlineRecognizer`; key `id|lang`; switching model or Whisper
+  language releases the old one before loading). Load, decode, unload and release all
   run on `Dispatchers.IO.limitedParallelism(1)` with its own `SupervisorJob` scope: decodes are serialized across
   sessions (Whisper mutates shared decoder state), a session started during a load waits for it, an unload never
   runs mid-decode. `decode` = `scope.async { ... }.await()`: a cancelled session returns at once, the native decode
-  finishes on the worker and its result is dropped. Errors: load failure (`Exception`/`LinkageError`, `Log.e`) =
-  "Couldn't load the on-device model"; decode failure = "On-device transcription failed". Memory: preloaded by
-  `warmUp` (bubble shown / state changes; the service's `sttKeySet` gate is true for On device); the service calls
+  finishes on the worker and its result is dropped. Every entry point (`preload`'s launch, `decode`, `stream`'s
+  session, `unload`, `release`, the idle release) runs under one `Mutex` (`inUse`); only a `stream` session holds it
+  across suspensions, so an unload (model delete), memory trim, idle release or model switch during a streaming
+  dictation waits for it to end. `stream` = a `channelFlow` whose session is `scope.async` in the recognizer's scope
+  (not the caller's: a cancelled caller returns at once, `session.cancel()` stops it at the next receive / send /
+  `ensureActive` between decodes, `finally` releases the native stream and the lock): `createStream()`, per chunk
+  `acceptWaveform` + `while (isReady) decode` + emit `getResult().text`; when the channel closes:
+  `acceptWaveform(1.3 s of zeros)`, `inputFinished()`, `while (isReady) decode`, emit the final text. The padding
+  (`TAIL_PADDING_SAMPLES` = 20,800): `IsReady` needs processed + 121 frames < frames ready and `inputFinished()` only
+  flushes the fbank's last frames (sherpa v2.0.1 `online-recognizer-transducer-nemo-impl.h`, `online-stream.cc`), so
+  without it the last partial window (up to ~1.2 s of speech) is never decoded; the official examples' 0.6-0.66 s
+  is too short for a 121-frame window. `reset()` is never called (endpointing off). Errors: load failure
+  (`Exception`/`LinkageError`, `Log.e`) = "Couldn't load the on-device model"; decode failure = "On-device
+  transcription failed". Memory: preloaded by `warmUp` (bubble shown / state changes; the service's `sttKeySet`
+  gate is true for On device); the service calls
   `setBubbleShown(true)` in `refreshFocus` and `(false)` in the `hideBubble` runnable and `onDestroy`: hidden, the
   model is released once unused for 5 min (re-armed while decodes still run, e.g. Finalizing after focus loss);
   `IrisApp.onTrimMemory(>= TRIM_MEMORY_BACKGROUND)` releases it too (with a bound accessibility service this may
@@ -882,8 +914,10 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
   is off, Soniox `sonioxStreams`).
 - Transcription Provider with On device (CP14): no "Provider Settings" section (no key); "Model Settings" =
   `OnDeviceModelSettings` (`ui/settings/OnDeviceSettings.kt`): "Speech-to-text Model" read-only dropdown (catalogue
-  order, labels `onDeviceModelLabel`: "Parakeet Unified EN · 663 MB" or "· Downloaded"; helper "<languages>. Runs
-  offline on this phone."), then "Download": this model downloading -> `ProgressBar` (`ui.components`, 3 dp line
+  order, labels `onDeviceModelLabel`: "Parakeet Unified EN · 663 MB" or "· Downloaded"; the streaming model's row
+  ends with the radio icon (`SelectDropdown` / `SelectField` `streams`, menu rows only); helper
+  `onDeviceModelHelper`: "<languages>. Runs offline on this phone.", for the streaming model "This streaming model
+  only supports English."), then "Download": this model downloading -> `ProgressBar` (`ui.components`, 3 dp line
   like the slider track, `progressBarRangeInfo`) + "120 / 663 MB" (`downloadProgressText`) + "Cancel"; another
   model downloading -> helper "Another model is downloading."; being deleted -> "Deleting…" (muted, no button);
   downloaded -> "Downloaded" (enabled colour) +
@@ -891,7 +925,8 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
   store's error for this model in the error slot. Then the licence line (helper style, muted, underlined link).
   "Language Code" only for Whisper (helper "Leave blank to auto-detect. Codes Whisper doesn't know auto-detect
   too."); no Timeout. Audio: Skip Silence subtitle "Detects speech on-device and transcribes each phrase as you
-  pause."; Audio Speed subtitle "Speeds up the audio (pitch kept), so it transcribes faster." and helper "Higher
+  pause." (streaming model: "Detects speech on-device and transcribes only that."; `skipSilenceSubtitle`); Audio
+  Speed subtitle "Speeds up the audio (pitch kept), so it transcribes faster." and helper "Higher
   speeds can lower accuracy.". `SettingsApp` collects `onDeviceModels.state` (app-level, like the Soniox catalogue)
   and doesn't load the OpenAI list while On device is selected.
 - Post Processing Provider: "AI Cleanup" switch card (sparkles, "Polish the transcript with an LLM before it's
@@ -1036,6 +1071,10 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
   NeMo transducers, Whisper and Moonshine, CPU, its own ONNX Runtime shared with the VAD), offline models downloaded
   on demand (hundreds of MB: not bundled), per-phrase pseudo-live text (each VAD segment decoded as the user pauses)
   instead of streaming models. The segment marker is a provider member (`wantsSegmentEnds`), not a new abstraction.
+- **One true on-device streaming model (CP15)**: Nemotron Speech Streaming EN 0.6B (1120 ms chunks, int8) through
+  sherpa's online recognizer, beside the per-phrase models; it is the default and first in the menu. With Skip
+  Silence on it still gets one continuous stream for the whole dictation (segment ends ignored), so context and
+  punctuation carry across phrases.
 - **Speed-up after the VAD gate with vendored Sonic** (pitch kept) to cut billed audio; 1.0x = untouched. Not
   media3's `SonicAudioProcessor` (`@UnstableApi`, pulls Guava).
 - **API keys are user-entered** in Settings and encrypted with an Android Keystore AES/GCM key; ciphertext is
@@ -1149,6 +1188,18 @@ Not covered by unit tests; check on a real device (ideally more than one OEM) af
   the Parakeet models on a mid-range phone (and that Finalizing stays within the 60 s + 2 x audio deadline);
   deleting the selected model (next dictation: "Download the ... model"); a release build on arm64 loads sherpa and
   the VAD; a download over mobile data that drops resumes.
+- On device streaming (CP15, Nemotron Streaming English): real voice, live text while recording; RTF (`Decoded X ms
+  of audio in Y ms`, Y < X on a mid-range phone, else the backlog grows; live text lags >= ~1.2 s + decode;
+  stop->final ≈ 2 window decodes + backlog); the first word right after the tap with Skip Silence off (the first 9
+  frames, ~90 ms, are pre-encode cache; the VAD pre-roll covers it with Skip Silence on; if clipped, add 0.3 s of
+  left padding like `test_online_asr.kt`); joined VAD phrases: punctuation across joins, last words kept at stop, a
+  5+ min dictation; deleting / switching the model or a memory trim during a dictation waits for the session; users
+  who had Parakeet Unified as the implicit default are now asked to download Nemotron (unreleased branch, no
+  migration); the menu label "Nemotron Streaming English · Downloaded" + icons may ellipsize; memory ≈ Parakeet
+  (`dumpsys meminfo`); an R8 release build loads `OnlineRecognizer`; ✕ mid-dictation, then the mic again at once: the
+  new session streams (no `Loaded` line, no hang: native stream released, lock handed off); a dictation that ends
+  "No speech detected" (silence only, Skip Silence on), then a normal one, works likewise; with Skip Silence on at
+  Speed >= ~1.6x a phrase's last words show only when the next phrase starts or at stop, the final text is complete.
 - Long Gateway upload: a 10 min Gateway after-stop dictation (VAD off) succeeds; on a 413, reuse `splitAtPauses`
   for the Gateway too.
 - Gateway STT with a real voice: live text streams and the final is inserted (default model, plus a 16 kHz one:
@@ -1240,3 +1291,4 @@ Update this section as checkpoints land.
 | CP12 | Settings UI redesign (Figma) | Done (emulator-checked; device check pending) |
 | CP13 | Custom OpenAI-compatible cleanup providers | Done (device check pending) |
 | CP14 | On-device STT (sherpa-onnx) | Done (emulator-checked with silence; real-voice device check pending) |
+| CP15 | On-device streaming STT (Nemotron) | Done (device check pending) |

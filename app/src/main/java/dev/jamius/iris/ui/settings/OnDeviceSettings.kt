@@ -56,7 +56,8 @@ fun OnDeviceModelSettings(
         optionLabel = { onDeviceModelLabel(onDeviceModel(it), it in state.downloaded) },
         onSave = { repository.setOnDeviceSttModel(it) },
         saver = saver,
-        helper = "${model.languages}. Runs offline on this phone."
+        helper = onDeviceModelHelper(model),
+        streams = { onDeviceModel(it).streams }
     )
     Separator()
     val downloaded = model.id in state.downloaded

@@ -14,22 +14,34 @@ import com.k2fsa.sherpa.onnx.OfflineRecognizer
 import com.k2fsa.sherpa.onnx.OfflineRecognizerConfig
 import com.k2fsa.sherpa.onnx.OfflineTransducerModelConfig
 import com.k2fsa.sherpa.onnx.OfflineWhisperModelConfig
+import com.k2fsa.sherpa.onnx.OnlineModelConfig
+import com.k2fsa.sherpa.onnx.OnlineRecognizer
+import com.k2fsa.sherpa.onnx.OnlineRecognizerConfig
+import com.k2fsa.sherpa.onnx.OnlineTransducerModelConfig
 import dev.jamius.iris.stt.SttException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
- * Holds one sherpa-onnx offline recognizer (one model + language) at a time. Load, decode, unload and release all
- * run on one worker thread: decodes are serialized across sessions (Whisper mutates shared decoder state), a session
- * started during a load waits for it, and an unload never runs mid-decode. Released 5 min after the bubble hides
- * (or on memory trim). Not unit tested (native).
+ * Holds one sherpa-onnx recognizer (one model + language; offline, or online for a streaming model) at a time. Load,
+ * decode, unload and release all run on one worker thread under one lock: decodes are serialized across sessions
+ * (Whisper mutates shared decoder state), a session started during a load waits for it, and an unload never runs
+ * mid-decode. A [stream] session holds the lock for the whole dictation, so unload, release and model switches wait
+ * for it to end. Released 5 min after the bubble hides (or on memory trim). Not unit tested (native).
  *
  * @param dir a model's download directory (the store's).
  */
@@ -38,10 +50,18 @@ class OnDeviceRecognizer(private val dir: (modelId: String) -> File) {
     private val worker = Dispatchers.IO.limitedParallelism(1)
     private val scope = CoroutineScope(SupervisorJob() + worker)
 
-    private class Loaded(val key: String, val modelId: String, val recognizer: OfflineRecognizer)
+    private class Loaded(
+        val key: String,
+        val modelId: String,
+        val offline: OfflineRecognizer? = null,
+        val online: OnlineRecognizer? = null,
+    )
 
-    /** Touched only on [worker]. */
+    /** Touched only on [worker], under [inUse]. */
     private var loaded: Loaded? = null
+
+    /** Held by every entry point; only a [stream] session holds it across suspensions. */
+    private val inUse = Mutex()
 
     /** The key being loaded or loaded: repeated [preload]s for it are skipped. */
     @Volatile
@@ -64,7 +84,7 @@ class OnDeviceRecognizer(private val dir: (modelId: String) -> File) {
         wanted = key
         scope.launch {
             try {
-                ensureLoaded(model, language)
+                inUse.withLock { ensureLoaded(model, language) }
             } catch (e: SttException) {
                 Log.w(TAG, "Preload failed: ${e.message}")
             }
@@ -76,34 +96,91 @@ class OnDeviceRecognizer(private val dir: (modelId: String) -> File) {
      * still finishes on the worker and its result is dropped.
      */
     suspend fun decode(model: OnDeviceModel, language: String, samples: FloatArray): String = scope.async {
-        val recognizer = ensureLoaded(model, language)
-        val started = SystemClock.elapsedRealtime()
-        lastUse = started
-        val stream = recognizer.createStream()
-        try {
-            stream.acceptWaveform(samples, SAMPLE_RATE)
-            recognizer.decode(stream)
-            recognizer.getResult(stream).text.also {
-                val ms = SystemClock.elapsedRealtime() - started
-                Log.d(TAG, "Decoded ${samples.size * 1000L / SAMPLE_RATE} ms of audio in $ms ms")
+        inUse.withLock {
+            val recognizer = checkNotNull(ensureLoaded(model, language).offline)
+            val started = SystemClock.elapsedRealtime()
+            lastUse = started
+            val stream = recognizer.createStream()
+            try {
+                stream.acceptWaveform(samples, SAMPLE_RATE)
+                recognizer.decode(stream)
+                recognizer.getResult(stream).text.also {
+                    val ms = SystemClock.elapsedRealtime() - started
+                    Log.d(TAG, "Decoded ${samples.size * 1000L / SAMPLE_RATE} ms of audio in $ms ms")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Decode failed", e)
+                throw SttException("On-device transcription failed")
+            } finally {
+                stream.release()
+                lastUse = SystemClock.elapsedRealtime()
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Decode failed", e)
-            throw SttException("On-device transcription failed")
-        } finally {
-            stream.release()
-            lastUse = SystemClock.elapsedRealtime()
         }
     }.await()
 
-    /** Releases [modelId] if it is loaded (before its files are deleted); waits for any queued decode first. */
+    /**
+     * One dictation through [model]'s online recognizer: emits the whole text after each chunk taken from [audio]
+     * (16 kHz PCM16), then the final text once [audio] closes. Cancelling returns at once; the native stream is
+     * released after any decode in flight.
+     */
+    fun stream(model: OnDeviceModel, audio: ReceiveChannel<ByteArray>): Flow<String> = channelFlow {
+        // In the recognizer's scope, not the caller's: a cancelled caller returns without waiting for a native decode.
+        val session = scope.async {
+            inUse.withLock {
+                val recognizer = checkNotNull(ensureLoaded(model, "").online)
+                val stream = recognizer.createStream()
+                var samples = 0L
+                var busyMs = 0L
+                try {
+                    for (chunk in audio) {
+                        val started = SystemClock.elapsedRealtime()
+                        lastUse = started
+                        val floats = pcm16ToFloats(listOf(chunk))
+                        stream.acceptWaveform(floats, SAMPLE_RATE)
+                        while (recognizer.isReady(stream)) {
+                            ensureActive()
+                            recognizer.decode(stream)
+                        }
+                        samples += floats.size
+                        busyMs += SystemClock.elapsedRealtime() - started
+                        send(recognizer.getResult(stream).text)
+                    }
+                    val started = SystemClock.elapsedRealtime()
+                    stream.acceptWaveform(FloatArray(TAIL_PADDING_SAMPLES), SAMPLE_RATE)
+                    stream.inputFinished()
+                    while (recognizer.isReady(stream)) recognizer.decode(stream)
+                    busyMs += SystemClock.elapsedRealtime() - started
+                    Log.d(TAG, "Decoded ${samples * 1000 / SAMPLE_RATE} ms of audio in $busyMs ms")
+                    send(recognizer.getResult(stream).text)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.e(TAG, "Decode failed", e)
+                    throw SttException("On-device transcription failed")
+                } finally {
+                    stream.release()
+                    lastUse = SystemClock.elapsedRealtime()
+                }
+            }
+        }
+        try {
+            session.await()
+        } finally {
+            session.cancel()
+        }
+    }
+
+    /**
+     * Releases [modelId] if it is loaded (before its files are deleted); waits for any queued decode or running
+     * streaming session first.
+     */
     suspend fun unload(modelId: String) = withContext(worker) {
-        if (loaded?.modelId == modelId) releaseLoaded()
+        inUse.withLock { if (loaded?.modelId == modelId) releaseLoaded() }
     }
 
     /** Releases the loaded model (memory trim). */
     fun release() {
-        scope.launch { releaseLoaded() }
+        scope.launch { inUse.withLock { releaseLoaded() } }
     }
 
     /** Main thread. Hidden: releases the model once nothing used it for 5 min; shown: keeps it. */
@@ -118,28 +195,35 @@ class OnDeviceRecognizer(private val dir: (modelId: String) -> File) {
                 if (idle >= IDLE_MS) break
                 delay(IDLE_MS - idle)
             }
-            if (!bubbleShown) releaseLoaded()
+            if (!bubbleShown) inUse.withLock { releaseLoaded() }
         }
     }
 
-    /** On [worker]: the recognizer for [model] and [language], loading it (and releasing another) if needed. */
-    private fun ensureLoaded(model: OnDeviceModel, language: String): OfflineRecognizer {
+    /**
+     * On [worker], under [inUse]: the recognizer for [model] and [language] (online for a streaming model), loading
+     * it (and releasing another) if needed.
+     */
+    private fun ensureLoaded(model: OnDeviceModel, language: String): Loaded {
         val key = key(model, language)
-        loaded?.let { if (it.key == key) return it.recognizer }
+        loaded?.let { if (it.key == key) return it }
         releaseLoaded()
         wanted = key
         val started = SystemClock.elapsedRealtime()
-        val recognizer = try {
-            OfflineRecognizer(null, config(model, language))
+        val new = try {
+            if (model.streams) {
+                Loaded(key, model.id, online = OnlineRecognizer(null, onlineConfig(model)))
+            } else {
+                Loaded(key, model.id, offline = OfflineRecognizer(null, offlineConfig(model, language)))
+            }
         } catch (e: Exception) {
             loadFailed(e)
         } catch (e: LinkageError) {
             loadFailed(e)
         }
-        loaded = Loaded(key, model.id, recognizer)
+        loaded = new
         lastUse = SystemClock.elapsedRealtime()
         Log.d(TAG, "Loaded ${model.id} in ${lastUse - started} ms")
-        return recognizer
+        return new
     }
 
     private fun loadFailed(e: Throwable): Nothing {
@@ -151,16 +235,18 @@ class OnDeviceRecognizer(private val dir: (modelId: String) -> File) {
     /** On [worker]. */
     private fun releaseLoaded() {
         val current = loaded ?: return
-        current.recognizer.release()
+        current.offline?.release()
+        current.online?.release()
         loaded = null
         wanted = null
         Log.d(TAG, "Released ${current.modelId}")
     }
 
-    private fun config(model: OnDeviceModel, language: String): OfflineRecognizerConfig {
+    private fun offlineConfig(model: OnDeviceModel, language: String): OfflineRecognizerConfig {
         val dir = dir(model.id)
         fun path(file: ModelFile) = File(dir, file.name).path
         val modelConfig = when (model.engine) {
+            OnDeviceEngine.NEMO_STREAMING -> error("${model.id} streams")
             OnDeviceEngine.NEMO_TRANSDUCER -> OfflineModelConfig(
                 transducer = OfflineTransducerModelConfig(
                     encoder = path(model.encoder),
@@ -198,6 +284,26 @@ class OnDeviceRecognizer(private val dir: (modelId: String) -> File) {
         )
     }
 
+    /** The NeMo streaming impl takes its feature dim (128) and chunk sizes from the model's metadata. */
+    private fun onlineConfig(model: OnDeviceModel): OnlineRecognizerConfig {
+        val dir = dir(model.id)
+        fun path(file: ModelFile) = File(dir, file.name).path
+        return OnlineRecognizerConfig(
+            featConfig = FeatureConfig(sampleRate = SAMPLE_RATE, featureDim = 80),
+            modelConfig = OnlineModelConfig(
+                transducer = OnlineTransducerModelConfig(
+                    encoder = path(model.encoder),
+                    decoder = path(model.decoder),
+                    joiner = path(checkNotNull(model.joiner))
+                ),
+                tokens = path(model.tokens),
+                numThreads = NUM_THREADS
+            ),
+            enableEndpoint = false,
+            decodingMethod = "greedy_search"
+        )
+    }
+
     private fun key(model: OnDeviceModel, language: String) = "${model.id}|$language"
 
     private companion object {
@@ -207,5 +313,12 @@ class OnDeviceRecognizer(private val dir: (modelId: String) -> File) {
         /** sherpa's Android examples; more threads land on little cores and slow the decode. */
         const val NUM_THREADS = 2
         const val IDLE_MS = 5 * 60 * 1000L
+
+        /**
+         * Zeros after the last chunk, 1.3 s: `inputFinished()` doesn't pad, and a chunk is decoded only once more than
+         * a whole window (Nemotron's metadata: 121 frames, shift 112, 10 ms each) is ready, so without them the last
+         * ~1.2 s of speech would never be decoded.
+         */
+        const val TAIL_PADDING_SAMPLES = 20_800
     }
 }

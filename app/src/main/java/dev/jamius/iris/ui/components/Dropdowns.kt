@@ -268,8 +268,8 @@ private fun PanelItem(
 
 /**
  * Read-only black dropdown (fixed choices): shows [selected]; a pick closes the panel and calls [onSelect] if it
- * changed. [optionIcon] (if any) is drawn before each option's text, in the field and the panel. TalkBack: "[label],
- * <value>, Collapsed/Expanded, drop down list".
+ * changed. [optionIcon] (if any) is drawn before each option's text, in the field and the panel. Options that
+ * [streams] get the radio icon (menu rows only). TalkBack: "[label], <value>, Collapsed/Expanded, drop down list".
  */
 @Composable
 fun <T> SelectDropdown(
@@ -280,6 +280,7 @@ fun <T> SelectDropdown(
     onSelect: (T) -> Unit,
     modifier: Modifier = Modifier,
     optionIcon: (@Composable (T) -> Unit)? = null,
+    streams: (T) -> Boolean = { false },
 ) {
     val colors = IrisTheme.colors
     val focusManager = LocalFocusManager.current
@@ -339,7 +340,7 @@ fun <T> SelectDropdown(
                 PanelItem(
                     optionLabel(option),
                     option == selected,
-                    streams = false,
+                    streams = streams(option),
                     leading = optionIcon?.let { { it(option) } }
                 ) {
                     open = false
@@ -363,6 +364,7 @@ fun <T> SelectField(
     error: String? = null,
     spacing: Dp = 8.dp,
     optionIcon: (@Composable (T) -> Unit)? = null,
+    streams: (T) -> Boolean = { false },
 ) {
     val saveState = rememberSaveState(saver)
     FieldGroup(label, helper = helper, error = saveState.error ?: error, spacing = spacing) {
@@ -372,7 +374,8 @@ fun <T> SelectField(
             selected,
             optionLabel,
             onSelect = { saveState.save { onSave(it) } },
-            optionIcon = optionIcon
+            optionIcon = optionIcon,
+            streams = streams
         )
     }
 }

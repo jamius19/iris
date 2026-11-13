@@ -188,7 +188,7 @@ data class Settings(
         const val DEFAULT_DEEPGRAM_STT_MODEL = "nova-3"
         const val DEFAULT_SONIOX_STT_MODEL = "stt-rt-v6"
         const val DEFAULT_SONIOX_REGION = "us"
-        const val DEFAULT_ON_DEVICE_STT_MODEL = "parakeet-unified-en"
+        const val DEFAULT_ON_DEVICE_STT_MODEL = "nemotron-streaming-en"
         /** Both cleanup providers (same id on OpenRouter). */
         const val DEFAULT_CLEANUP_MODEL = "openai/gpt-6-luna"
 

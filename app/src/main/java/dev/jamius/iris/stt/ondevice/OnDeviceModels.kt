@@ -7,8 +7,8 @@ package dev.jamius.iris.stt.ondevice
 
 import dev.jamius.iris.data.settings.Settings
 
-/** The sherpa-onnx offline recognizer a model runs on. */
-enum class OnDeviceEngine { NEMO_TRANSDUCER, WHISPER, MOONSHINE_V2 }
+/** The sherpa-onnx recognizer a model runs on: [NEMO_STREAMING] is the online (streaming) one, the rest offline. */
+enum class OnDeviceEngine { NEMO_STREAMING, NEMO_TRANSDUCER, WHISPER, MOONSHINE_V2 }
 
 /** One file of a model, as downloaded from Hugging Face (verified by size and SHA-256). */
 data class ModelFile(val name: String, val sizeBytes: Long, val sha256: String)
@@ -33,6 +33,9 @@ data class OnDeviceModel(
 ) {
     val files: List<ModelFile> get() = listOfNotNull(encoder, decoder, joiner, tokens)
     val sizeBytes: Long get() = files.sumOf { it.sizeBytes }
+
+    /** Decoded as one stream while recording (sherpa's online recognizer), not per phrase. */
+    val streams: Boolean get() = engine == OnDeviceEngine.NEMO_STREAMING
     fun url(file: ModelFile) = "https://huggingface.co/$repo/resolve/$commit/${file.name}"
 }
 
@@ -40,6 +43,32 @@ data class OnDeviceModel(
 val ON_DEVICE_MODELS: List<OnDeviceModel> = listOf(
     OnDeviceModel(
         id = Settings.DEFAULT_ON_DEVICE_STT_MODEL,
+        label = "Nemotron Streaming English",
+        languages = "English",
+        engine = OnDeviceEngine.NEMO_STREAMING,
+        repo = "csukuangfj2/sherpa-onnx-nemotron-speech-streaming-en-0.6b-1120ms-int8-2026-04-25",
+        commit = "b0b6bae3da99ea3d81b315ba018e951501850c2c",
+        encoder = ModelFile(
+            "encoder.int8.onnx",
+            652_916_852,
+            "7d2246da3c077e8b57698d398e09d8ca67f50de73b3468af397b22213ce72117"
+        ),
+        decoder = ModelFile(
+            "decoder.int8.onnx",
+            7_257_753,
+            "0be9702c2f427a2b6bb241d298e0d3836a558de1f5b9fd3018f1cce6e2b3fa98"
+        ),
+        joiner = ModelFile(
+            "joiner.int8.onnx",
+            1_735_862,
+            "a35eac38a22ebceb04d230ed7afe0d68f446ba6914a036b97f14fece95967e23"
+        ),
+        tokens = ModelFile("tokens.txt", 8_952, "dc0b4584ab2e4ddbf888425c076c61b736e7356a015250db7d307e6f1a8188ff"),
+        licence = "Licensed by NVIDIA Corporation under the NVIDIA Open Model License",
+        licenceUrl = "https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/"
+    ),
+    OnDeviceModel(
+        id = "parakeet-unified-en",
         label = "Parakeet Unified EN",
         languages = "English",
         engine = OnDeviceEngine.NEMO_TRANSDUCER,

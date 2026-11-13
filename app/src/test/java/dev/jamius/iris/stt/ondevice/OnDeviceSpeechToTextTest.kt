@@ -7,6 +7,7 @@ package dev.jamius.iris.stt.ondevice
 
 import dev.jamius.iris.stt.SttException
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -17,6 +18,7 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.yield
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -29,11 +31,13 @@ class OnDeviceSpeechToTextTest {
     private val decoded = mutableListOf<FloatArray>()
     private val languages = mutableListOf<String>()
     private val partials = mutableListOf<String>()
+    private var streams = 0
 
     private fun TestScope.provider(
         downloaded: Boolean = true,
         maxSegmentBytes: Int = MAX_SEGMENT_BYTES,
-        decode: suspend (FloatArray) -> String,
+        stream: (ReceiveChannel<ByteArray>) -> Flow<String> = { error("Not a streaming model") },
+        decode: suspend (FloatArray) -> String = replies(),
     ) = OnDeviceSpeechToText(
         isDownloaded = { downloaded },
         preload = { _, language -> languages += "preload:$language" },
@@ -41,6 +45,10 @@ class OnDeviceSpeechToTextTest {
             decoded += samples
             languages += language
             decode(samples)
+        },
+        stream = { _, chunks ->
+            streams++
+            stream(chunks)
         },
         selection = { MOONSHINE to "" },
         scope = backgroundScope,
@@ -51,6 +59,22 @@ class OnDeviceSpeechToTextTest {
     private fun replies(vararg texts: String): suspend (FloatArray) -> String {
         var i = 0
         return { texts[i++] }
+    }
+
+    /** Emits [perChunk] in order, one per chunk taken (recording its size in [taken]), then [final]. */
+    private fun streamTexts(
+        vararg perChunk: String,
+        final: String,
+        taken: MutableList<Int> = mutableListOf(),
+    ): (ReceiveChannel<ByteArray>) -> Flow<String> = { chunks ->
+        flow {
+            var i = 0
+            for (chunk in chunks) {
+                taken += chunk.size
+                emit(perChunk[i++])
+            }
+            emit(final)
+        }
     }
 
     private suspend fun OnDeviceSpeechToText.run(
@@ -201,7 +225,183 @@ class OnDeviceSpeechToTextTest {
         assertArrayEquals(floatArrayOf(-1f, 32767 / 32768f, 0.5f), floats, 0f)
     }
 
+    @Test
+    fun aStreamingModelReportsTextPerChunkWhileRecording() = runTest {
+        val stt = provider(stream = streamTexts("Hello", "Hello there", final = "Hello there."))
+        val audio = flow {
+            emit(chunk(100))
+            emit(chunk(100))
+            delay(100)
+            assertEquals(listOf("Hello", "Hello there"), partials)
+        }
+
+        assertEquals("Hello there.", stt.run(audio, model = NEMOTRON, language = "de"))
+        assertEquals(listOf("Hello", "Hello there", "Hello there."), partials)
+        // No language for it.
+        assertEquals(listOf("preload:"), languages)
+    }
+
+    @Test
+    fun aStreamingModelSkipsSegmentEndsInOneStream() = runTest {
+        val taken = mutableListOf<Int>()
+        val stt = provider(stream = streamTexts("a", "a b", "a b c", final = "a b c", taken = taken))
+        val audio = flowOf(chunk(100), ByteArray(0), chunk(50), ByteArray(0), ByteArray(0), chunk(30))
+
+        assertEquals("a b c", stt.run(audio, model = NEMOTRON))
+        assertEquals(listOf(200, 100, 60), taken)
+        assertEquals(1, streams)
+        assertTrue(decoded.isEmpty())
+    }
+
+    @Test
+    fun aStreamingModelReportsOnlyChangedText() = runTest {
+        val stt = provider(stream = streamTexts("a", "a", " a ", "a b", final = "a b"))
+        val audio = flowOf(chunk(10), chunk(10), chunk(10), chunk(10))
+
+        assertEquals("a b", stt.run(audio, model = NEMOTRON))
+        assertEquals(listOf("a", "a b"), partials)
+    }
+
+    @Test
+    fun aStreamingModelWithOnlyBlankTextReturnsBlank() = runTest {
+        val stt = provider(stream = streamTexts(" ", "", final = "  "))
+
+        assertEquals("", stt.run(flowOf(chunk(10), chunk(10)), model = NEMOTRON))
+        assertTrue(partials.isEmpty())
+    }
+
+    @Test
+    fun streamingLoadFailurePropagates() = runTest {
+        val stt = provider(stream = { flow { throw SttException("Couldn't load the on-device model") } })
+        try {
+            stt.run(flowOf(chunk(10)), model = NEMOTRON)
+            fail("Expected SttException")
+        } catch (e: SttException) {
+            assertEquals("Couldn't load the on-device model", e.message)
+        }
+    }
+
+    @Test
+    fun streamingDecodeFailurePropagates() = runTest {
+        val stt = provider(
+            stream = { chunks ->
+                flow {
+                    chunks.receive()
+                    throw SttException("On-device transcription failed")
+                }
+            }
+        )
+        try {
+            stt.run(flowOf(chunk(10)), model = NEMOTRON)
+            fail("Expected SttException")
+        } catch (e: SttException) {
+            assertEquals("On-device transcription failed", e.message)
+        }
+    }
+
+    @Test
+    fun aHungStreamTimesOutAfterTheDeadline() = runTest {
+        val stt = provider(
+            stream = { chunks ->
+                flow {
+                    chunks.receive()
+                    awaitCancellation()
+                }
+            }
+        )
+        try {
+            stt.run(flowOf(chunk(16_000)), model = NEMOTRON) // 1 s of audio.
+            fail("Expected SttException")
+        } catch (e: SttException) {
+            assertEquals("On-device transcription timed out", e.message)
+        }
+        // 60 s plus twice the pending audio.
+        assertEquals(62_000L, currentTime)
+    }
+
+    @Test
+    fun theStreamingDeadlineCountsOnlyUndecodedAudio() = runTest {
+        val stt = provider(
+            stream = { chunks ->
+                flow {
+                    chunks.receive()
+                    emit("a")
+                    awaitCancellation()
+                }
+            }
+        )
+        val audio = flow {
+            emit(chunk(16_000))
+            yield() // The first second is decoded before the stop.
+            emit(chunk(16_000))
+        }
+        try {
+            stt.run(audio, model = NEMOTRON)
+            fail("Expected SttException")
+        } catch (e: SttException) {
+            assertEquals("On-device transcription timed out", e.message)
+        }
+        assertEquals(62_000L, currentTime)
+    }
+
+    @Test
+    fun cancellingCancelsTheStream() = runTest {
+        var streamCancelled = false
+        val stt = provider(
+            stream = { chunks ->
+                flow {
+                    try {
+                        chunks.receive()
+                        awaitCancellation()
+                    } finally {
+                        streamCancelled = true
+                    }
+                }
+            }
+        )
+        val session = launch { stt.run(flowOf(chunk(10)), model = NEMOTRON) }
+        runCurrent()
+        assertFalse(streamCancelled)
+
+        session.cancel()
+        runCurrent()
+        assertTrue(session.isCompleted)
+        assertTrue(streamCancelled)
+        assertEquals(0L, currentTime)
+    }
+
+    @Test
+    fun noSpeechFromTheAudioCancelsTheStream() = runTest {
+        var streamCancelled = false
+        val stt = provider(
+            stream = { chunks ->
+                flow {
+                    try {
+                        chunks.receive()
+                        awaitCancellation()
+                    } finally {
+                        streamCancelled = true
+                    }
+                }
+            }
+        )
+        val audio = flow {
+            emit(chunk(10))
+            yield() // The stream has taken the chunk.
+            throw SttException("No speech detected")
+        }
+        try {
+            stt.run(audio, model = NEMOTRON)
+            fail("Expected SttException")
+        } catch (e: SttException) {
+            assertEquals("No speech detected", e.message)
+        }
+        assertTrue(streamCancelled)
+        assertEquals(0L, currentTime)
+    }
+
     private companion object {
         const val MOONSHINE = "moonshine-base-en"
+        const val NEMOTRON = "nemotron-streaming-en"
     }
 }

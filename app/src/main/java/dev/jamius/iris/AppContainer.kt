@@ -152,6 +152,7 @@ class AppContainer(context: Context) {
         onDeviceModels::isDownloaded,
         onDeviceRecognizer::preload,
         onDeviceRecognizer::decode,
+        onDeviceRecognizer::stream,
         selection = { settingsRepository.settings.first().let { it.onDeviceSttModel to it.sttLanguage } },
         scope = appScope
     )

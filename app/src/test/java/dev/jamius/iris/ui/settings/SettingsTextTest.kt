@@ -48,6 +48,23 @@ class SettingsTextTest {
         val parakeet = onDeviceModel("parakeet-unified-en")
         assertEquals("Parakeet Unified EN · 663 MB", onDeviceModelLabel(parakeet, downloaded = false))
         assertEquals("Parakeet Unified EN · Downloaded", onDeviceModelLabel(parakeet, downloaded = true))
+        val nemotron = onDeviceModel("nemotron-streaming-en")
+        assertEquals("Nemotron Streaming English · 662 MB", onDeviceModelLabel(nemotron, downloaded = false))
+        assertEquals("This streaming model only supports English.", onDeviceModelHelper(nemotron))
+        assertEquals("English. Runs offline on this phone.", onDeviceModelHelper(parakeet))
+    }
+
+    @Test
+    fun skipSilenceSubtitles() {
+        assertEquals("Detects speech on-device and sends only that, to cut cost.", skipSilenceSubtitle(null))
+        assertEquals(
+            "Detects speech on-device and transcribes only that.",
+            skipSilenceSubtitle(onDeviceModel("nemotron-streaming-en"))
+        )
+        assertEquals(
+            "Detects speech on-device and transcribes each phrase as you pause.",
+            skipSilenceSubtitle(onDeviceModel("whisper-small"))
+        )
     }
 
     @Test
