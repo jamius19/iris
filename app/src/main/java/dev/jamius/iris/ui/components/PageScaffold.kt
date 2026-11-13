@@ -83,11 +83,11 @@ fun PageScaffold(title: String?, onBack: (() -> Unit)?, content: @Composable Col
                         painterResource(R.drawable.iris_logo),
                         contentDescription = "Iris",
                         modifier = Modifier
-                            .padding(start = 7.dp, bottom = 15.dp) // 30 dp to the first card
+                            .padding(start = 7.dp, bottom = 7.dp) // 22 dp to the first card
                             .height(30.dp)
                     )
                 } else {
-                    Row(Modifier.heightIn(min = 32.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Row(Modifier.heightIn(min = ControlHeight), verticalAlignment = Alignment.CenterVertically) {
                         if (onBack != null) {
                             IconAction(R.drawable.lucide_chevron_left, "Back", colors.text, onBack)
                             Spacer(Modifier.width(4.dp))

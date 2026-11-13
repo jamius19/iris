@@ -23,6 +23,9 @@ import androidx.compose.ui.unit.dp
 import dev.jamius.iris.ui.theme.IrisColors
 import dev.jamius.iris.ui.theme.IrisTheme
 
+/** Min height of dropdowns, text fields and icon buttons. */
+val ControlHeight = 40.dp
+
 /** Buttons, dropdowns and text fields. */
 val ControlShape = RoundedCornerShape(8.dp)
 

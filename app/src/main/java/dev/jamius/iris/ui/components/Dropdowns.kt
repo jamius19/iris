@@ -112,7 +112,7 @@ private fun ControlShell(modifier: Modifier, hasError: Boolean = false, content:
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 32.dp)
+            .heightIn(min = ControlHeight)
             .clip(ControlShape)
             .background(colors.control)
             .then(if (hasError) Modifier.border(1.dp, colors.failure, ControlShape) else Modifier.controlBorder(colors))
@@ -303,7 +303,7 @@ fun <T> SelectDropdown(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
-            Box(Modifier.size(28.dp, 32.dp), contentAlignment = Alignment.Center) {
+            Box(Modifier.size(28.dp, ControlHeight), contentAlignment = Alignment.Center) {
                 Icon(R.drawable.lucide_arrow_down, null, colors.onControl, Modifier.rotate(arrowRotation(open)))
             }
         }
@@ -555,8 +555,8 @@ private fun RefreshAction(loading: Boolean, onClick: () -> Unit) {
     )
 }
 
-private val PANEL_ITEM_HEIGHT = 36.dp
-private val PANEL_MAX_HEIGHT = 260.dp
+private val PANEL_ITEM_HEIGHT = 40.dp
+private val PANEL_MAX_HEIGHT = 288.dp
 private val PANEL_SHADOW_ROOM = 16.dp
 private const val PANEL_IN_MS = 120
 private const val PANEL_OUT_MS = 90

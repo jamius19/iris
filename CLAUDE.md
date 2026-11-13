@@ -695,9 +695,9 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
   slide. Skipped after a back gesture (already seeked towards Home) or while a transition is running (seekTo would
   wait for it to end, then play the reverse: ~600 ms). Each page sits in a `SaveableStateProvider`; sub-pages' saved
   state is dropped once back on Home (they open fresh; Home keeps its scroll). Sub-page header: Lucide chevron-left
-  ("Back", 32 dp box) + title (Blinker 20, heading). `MainActivity`: `IrisTheme { SettingsApp(...) }` with a
+  ("Back", 32 x 40 dp box) + title (Blinker 22, heading). `MainActivity`: `IrisTheme { SettingsApp(...) }` with a
   `Saver(container.appScope)` (`AppContainer.appScope` is public for it).
-- Home: logo (30 dp to the Services card: 15 dp bottom padding + the 15 dp item spacing), Services card
+- Home: logo (22 dp to the Services card: 7 dp bottom padding + the 15 dp item spacing), Services card
   (Accessibility Service / Microphone Permission: "Enabled" in blue, "Disabled" in the failure colour with "Setup →"
   (accessibility settings / the permission request; permanently denied after an earlier request -> App info;
   accessibility also shows the restricted-settings hint); both re-checked on `ON_RESUME`), then nav cards
@@ -771,8 +771,8 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
   models", spins and is disabled while loading) act without focusing the field or clearing the filter; the first
   open of an unloaded list loads it once; a pick saves at once; blank = "Enter a model id."; non-focusable `Popup`
   so the IME stays; `BackHandler` and blur close it; a tap on the arrow within 400 ms of an outside-tap dismiss
-  doesn't reopen it). `DropdownPanel`: as wide as the field, 4 dp gap, 36 dp rows (selected: medium weight + check),
-  max 260 dp (7 whole rows), lazy, scrolled near the selection; placed by `dropdownPlacement` (pure, tested): below if it fits above
+  doesn't reopen it). `DropdownPanel`: as wide as the field, 4 dp gap, 40 dp rows (selected: medium weight + check),
+  max 288 dp (7 whole rows), lazy, scrolled near the selection; placed by `dropdownPlacement` (pure, tested): below if it fits above
   the IME / nav bar (minus 8 dp), else on the side with more room, height capped; fades + grows in (120 ms) from the
   anchor side, fades out (90 ms).
 - Catalogues (`ModelCatalogs`, in memory, refetched with the activity): Gateway's (shared by the Gateway STT model,
@@ -791,16 +791,18 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
   controls stay black (#0B0C0C + 1 dp #3A3D3E outline), slider/switch "on" = the text colour (a black thumb would
   vanish on a dark card). Shadows via `Modifier.dropShadow` (card y 3 blur 3.1 7 %, button y 2 blur 0.95 8 %,
   panel y 4 blur 12 16 %; dark 35-50 %). `Theme.Iris` (+ `values-night`) sets `windowBackground` to
-  `settings_background` (no white flash). `IrisType`: Blinker 600 page title 20/24 sp and section heading 15/18;
-  Inter 600 titles 14/17, 500 subtitles/buttons 12/15, 400 field text 12/15, 500 helper 11/13, 800 slider value
-  12/15; letter spacing 0, line height centred. Press feedback is a flat overlay (`PressIndication`: 6 % black /
-  white, 10 % white on black controls; 60 ms in, 150 ms out after the press finished).
-- Controls: card radius 15, padding 22 x 15-16, gap 15; controls 32 dp min height, radius 8, padding 12 / 8; switch
-  34 x 20 track + 16 dp thumb (150 ms, haptic `ToggleOn/Off`, the whole row is `toggleable(Role.Switch)`); slider
-  3 dp track + 7 x 24 dp pill thumb (9 dp while dragged / key-focused), tap or horizontal drag (a vertical drag
-  scrolls the page), haptic tick per step, `progressBarRangeInfo` + `setProgress` + state = the value text, DPAD
-  left/right. Small icon buttons are 32 dp boxes (28 x 32 inside fields; below the 48 dp guideline, since Compose
-  extends touch bounds only where no other target is hit and these sit edge to edge; dense design, accepted).
+  `settings_background` (no white flash). `IrisType`: Blinker 600 page title 22/26 sp and section heading 16/19;
+  Inter 600 titles 15/18, 500 subtitles 13/16, 500 buttons/dropdown values 14/17, 400 field text 14/17, 500 helper
+  12/15, 800 slider value 13/16, menu items 14/17 (Figma sizes + 1-2 sp, read better on a phone); letter spacing
+  0, line height centred. Press feedback is a flat overlay (`PressIndication`: 6 % black / white, 10 % white on
+  black controls; 60 ms in, 150 ms out after the press finished).
+- Controls: card radius 15, padding 22 x 15-16, gap 15; controls 40 dp min height (`ControlHeight`; text areas
+  88 dp), radius 8, padding 12 / 8; switch 34 x 20 track + 16 dp thumb (150 ms, haptic `ToggleOn/Off`, the whole
+  row is `toggleable(Role.Switch)`); slider 3 dp track + 7 x 24 dp pill thumb (9 dp while dragged / key-focused),
+  tap or horizontal drag (a vertical drag scrolls the page), haptic tick per step, `progressBarRangeInfo` +
+  `setProgress` + state = the value text, DPAD left/right. Small icon buttons are 32 x 40 dp boxes (28 x 40 inside
+  fields, 40 x 40 beside the prompt picker; below the 48 dp guideline, since Compose extends touch bounds only
+  where no other target is hit and these sit edge to edge; dense design, accepted).
 - Edge-to-edge + IME: `enableEdgeToEdge()`, safe-drawing top/horizontal padding, `imePadding()` outside the
   scroll, the nav bar inset as bottom padding inside it; a focused field group (incl. helper/error) is brought above
   the IME once the inset settles and again when its error changes (`bringIntoViewAboveIme`); nav-bar contrast

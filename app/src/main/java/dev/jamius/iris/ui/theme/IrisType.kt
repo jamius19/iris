@@ -33,7 +33,7 @@ val Inter = FontFamily(
 /** Blinker SemiBold: page titles and section headings only. */
 val Blinker = FontFamily(Font(R.font.blinker_semibold, FontWeight.SemiBold))
 
-/** The settings UI type scale (Figma sizes; line heights from the design's text box heights). */
+/** The settings UI type scale (Figma sizes + 1-2 sp, so it reads comfortably on a phone). */
 @Immutable
 data class IrisType(
     val pageTitle: TextStyle,
@@ -65,16 +65,16 @@ private fun style(family: FontFamily, weight: Int, size: TextUnit, lineHeight: T
 )
 
 val DefaultIrisType = IrisType(
-    pageTitle = style(Blinker, 600, 20.sp, 24.sp),
-    sectionHeading = style(Blinker, 600, 15.sp, 18.sp),
-    title = style(Inter, 600, 14.sp, 17.sp),
-    subtitle = style(Inter, 500, 12.sp, 15.sp),
-    button = style(Inter, 500, 12.sp, 15.sp),
-    field = style(Inter, 400, 12.sp, 15.sp),
-    mono = style(FontFamily.Monospace, 400, 12.sp, 15.sp),
-    helper = style(Inter, 500, 11.sp, 13.sp),
-    sliderValue = style(Inter, 800, 12.sp, 15.sp),
-    menuItem = style(Inter, 400, 12.sp, 15.sp),
-    menuItemSelected = style(Inter, 500, 12.sp, 15.sp),
-    footer = style(Inter, 500, 12.sp, 15.sp).copy(textAlign = TextAlign.Center),
+    pageTitle = style(Blinker, 600, 22.sp, 26.sp),
+    sectionHeading = style(Blinker, 600, 16.sp, 19.sp),
+    title = style(Inter, 600, 15.sp, 18.sp),
+    subtitle = style(Inter, 500, 13.sp, 16.sp),
+    button = style(Inter, 500, 14.sp, 17.sp),
+    field = style(Inter, 400, 14.sp, 17.sp),
+    mono = style(FontFamily.Monospace, 400, 13.sp, 16.sp),
+    helper = style(Inter, 500, 12.sp, 15.sp),
+    sliderValue = style(Inter, 800, 13.sp, 16.sp),
+    menuItem = style(Inter, 400, 14.sp, 17.sp),
+    menuItemSelected = style(Inter, 500, 14.sp, 17.sp),
+    footer = style(Inter, 500, 13.sp, 16.sp).copy(textAlign = TextAlign.Center),
 )

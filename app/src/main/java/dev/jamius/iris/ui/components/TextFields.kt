@@ -82,7 +82,7 @@ private fun FieldShell(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = if (multiLine) 71.dp else 32.dp)
+            .heightIn(min = if (multiLine) 88.dp else ControlHeight)
             .border(1.dp, border, ControlShape)
             .pointerInput(Unit) { detectTapGestures { focusRequester.requestFocus() } }
             .padding(start = 12.dp, end = if (hasTrailing) 6.dp else 12.dp),

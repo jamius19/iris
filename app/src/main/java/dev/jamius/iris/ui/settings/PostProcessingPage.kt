@@ -50,6 +50,7 @@ import dev.jamius.iris.data.settings.SettingsRepository
 import dev.jamius.iris.ui.components.ApiKeyField
 import dev.jamius.iris.ui.components.AutosaveTextField
 import dev.jamius.iris.ui.components.Card
+import dev.jamius.iris.ui.components.ControlHeight
 import dev.jamius.iris.ui.components.ControlShape
 import dev.jamius.iris.ui.components.DISABLED_ALPHA
 import dev.jamius.iris.ui.components.FieldGroup
@@ -373,7 +374,8 @@ private fun PromptsCard(settings: Settings, repository: SettingsRepository, save
                     }
                     focusNewId = prompt.id
                 },
-                modifier = Modifier.border(1.dp, colors.fieldBorder, ControlShape)
+                modifier = Modifier.border(1.dp, colors.fieldBorder, ControlShape),
+                width = ControlHeight
             )
             IconAction(
                 R.drawable.lucide_trash,
@@ -382,7 +384,8 @@ private fun PromptsCard(settings: Settings, repository: SettingsRepository, save
                 // Clears focus first (default), so a pending edit commits before the delete.
                 onClick = { pickState.save { repository.deletePrompt(active.id) } },
                 modifier = Modifier.border(1.dp, colors.fieldBorder, ControlShape),
-                enabled = settings.prompts.size > 1
+                enabled = settings.prompts.size > 1,
+                width = ControlHeight
             )
         }
     }

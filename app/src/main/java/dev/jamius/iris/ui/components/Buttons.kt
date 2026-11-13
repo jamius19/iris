@@ -64,7 +64,7 @@ fun SmallButton(text: String, @DrawableRes trailingIcon: Int, onClick: () -> Uni
 }
 
 /**
- * An icon button: a [width] x 32 dp touch box (rounded 8, press overlay) with the icon centred. Clears focus
+ * An icon button: a [width] x [ControlHeight] touch box (rounded 8, press overlay) with the icon centred. Clears focus
  * before acting (a non-text control, so a focused field commits first). Disabled: 38 % alpha, not clickable.
  */
 @Composable
@@ -87,7 +87,7 @@ fun IconAction(
         modifier = Modifier
             .alpha(if (enabled) 1f else DISABLED_ALPHA)
             .then(modifier)
-            .size(width, 32.dp)
+            .size(width, ControlHeight)
             .clip(ControlShape)
             .clickable(interactionSource = null, indication = indication, enabled = enabled, role = Role.Button) {
                 if (clearFocus) focusManager.clearFocus()
