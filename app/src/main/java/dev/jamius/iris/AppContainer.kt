@@ -11,6 +11,8 @@ import androidx.datastore.preferences.preferencesDataStoreFile
 import dev.jamius.iris.audio.AudioRecorder
 import dev.jamius.iris.audio.SileroVad
 import dev.jamius.iris.cleanup.CleanupProvider
+import dev.jamius.iris.cleanup.GatewayModel
+import dev.jamius.iris.cleanup.openrouter.OpenRouterCleanup
 import dev.jamius.iris.cleanup.vercel.VercelGatewayCleanup
 import dev.jamius.iris.data.settings.Secret
 import dev.jamius.iris.data.settings.SecretStore
@@ -162,10 +164,25 @@ class AppContainer(context: Context) {
     suspend fun openAiTranscriptionModels(): List<String> =
         listOpenAiTranscriptionModels(httpClient, secretStore.get(Secret.OPENAI_API_KEY))
 
-    val cleanup: CleanupProvider = VercelGatewayCleanup(
+    private val gatewayCleanup = VercelGatewayCleanup(
         httpClient,
         apiKey = { secretStore.get(Secret.GATEWAY_API_KEY) }
     )
+
+    private val openRouterCleanup = OpenRouterCleanup(
+        httpClient,
+        apiKey = { secretStore.get(Secret.OPENROUTER_API_KEY) }
+    )
+
+    /** The cleanup provider [settings] select (an unknown id means the Gateway). */
+    fun cleanup(settings: Settings): CleanupProvider =
+        if (settings.cleanupOpenRouter) openRouterCleanup else gatewayCleanup
+
+    /** Vercel AI Gateway's catalog (cleanup and transcription models), for the settings' model menus. */
+    suspend fun gatewayModels(): List<GatewayModel> = gatewayCleanup.listModels()
+
+    /** OpenRouter's structured-output chat models, for the settings' cleanup model menu. */
+    suspend fun openRouterModels(): List<GatewayModel> = openRouterCleanup.listModels()
 
     /** One per accessibility service; [scope] is the service's main-thread scope. */
     fun dictationController(
@@ -176,7 +193,7 @@ class AppContainer(context: Context) {
         audio = audioRecorder::chunks,
         stt = ::speechToText,
         settings = settingsRepository.settings,
-        warmUpCleanup = cleanup::warmUp,
+        warmUpCleanup = { cleanup(it).warmUp() },
         onFinalTranscript = onFinalTranscript,
         vadModel = sileroVad::newStream,
     )

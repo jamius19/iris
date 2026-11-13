@@ -29,6 +29,7 @@ enum class Secret(val prefKey: Preferences.Key<String>) {
     GATEWAY_API_KEY(stringPreferencesKey("gateway_api_key")),
     DEEPGRAM_API_KEY(stringPreferencesKey("deepgram_api_key")),
     SONIOX_API_KEY(stringPreferencesKey("soniox_api_key")),
+    OPENROUTER_API_KEY(stringPreferencesKey("openrouter_api_key")),
 }
 
 /**

@@ -18,6 +18,8 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.DrawableRes
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -63,6 +65,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeTopAppBar
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -88,6 +91,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.onSizeChanged
@@ -101,6 +105,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -111,8 +116,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import dev.jamius.iris.R
 import dev.jamius.iris.cleanup.CleanupException
-import dev.jamius.iris.cleanup.CleanupProvider
 import dev.jamius.iris.cleanup.GatewayModel
+import dev.jamius.iris.cleanup.parseProviderOptions
 import dev.jamius.iris.cleanup.vercel.isChatModel
 import dev.jamius.iris.data.settings.CleanupPrompt
 import dev.jamius.iris.data.settings.Secret
@@ -142,7 +147,8 @@ import kotlin.math.roundToInt
 @Composable
 fun SettingsScreen(
     repository: SettingsRepository,
-    cleanup: CleanupProvider,
+    gatewayModels: suspend () -> List<GatewayModel>,
+    openRouterModels: suspend () -> List<GatewayModel>,
     openAiModels: suspend () -> List<String>,
     sonioxCatalog: SonioxCatalog,
     modifier: Modifier = Modifier,
@@ -152,8 +158,8 @@ fun SettingsScreen(
     val sonioxState by sonioxCatalog.state.collectAsState()
     val scope = rememberCoroutineScope()
     var editingPrompt by remember { mutableStateOf<CleanupPrompt?>(null) }
-    // The Gateway's model catalog, shared by the cleanup and transcription model fields and the reasoning level;
-    // kept in memory only.
+    // Vercel AI Gateway's catalog, shared by the Gateway transcription and cleanup model fields and the Gateway
+    // reasoning level; kept in memory only.
     var models by remember { mutableStateOf<List<GatewayModel>?>(null) }
     var modelsLoading by remember { mutableStateOf(false) }
     var modelsError by remember { mutableStateOf<String?>(null) }
@@ -168,7 +174,7 @@ fun SettingsScreen(
         modelsError = null
         scope.launch {
             try {
-                models = cleanup.listModels()
+                models = gatewayModels()
             } catch (e: CleanupException) {
                 modelsError = e.message
             } finally {
@@ -177,12 +183,41 @@ fun SettingsScreen(
         }
     }
 
-    // Loads the catalog when the screen opens with cleanup or Gateway transcription on, and when either is turned
-    // on before it has loaded.
+    // Loads the catalog when the screen opens with Gateway cleanup or Gateway transcription on, and when either is
+    // turned on before it has loaded.
     val cleanupEnabled = settings?.cleanupEnabled == true
+    val cleanupGateway = cleanupEnabled && settings?.cleanupOpenRouter != true
     val sttGateway = settings?.sttGateway == true
-    LaunchedEffect(cleanupEnabled, sttGateway) {
-        if ((cleanupEnabled || sttGateway) && models == null) loadModels()
+    LaunchedEffect(cleanupGateway, sttGateway) {
+        if ((cleanupGateway || sttGateway) && models == null) loadModels()
+    }
+
+    // OpenRouter's structured-output chat models for its cleanup model field and reasoning level; in memory only.
+    var openRouterCatalog by remember { mutableStateOf<List<GatewayModel>?>(null) }
+    var openRouterModelsLoading by remember { mutableStateOf(false) }
+    var openRouterModelsError by remember { mutableStateOf<String?>(null) }
+    val openRouterModelIds = remember(openRouterCatalog) { openRouterCatalog?.map { it.id } }
+
+    fun loadOpenRouterModels() {
+        if (openRouterModelsLoading) return
+        openRouterModelsLoading = true
+        openRouterModelsError = null
+        scope.launch {
+            try {
+                openRouterCatalog = openRouterModels()
+            } catch (e: CleanupException) {
+                openRouterModelsError = e.message
+            } finally {
+                openRouterModelsLoading = false
+            }
+        }
+    }
+
+    // Loads when the screen opens with OpenRouter cleanup on, and when it is turned on before it has loaded. The
+    // catalog is public: no key involved.
+    val cleanupOpenRouterOn = cleanupEnabled && settings?.cleanupOpenRouter == true
+    LaunchedEffect(cleanupOpenRouterOn) {
+        if (cleanupOpenRouterOn && openRouterCatalog == null) loadOpenRouterModels()
     }
 
     // OpenAI's transcription models for the OpenAI model field, listed with the user's key; in memory only.
@@ -520,43 +555,108 @@ fun SettingsScreen(
                     LabeledRow(
                         icon = R.drawable.ic_auto_awesome,
                         title = "AI cleanup",
-                        subtitle = "Polish text via Vercel AI Gateway",
+                        subtitle = "Polish text with an LLM",
                         modifier = Modifier.weight(1f)
                     )
                     Spacer(Modifier.width(16.dp))
                     Switch(checked = settings.cleanupEnabled, onCheckedChange = null)
                 }
                 CardDivider()
-                FieldsColumn(modifier = Modifier.alpha(cleanupAlpha)) {
-                    ApiKeyField(
-                        label = "Vercel AI Gateway API key",
-                        isSet = settings.gatewayKeySet,
-                        onSave = { scope.launch { repository.setApiKey(Secret.GATEWAY_API_KEY, it) } },
-                        onClear = { scope.launch { repository.clearApiKey(Secret.GATEWAY_API_KEY) } }
-                    )
-                    ModelField(
-                        value = settings.cleanupModel,
-                        models = chatModelIds,
-                        loading = modelsLoading,
-                        error = modelsError,
-                        supportingText = "Model must support structured output",
-                        onLoad = ::loadModels,
-                        onSave = { scope.launch { repository.setCleanupModel(it) } }
-                    )
-                    ReasoningEffortField(
-                        value = settings.cleanupReasoningEffort,
-                        efforts = models?.firstOrNull { it.id == settings.cleanupModel }?.reasoningEfforts,
-                        onSelect = { scope.launch { repository.setCleanupReasoningEffort(it) } }
-                    )
-                    SliderSetting(
-                        label = "Timeout",
-                        value = settings.cleanupTimeoutSeconds,
-                        range = Settings.CLEANUP_TIMEOUT_RANGE,
-                        step = 1,
-                        valueText = { "$it s" },
-                        supportingText = "If cleanup takes longer, the original text is inserted.",
-                        onSave = { scope.launch { repository.setCleanupTimeoutSeconds(it) } }
-                    )
+                Column(modifier = Modifier.alpha(cleanupAlpha)) {
+                    Column(modifier = Modifier.padding(vertical = 8.dp)) {
+                        ProviderRow(
+                            title = "Vercel AI Gateway",
+                            subtitle = "Uses the AI Gateway API key (shared with transcription)",
+                            selected = !settings.cleanupOpenRouter,
+                            keyMissing = !settings.gatewayKeySet,
+                            onSelect = {
+                                scope.launch {
+                                    repository.setCleanupProvider(Settings.CLEANUP_PROVIDER_VERCEL_GATEWAY)
+                                }
+                            }
+                        )
+                        ProviderRow(
+                            title = "OpenRouter",
+                            subtitle = "Uses the OpenRouter API key",
+                            selected = settings.cleanupOpenRouter,
+                            keyMissing = !settings.openRouterKeySet,
+                            onSelect = {
+                                scope.launch { repository.setCleanupProvider(Settings.CLEANUP_PROVIDER_OPENROUTER) }
+                            }
+                        )
+                    }
+                    CardDivider()
+                    FieldsColumn {
+                        // Separate calls per provider, so unsaved input and menu state never carry over.
+                        if (settings.cleanupOpenRouter) {
+                            ApiKeyField(
+                                label = "OpenRouter API key",
+                                isSet = settings.openRouterKeySet,
+                                onSave = { scope.launch { repository.setApiKey(Secret.OPENROUTER_API_KEY, it) } },
+                                onClear = { scope.launch { repository.clearApiKey(Secret.OPENROUTER_API_KEY) } }
+                            )
+                            ModelField(
+                                value = settings.openRouterCleanupModel,
+                                models = openRouterModelIds,
+                                loading = openRouterModelsLoading,
+                                error = openRouterModelsError,
+                                supportingText = "Model must support structured output",
+                                onLoad = ::loadOpenRouterModels,
+                                onSave = { scope.launch { repository.setOpenRouterCleanupModel(it) } }
+                            )
+                            ReasoningEffortField(
+                                value = settings.openRouterCleanupReasoningEffort,
+                                efforts = openRouterCatalog
+                                    ?.firstOrNull { it.id == settings.openRouterCleanupModel }
+                                    ?.reasoningEfforts,
+                                onSelect = { scope.launch { repository.setOpenRouterCleanupReasoningEffort(it) } }
+                            )
+                        } else {
+                            ApiKeyField(
+                                label = "Vercel AI Gateway API key",
+                                isSet = settings.gatewayKeySet,
+                                onSave = { scope.launch { repository.setApiKey(Secret.GATEWAY_API_KEY, it) } },
+                                onClear = { scope.launch { repository.clearApiKey(Secret.GATEWAY_API_KEY) } }
+                            )
+                            ModelField(
+                                value = settings.cleanupModel,
+                                models = chatModelIds,
+                                loading = modelsLoading,
+                                error = modelsError,
+                                supportingText = "Model must support structured output",
+                                onLoad = ::loadModels,
+                                onSave = { scope.launch { repository.setCleanupModel(it) } }
+                            )
+                            ReasoningEffortField(
+                                value = settings.cleanupReasoningEffort,
+                                efforts = models?.firstOrNull { it.id == settings.cleanupModel }?.reasoningEfforts,
+                                onSelect = { scope.launch { repository.setCleanupReasoningEffort(it) } }
+                            )
+                        }
+                        SliderSetting(
+                            label = "Timeout",
+                            value = settings.cleanupTimeoutSeconds,
+                            range = Settings.CLEANUP_TIMEOUT_RANGE,
+                            step = 1,
+                            valueText = { "$it s" },
+                            supportingText = "If cleanup takes longer, the original text is inserted.",
+                            onSave = { scope.launch { repository.setCleanupTimeoutSeconds(it) } }
+                        )
+                    }
+                    CardDivider()
+                    if (settings.cleanupOpenRouter) {
+                        ProviderOptionsField(
+                            value = settings.openRouterCleanupProviderOptions,
+                            hint = OPENROUTER_OPTIONS_HINT,
+                            onSave = { scope.launch { repository.setOpenRouterCleanupProviderOptions(it) } }
+                        )
+                    } else {
+                        ProviderOptionsField(
+                            value = settings.cleanupProviderOptions,
+                            hint = GATEWAY_OPTIONS_HINT,
+                            onSave = { scope.launch { repository.setCleanupProviderOptions(it) } }
+                        )
+                    }
                 }
             }
 
@@ -932,6 +1032,88 @@ private fun SavableTextField(
 }
 
 /**
+ * "Provider options" accordion (collapsed by default) with a JSON field: blank saves as none, anything else must be a
+ * JSON object (Save is disabled with an inline error otherwise). [value] is the stored text; [hint] says where it goes.
+ */
+@Composable
+private fun ProviderOptionsField(value: String, hint: String, onSave: (String) -> Unit) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    val chevronRotation by animateFloatAsState(if (expanded) 180f else 0f)
+    // Keyed on the stored value, so the field resets to it after a save.
+    var input by rememberSaveable(value) { mutableStateOf(value) }
+    // Unchanged text needs no check (it was valid when saved).
+    val error = remember(input, value) {
+        if (input.trim() == value) null
+        else runCatching { parseProviderOptions(input) }.exceptionOrNull()?.message
+    }
+    // A Column, so AnimatedVisibility expands and shrinks vertically.
+    Column {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(role = Role.Button, onClickLabel = if (expanded) "Collapse" else "Expand") {
+                    expanded = !expanded
+                }
+                .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" }
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Provider options", style = MaterialTheme.typography.bodyLarge)
+                Text(
+                    if (value.isBlank()) "Not set" else "Set",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Icon(
+                painterResource(R.drawable.ic_expand_more),
+                contentDescription = null,
+                modifier = Modifier.rotate(chevronRotation)
+            )
+        }
+        AnimatedVisibility(expanded) {
+            Column(modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 16.dp)) {
+                OutlinedTextField(
+                    value = input,
+                    onValueChange = { input = it },
+                    label = { Text("JSON") },
+                    minLines = 3,
+                    maxLines = 10,
+                    isError = error != null,
+                    textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace),
+                    keyboardOptions = KeyboardOptions(
+                        autoCorrectEnabled = false,
+                        capitalization = KeyboardCapitalization.None
+                    ),
+                    supportingText = {
+                        Column {
+                            Text(hint)
+                            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                        }
+                    },
+                    trailingIcon = if (input.trim() != value) {
+                        { TextButton(onClick = { onSave(input) }, enabled = error == null) { Text("Save") } }
+                    } else {
+                        null
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .bringIntoViewAboveIme(contentKey = error)
+                )
+            }
+        }
+    }
+}
+
+private const val GATEWAY_OPTIONS_HINT = "Sent as providerOptions, e.g. {\"gateway\": {\"order\": [\"azure\", " +
+    "\"openai\"]}}. See the AI Gateway provider options docs. Leave blank to send none. Stored unencrypted: " +
+    "don't put API keys here."
+
+private const val OPENROUTER_OPTIONS_HINT = "Sent as provider (routing), e.g. {\"order\": [\"openai\"], " +
+    "\"allow_fallbacks\": false}. See OpenRouter's provider routing docs. Leave blank to send none."
+
+/**
  * Model combobox: type any model id, or pick one from the provider's list (filtered by what was typed).
  * The list ([models], [loading], [error]) is passed in; [onLoad] fetches it, on first open if not loaded yet or on
  * refresh. Menu items of models that [streams] end with the audio-lines icon. Saves like [SavableTextField].
@@ -1113,7 +1295,7 @@ private val MODEL_MENU_ITEM_HEIGHT = 48.dp
 
 /**
  * Read-only dropdown of reasoning levels: "Model default" plus [efforts] (the model's own list), or all levels the
- * Gateway accepts if that's unknown. Saves on selection.
+ * APIs accept if that's unknown. Saves on selection.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1216,7 +1398,7 @@ private const val IME_SETTLE_MS = 100L
 
 private const val TAG = "SettingsScreen"
 
-/** A speech-to-text provider choice; if selected, it flags its key as not set when [keyMissing]. */
+/** A provider choice; if selected, it flags its key as not set when [keyMissing]. */
 @Composable
 private fun ProviderRow(
     title: String,

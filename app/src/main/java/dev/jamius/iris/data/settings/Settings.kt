@@ -47,9 +47,18 @@ data class Settings(
     val sttSpeedPercent: Int,
     val cleanupEnabled: Boolean,
     val cleanupProviderId: String,
+    /** The Vercel AI Gateway cleanup model. */
     val cleanupModel: String,
     /** Gateway `reasoning_effort`; null = model default (not sent). */
     val cleanupReasoningEffort: String?,
+    /** Gateway provider options as typed (a JSON object, sent as `providerOptions`); blank = not sent. */
+    val cleanupProviderOptions: String,
+    /** The OpenRouter cleanup model. */
+    val openRouterCleanupModel: String,
+    /** OpenRouter `reasoning_effort`; null = model default (not sent). */
+    val openRouterCleanupReasoningEffort: String?,
+    /** OpenRouter provider routing options as typed (a JSON object, sent as `provider`); blank = not sent. */
+    val openRouterCleanupProviderOptions: String,
     /** Overall cleanup deadline; past it the original transcript is inserted. */
     val cleanupTimeoutSeconds: Int,
     val prompts: List<CleanupPrompt>,
@@ -59,6 +68,7 @@ data class Settings(
     val gatewayKeySet: Boolean,
     val deepgramKeySet: Boolean,
     val sonioxKeySet: Boolean,
+    val openRouterKeySet: Boolean,
     /** Screen edge the overlay bubble is snapped to. */
     val bubbleSide: BubbleSide,
     /** Bubble's vertical position as a fraction (0 = top, 1 = bottom) of the usable screen height. */
@@ -99,18 +109,31 @@ data class Settings(
             else -> openAiKeySet
         }
 
+    /** Cleanup goes through OpenRouter (else Vercel AI Gateway; an unknown id means the Gateway). */
+    val cleanupOpenRouter: Boolean get() = cleanupProviderId == CLEANUP_PROVIDER_OPENROUTER
+
+    val activeCleanupModel: String get() = if (cleanupOpenRouter) openRouterCleanupModel else cleanupModel
+
+    val activeCleanupReasoningEffort: String?
+        get() = if (cleanupOpenRouter) openRouterCleanupReasoningEffort else cleanupReasoningEffort
+
+    val activeCleanupProviderOptions: String
+        get() = if (cleanupOpenRouter) openRouterCleanupProviderOptions else cleanupProviderOptions
+
     companion object {
         const val STT_PROVIDER_OPENAI = "openai"
         const val STT_PROVIDER_VERCEL_GATEWAY = "vercel-gateway"
         const val STT_PROVIDER_DEEPGRAM = "deepgram"
         const val STT_PROVIDER_SONIOX = "soniox"
         const val CLEANUP_PROVIDER_VERCEL_GATEWAY = "vercel-gateway"
+        const val CLEANUP_PROVIDER_OPENROUTER = "openrouter"
 
         const val DEFAULT_STT_MODEL = "gpt-live-transcribe"
         const val DEFAULT_GATEWAY_STT_MODEL = "openai/gpt-live-transcribe"
         const val DEFAULT_DEEPGRAM_STT_MODEL = "nova-3"
         const val DEFAULT_SONIOX_STT_MODEL = "stt-rt-v6"
         const val DEFAULT_SONIOX_REGION = "us"
+        /** Both cleanup providers (same id on OpenRouter). */
         const val DEFAULT_CLEANUP_MODEL = "openai/gpt-6-luna"
 
         const val DEFAULT_STT_TIMEOUT_SECONDS = 10
@@ -121,7 +144,7 @@ data class Settings(
 
         const val DEFAULT_REASONING_EFFORT = "low"
 
-        /** The values the Gateway accepts, for when a model's own list is unknown. */
+        /** The values both cleanup APIs accept, for when a model's own list is unknown (also the display order). */
         val REASONING_EFFORTS = listOf("none", "minimal", "low", "medium", "high", "xhigh", "max")
 
         const val DEFAULT_CLEANUP_TIMEOUT_SECONDS = 5

@@ -57,7 +57,7 @@ class VercelGatewayCleanupTest {
         callTimeoutMs = callTimeoutMs
     )
 
-    private suspend fun VercelGatewayCleanup.clean() = cleanup("hello", "Clean it.", "m", "low")
+    private suspend fun VercelGatewayCleanup.clean() = cleanup("hello", "Clean it.", "m", "low", null)
 
     private fun respond(code: Int, body: String) =
         server.enqueue(MockResponse.Builder().code(code).body(body).build())
@@ -92,7 +92,7 @@ class VercelGatewayCleanupTest {
     fun returnsTheParsedText() = runBlocking {
         respondCompletion("""{"text":"  Hello, world.  "}""")
 
-        val text = cleanup().cleanup("um hello world", "Clean it.", "openai/gpt-6-luna", "low")
+        val text = cleanup().cleanup("um hello world", "Clean it.", "openai/gpt-6-luna", "low", null)
 
         assertEquals("Hello, world.", text)
     }
@@ -101,7 +101,7 @@ class VercelGatewayCleanupTest {
     fun sendsStructuredRequest() = runBlocking {
         respondCompletion("""{"text":"Hi."}""")
 
-        cleanup().cleanup("um hello world", "Clean it.", "openai/gpt-6-luna", "low")
+        cleanup().cleanup("um hello world", "Clean it.", "openai/gpt-6-luna", "low", null)
 
         val request = server.takeRequest()
         assertEquals("POST", request.method)
@@ -121,16 +121,29 @@ class VercelGatewayCleanupTest {
                "additionalProperties":false}}}"""
         )
         assertEquals(expectedFormat, body["response_format"])
+        assertFalse("providerOptions" in body)
     }
 
     @Test(timeout = TEST_TIMEOUT_MS)
     fun omitsReasoningEffortForModelDefault() = runBlocking {
         respondCompletion("""{"text":"Hi."}""")
 
-        cleanup().cleanup("um hello world", "Clean it.", "openai/gpt-6-luna", null)
+        cleanup().cleanup("um hello world", "Clean it.", "openai/gpt-6-luna", null, null)
 
         val body = Json.parseToJsonElement(server.takeRequest().body!!.utf8()).jsonObject
         assertFalse("reasoning_effort" in body)
+    }
+
+    @Test(timeout = TEST_TIMEOUT_MS)
+    fun sendsProviderOptionsUnderProviderOptions() = runBlocking {
+        respondCompletion("""{"text":"Hi."}""")
+        val options = Json.parseToJsonElement("""{"gateway":{"order":["azure","openai"]}}""").jsonObject
+
+        cleanup().cleanup("um hello world", "Clean it.", "openai/gpt-6-luna", "low", options)
+
+        val body = Json.parseToJsonElement(server.takeRequest().body!!.utf8()).jsonObject
+        assertEquals(options, body["providerOptions"])
+        assertFalse("provider" in body)
     }
 
     @Test(timeout = TEST_TIMEOUT_MS)

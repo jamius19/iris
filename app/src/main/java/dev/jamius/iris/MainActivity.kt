@@ -16,7 +16,8 @@ class MainActivity : ComponentActivity() {
             IrisTheme {
                 SettingsScreen(
                     repository = container.settingsRepository,
-                    cleanup = container.cleanup,
+                    gatewayModels = container::gatewayModels,
+                    openRouterModels = container::openRouterModels,
                     openAiModels = container::openAiTranscriptionModels,
                     sonioxCatalog = container.sonioxCatalog
                 )

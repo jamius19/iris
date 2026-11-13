@@ -12,6 +12,7 @@ import dev.jamius.iris.cleanup.GatewayModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonObject
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
@@ -40,13 +41,22 @@ class VercelGatewayCleanup(
     // service's cleanupTimeoutSeconds deadline) is the only limit.
     private val cleanupClient = this.httpClient.newBuilder().readTimeout(0, MILLISECONDS).build()
 
-    override suspend fun cleanup(text: String, systemPrompt: String, model: String, reasoningEffort: String?): String {
+    override suspend fun cleanup(
+        text: String,
+        systemPrompt: String,
+        model: String,
+        reasoningEffort: String?,
+        providerOptions: JsonObject?,
+    ): String {
         val key = apiKey()?.takeIf { it.isNotBlank() }
             ?: throw CleanupException("Add your Vercel AI Gateway API key in Iris settings")
         val request = Request.Builder()
             .url(url)
             .header("Authorization", "Bearer $key")
-            .post(chatRequest(text, systemPrompt, model, reasoningEffort).toRequestBody(JSON_MEDIA_TYPE))
+            .post(
+                chatRequest(text, systemPrompt, model, reasoningEffort, GATEWAY_OPTIONS_KEY, providerOptions)
+                    .toRequestBody(JSON_MEDIA_TYPE)
+            )
             .build()
         val (code, body) = execute(request, client = cleanupClient)
         if (code !in 200..299) throw CleanupException(httpErrorMessage(code, body))

@@ -64,6 +64,11 @@ class SettingsMappingTest {
         assertEquals(Settings.CLEANUP_PROVIDER_VERCEL_GATEWAY, settings.cleanupProviderId)
         assertEquals(Settings.DEFAULT_CLEANUP_MODEL, settings.cleanupModel)
         assertEquals(Settings.DEFAULT_REASONING_EFFORT, settings.cleanupReasoningEffort)
+        assertEquals("", settings.cleanupProviderOptions)
+        assertFalse(settings.cleanupOpenRouter)
+        assertEquals(Settings.DEFAULT_CLEANUP_MODEL, settings.openRouterCleanupModel)
+        assertEquals("low", settings.openRouterCleanupReasoningEffort)
+        assertEquals("", settings.openRouterCleanupProviderOptions)
         assertEquals(Settings.DEFAULT_CLEANUP_TIMEOUT_SECONDS, settings.cleanupTimeoutSeconds)
         assertEquals(listOf(Settings.DEFAULT_PROMPT), settings.prompts)
         assertEquals(Settings.DEFAULT_PROMPT, settings.activePrompt)
@@ -71,6 +76,7 @@ class SettingsMappingTest {
         assertFalse(settings.gatewayKeySet)
         assertFalse(settings.deepgramKeySet)
         assertFalse(settings.sonioxKeySet)
+        assertFalse(settings.openRouterKeySet)
         assertEquals(Settings.DEFAULT_BUBBLE_SIDE, settings.bubbleSide)
         assertEquals(Settings.DEFAULT_BUBBLE_Y_FRACTION, settings.bubbleYFraction)
         assertEquals(Settings.DEFAULT_PANEL_LINES, settings.panelLines)
@@ -95,7 +101,12 @@ class SettingsMappingTest {
             Keys.STT_SPEED_PERCENT to 150,
             Keys.CLEANUP_ENABLED to true,
             Keys.CLEANUP_MODEL to "google/gemini-2.5-flash",
+            Keys.CLEANUP_PROVIDER_ID to Settings.CLEANUP_PROVIDER_OPENROUTER,
             Keys.CLEANUP_REASONING_EFFORT to "high",
+            Keys.CLEANUP_PROVIDER_OPTIONS to """{"gateway": {"order": ["azure"]}}""",
+            Keys.OPENROUTER_CLEANUP_MODEL to "anthropic/claude-haiku-5",
+            Keys.OPENROUTER_CLEANUP_REASONING_EFFORT to "medium",
+            Keys.OPENROUTER_CLEANUP_PROVIDER_OPTIONS to """{"order": ["openai"]}""",
             Keys.CLEANUP_TIMEOUT_SECONDS to 12,
             Keys.PROMPTS to encodePrompts(prompts),
             Keys.ACTIVE_PROMPT_ID to "b",
@@ -105,7 +116,9 @@ class SettingsMappingTest {
             Keys.PANEL_WIDTH_PERCENT to 70,
         )
 
-        val settings = prefs.toSettings(setOf(Secret.GATEWAY_API_KEY, Secret.DEEPGRAM_API_KEY, Secret.SONIOX_API_KEY))
+        val settings = prefs.toSettings(
+            setOf(Secret.GATEWAY_API_KEY, Secret.DEEPGRAM_API_KEY, Secret.SONIOX_API_KEY, Secret.OPENROUTER_API_KEY)
+        )
 
         assertEquals(Settings.STT_PROVIDER_VERCEL_GATEWAY, settings.sttProviderId)
         assertEquals("gpt-transcribe", settings.sttModel)
@@ -123,6 +136,11 @@ class SettingsMappingTest {
         assertTrue(settings.cleanupEnabled)
         assertEquals("google/gemini-2.5-flash", settings.cleanupModel)
         assertEquals("high", settings.cleanupReasoningEffort)
+        assertEquals(Settings.CLEANUP_PROVIDER_OPENROUTER, settings.cleanupProviderId)
+        assertEquals("""{"gateway": {"order": ["azure"]}}""", settings.cleanupProviderOptions)
+        assertEquals("anthropic/claude-haiku-5", settings.openRouterCleanupModel)
+        assertEquals("medium", settings.openRouterCleanupReasoningEffort)
+        assertEquals("""{"order": ["openai"]}""", settings.openRouterCleanupProviderOptions)
         assertEquals(12, settings.cleanupTimeoutSeconds)
         assertEquals(prompts, settings.prompts)
         assertEquals(prompts[1], settings.activePrompt)
@@ -130,6 +148,7 @@ class SettingsMappingTest {
         assertTrue(settings.gatewayKeySet)
         assertTrue(settings.deepgramKeySet)
         assertTrue(settings.sonioxKeySet)
+        assertTrue(settings.openRouterKeySet)
         assertEquals(BubbleSide.LEFT, settings.bubbleSide)
         assertEquals(0.75f, settings.bubbleYFraction)
         assertEquals(5, settings.panelLines)
@@ -185,10 +204,46 @@ class SettingsMappingTest {
     }
 
     @Test
+    fun activeCleanupFieldsFollowTheProvider() {
+        val prefs = mutablePreferencesOf(
+            Keys.CLEANUP_MODEL to "openai/gpt-6-luna",
+            Keys.CLEANUP_REASONING_EFFORT to "high",
+            Keys.CLEANUP_PROVIDER_OPTIONS to """{"gateway":{}}""",
+            Keys.OPENROUTER_CLEANUP_MODEL to "google/gemini-3-flash",
+            Keys.OPENROUTER_CLEANUP_REASONING_EFFORT to "",
+            Keys.OPENROUTER_CLEANUP_PROVIDER_OPTIONS to """{"order":["google"]}""",
+        )
+
+        val gateway = prefs.toSettings(emptySet())
+        assertFalse(gateway.cleanupOpenRouter)
+        assertEquals("openai/gpt-6-luna", gateway.activeCleanupModel)
+        assertEquals("high", gateway.activeCleanupReasoningEffort)
+        assertEquals("""{"gateway":{}}""", gateway.activeCleanupProviderOptions)
+
+        prefs[Keys.CLEANUP_PROVIDER_ID] = Settings.CLEANUP_PROVIDER_OPENROUTER
+        val openRouter = prefs.toSettings(emptySet())
+        assertTrue(openRouter.cleanupOpenRouter)
+        assertEquals("google/gemini-3-flash", openRouter.activeCleanupModel)
+        assertNull(openRouter.activeCleanupReasoningEffort)
+        assertEquals("""{"order":["google"]}""", openRouter.activeCleanupProviderOptions)
+
+        prefs[Keys.CLEANUP_PROVIDER_ID] = "unknown"
+        val unknown = prefs.toSettings(emptySet())
+        assertFalse(unknown.cleanupOpenRouter)
+        assertEquals("openai/gpt-6-luna", unknown.activeCleanupModel)
+        assertEquals("high", unknown.activeCleanupReasoningEffort)
+        assertEquals("""{"gateway":{}}""", unknown.activeCleanupProviderOptions)
+    }
+
+    @Test
     fun emptyReasoningEffortIsModelDefault() {
-        val settings = mutablePreferencesOf(Keys.CLEANUP_REASONING_EFFORT to "").toSettings(emptySet())
+        val settings = mutablePreferencesOf(
+            Keys.CLEANUP_REASONING_EFFORT to "",
+            Keys.OPENROUTER_CLEANUP_REASONING_EFFORT to "",
+        ).toSettings(emptySet())
 
         assertNull(settings.cleanupReasoningEffort)
+        assertNull(settings.openRouterCleanupReasoningEffort)
     }
 
     @Test

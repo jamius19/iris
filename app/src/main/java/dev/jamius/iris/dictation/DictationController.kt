@@ -71,8 +71,8 @@ internal const val ERROR_DISPLAY_MS = 2 * DONE_DISPLAY_MS
  * @param onFinalTranscript called with the final text of each successful session; returns the
  *   [DictationState.Done] to show. It runs inside the session (still Finalizing): cancelling the session cancels
  *   it, and its exceptions end in Error.
- * @param warmUpCleanup if cleanup is enabled, called as recording starts and again on stop, so the cleanup call
- *   finds a warm connection. Must return at once.
+ * @param warmUpCleanup called with the session's settings as recording starts and again on stop, if cleanup is
+ *   enabled, so the cleanup call finds a warm connection. Must return at once.
  * @param vadModel a new Silero stream (16 kHz frame -> speech probability) for each session with VAD on; it is only
  *   called on [vadContext].
  * @param vadContext where the VAD gate runs (model load and inference: CPU work, off the main thread).
@@ -82,7 +82,7 @@ class DictationController(
     private val audio: (sampleRate: Int) -> Flow<AudioChunk>,
     private val stt: (Settings) -> SpeechToTextProvider,
     private val settings: Flow<Settings>,
-    private val warmUpCleanup: () -> Unit,
+    private val warmUpCleanup: (Settings) -> Unit,
     private val onFinalTranscript: suspend (transcript: String) -> DictationState.Done,
     private val vadModel: () -> (FloatArray) -> Float,
     private val vadContext: CoroutineContext = Dispatchers.Default,
@@ -101,15 +101,15 @@ class DictationController(
     /** [clock] time of the stop tap, or null while listening. */
     private var stoppedAt: Long? = null
 
-    /** The session's settings have cleanup on: warm the cleanup connection on stop too. */
-    private var cleanupEnabled = false
+    /** The session's settings if cleanup is on: the cleanup connection is warmed again on stop. */
+    private var cleanupSettings: Settings? = null
 
     /** Stops recording a listening session, which then finalizes. Ignored in any other state. */
     fun stop() {
         val state = _state.value as? DictationState.Listening ?: return
         stoppedAt = clock()
         // A long dictation may outlive the idle connection (pool/server/NAT); runs alongside STT finalization.
-        if (cleanupEnabled) warmUpCleanup()
+        cleanupSettings?.let(warmUpCleanup)
         _level.value = 0f
         _state.value = DictationState.Finalizing(state.text)
     }
@@ -132,14 +132,16 @@ class DictationController(
         if (_state.value is DictationState.Listening || _state.value is DictationState.Finalizing) return
         session?.cancel()
         stoppedAt = null
-        cleanupEnabled = false
+        cleanupSettings = null
         _level.value = 0f
         _state.value = DictationState.Listening("")
         session = scope.launch {
             val result = try {
                 val config = settings.first()
-                cleanupEnabled = config.cleanupEnabled
-                if (cleanupEnabled) warmUpCleanup()
+                if (config.cleanupEnabled) {
+                    cleanupSettings = config
+                    warmUpCleanup(config)
+                }
                 val stt = stt(config)
                 val model = config.activeSttModel
                 val rate = stt.sampleRate(model)

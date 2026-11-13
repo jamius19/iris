@@ -38,6 +38,7 @@ class DictationControllerTest {
     private val finals = mutableListOf<String>()
     private var audioReleased = false
     private var warmUps = 0
+    private val warmUpSettings = mutableListOf<Settings>()
     private var recordedRate = 0
 
     /** A 100 ms chunk every 100 ms until cancelled. */
@@ -114,7 +115,10 @@ class DictationControllerTest {
         stt = { stt },
         // VAD only for tests that pass a model.
         settings = flowOf(settings.copy(vadEnabled = vadModel != null)),
-        warmUpCleanup = { warmUps++ },
+        warmUpCleanup = {
+            warmUps++
+            warmUpSettings += it
+        },
         onFinalTranscript = onFinalTranscript,
         vadModel = { vadModel ?: error("VAD off") },
         // Gate in the test's thread, so virtual time stays deterministic.
@@ -564,7 +568,9 @@ class DictationControllerTest {
 
     @Test
     fun cleanupIsWarmedUpOnStartAndStopWhenEnabled() = runTest {
-        val controller = controller(FakeStt { "Hi" }, cleanupEnabled = true)
+        val settings = emptyPreferences().toSettings(emptySet())
+            .copy(cleanupEnabled = true, cleanupProviderId = Settings.CLEANUP_PROVIDER_OPENROUTER)
+        val controller = controller(FakeStt { "Hi" }, settings = settings)
 
         controller.start()
         runCurrent()
@@ -574,6 +580,8 @@ class DictationControllerTest {
         advanceTimeBy(101)
         assertEquals(DictationState.Done("Hi"), controller.state.value)
         assertEquals(2, warmUps)
+        // Both with the session's settings (VAD off: no model passed), so the same provider is warmed.
+        assertEquals(List(2) { settings.copy(vadEnabled = false) }, warmUpSettings)
     }
 
     @Test

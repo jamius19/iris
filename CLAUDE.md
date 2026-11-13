@@ -36,12 +36,12 @@ the provider interfaces so a new provider is just a new implementation. The one 
 ## Architecture
 | Package | Responsibility |
 |---|---|
-| (root) | `IrisApp` (Application), `AppContainer` (manual DI, app scope, Soniox catalogue), `MainActivity` (hosts settings UI) |
+| (root) | `IrisApp` (Application), `AppContainer` (manual DI, app scope, Soniox catalogue, picks the STT and cleanup providers), `MainActivity` (hosts settings UI) |
 | `data.settings` | Settings model, `SettingsRepository` (DataStore), `SecretStore` (Keystore crypto) |
 | `ui.settings` | Settings screen (Compose) |
 | `audio` | PCM16 mono recorder (rate per session); `SileroVad` (ORT wrapper), `SpeechGate` (pure VAD gate); `timeStretched` (Sonic speed-up) |
 | `stt` | `SpeechToTextProvider`; `stt.openai` / `stt.vercel` / `stt.deepgram` / `stt.soniox` streaming + upload providers; `Wav.kt` (upload helpers) |
-| `cleanup` | `CleanupProvider` interface; `cleanup.vercel` gateway implementation |
+| `cleanup` | `CleanupProvider` interface, `parseProviderOptions`; `cleanup.vercel` / `cleanup.openrouter` implementations (Chat Completions helpers shared in `GatewayProtocol.kt`) |
 | `dictation` | Session state machine/controller: audio -> STT -> cleanup -> insertion |
 | `overlay` | AccessibilityService, bubble overlay view, live-text panel |
 
@@ -161,7 +161,8 @@ Dictation (CP3):
   `audio: (sampleRate) -> Flow<AudioChunk>` = `audioRecorder::chunks`, `stt: (Settings) -> SpeechToTextProvider` =
   `AppContainer::speechToText`, picked once per session after the settings load, with `Settings.activeSttModel`;
   `vadModel: () -> (FloatArray) -> Float` = `sileroVad::newStream`, a fresh Silero stream per session with VAD on;
-  `vadContext` = `Dispatchers.Default`, where the gate runs, tests pass `EmptyCoroutineContext`):
+  `vadContext` = `Dispatchers.Default`, where the gate runs, tests pass `EmptyCoroutineContext`;
+  `warmUpCleanup: (Settings) -> Unit` = `{ AppContainer.cleanup(it).warmUp() }`, called with the session's settings):
   `Idle -> Listening(text) -> Finalizing(text) -> Done(text, notice?) | Error(message) -> Idle` (Done shown 1.5 s,
   or 3 s with a notice, which the panel shows instead of the text; Error 3 s; blank transcript, or nothing passed
   VAD = Error "No speech detected"). An upload provider stays at `Listening("")`/`Finalizing("")` (blank text keeps
@@ -259,15 +260,17 @@ Speed (CP8):
   integer slider works and 1.0x is an exact check; no read-side clamp). Read per session.
 
 Cleanup + insertion (CP4):
-- Cleanup runs only if `cleanupEnabled`, with the active prompt and `cleanupModel`; no separate status text: the
-  bubble spins (Finalizing) until insertion is done. The panel keeps the transcript; the cleaned text is never shown.
-  `CleanupProvider.cleanup` throws `CleanupException` (user-readable). Any cleanup failure (incl. missing Gateway
-  key) inserts the raw transcript; Done's notice is the error plus "Inserted the original text" (or "Original
-  copied to clipboard"), so dictation is never lost. Other unexpected cleanup exceptions are logged and treated the
-  same. Overall deadline: `Settings.cleanupTimeoutSeconds` (1..30, default 5, like Handy's
-  `post_process_timeout_secs`); `onFinalTranscript` wraps the cleanup call in `withTimeoutOrNull` (not
-  `withTimeout`: its `TimeoutCancellationException` is a `CancellationException` and would be rethrown, losing the
-  dictation). Cancelling cancels the OkHttp call (`invokeOnCancellation`). On timeout the raw transcript is inserted with the
+- Cleanup runs only if `cleanupEnabled`, through `container.cleanup(settings)` with the active prompt and the selected
+  provider's `activeCleanupModel` / `activeCleanupReasoningEffort` /
+  `parseProviderOptions(activeCleanupProviderOptions)`; no separate status text: the bubble spins (Finalizing) until
+  insertion is done. The panel keeps the transcript; the cleaned text is never shown. `CleanupProvider.cleanup` throws
+  `CleanupException` (user-readable). Any cleanup failure (incl. missing key; an options parse failure, impossible via
+  the UI, is the generic "Cleanup failed") inserts the raw transcript; Done's notice is the error plus "Inserted the
+  original text" (or "Original copied to clipboard"), so dictation is never lost. Other unexpected cleanup exceptions
+  are logged and treated the same. Overall deadline: `Settings.cleanupTimeoutSeconds` (1..30, default 5, like Handy's
+  `post_process_timeout_secs`); `onFinalTranscript` wraps the cleanup call in `withTimeoutOrNull` (not `withTimeout`:
+  its `TimeoutCancellationException` is a `CancellationException` and would be rethrown, losing the dictation).
+  Cancelling cancels the OkHttp call (`invokeOnCancellation`). On timeout the raw transcript is inserted with the
   notice "Cleanup timeout. Pasted original text." (if it was copied instead: "Cleanup timeout." plus the clipboard
   line from `doneNotice`).
 - Target: the service snapshots `focusedField` when the user taps stop. At insertion, if it still equals
@@ -559,6 +562,22 @@ Providers (settings store a provider id for each):
   trimmed on save), separate from the shared `sttLanguage` (other providers take one code).
 - Soniox pricing (2026-11-13): real-time ~$0.12/h, billed by wall-clock stream time (VAD gaps don't cut it, so a
   long pause still costs); async ~$0.10/h by audio duration (VAD and Speed cut it).
+- Cleanup provider: `Settings.cleanupProviderId` (`cleanup_provider_id`): `vercel-gateway` (default) or
+  `openrouter`; an unknown id means the Gateway. `AppContainer.cleanup(settings)` picks the provider. Per provider:
+  model, reasoning effort and provider options. Gateway: `cleanupModel` (`cleanup_model`),
+  `cleanupReasoningEffort` (`cleanup_reasoning_effort`), `cleanupProviderOptions` (`cleanup_provider_options`);
+  OpenRouter: `openRouterCleanupModel` (`openrouter_cleanup_model`, default `openai/gpt-6-luna`),
+  `openRouterCleanupReasoningEffort` (`openrouter_cleanup_reasoning_effort`, same `low` default / "" = model
+  default), `openRouterCleanupProviderOptions` (`openrouter_cleanup_provider_options`); key `Secret.OPENROUTER_API_KEY`
+  (`openrouter_api_key`). `activeCleanupModel` / `activeCleanupReasoningEffort` / `activeCleanupProviderOptions`
+  follow the selection. Provider options are stored as typed (trimmed; blank = not sent; `{}` is sent as-is);
+  `cleanup.parseProviderOptions` (pure, tested; default `Json` plus a check that every value is a quoted string,
+  number, true/false or null) returns null for blank, else the JSON object, else throws `IllegalArgumentException`
+  ("Not valid JSON" / "Must be a JSON object: { ... }"). The object goes to
+  `CleanupProvider.cleanup(..., providerOptions)` and is put as-is under the provider's own top-level key
+  (`chatRequest(..., optionsKey, options)`): Gateway `providerOptions` (`GATEWAY_OPTIONS_KEY`, per
+  https://vercel.com/docs/ai-gateway/models-and-providers/provider-options; not live-verified), OpenRouter
+  `provider` (routing).
 - Cleanup: Vercel AI Gateway, OpenAI-compatible `POST https://ai-gateway.vercel.sh/v1/chat/completions`,
   `Authorization: Bearer <key>`. Structured output via
   `response_format: {type:"json_schema", json_schema:{name, schema, strict:true}}` with schema
@@ -602,9 +621,33 @@ Providers (settings store a provider id for each):
   pool-evicted connections still pay the handshake. The service logs one `Timing:` line per session that reaches
   the final-transcript hook (not error/no-speech/cancel): stop->transcript, cleanup (`X ms`, `X ms failed`,
   `X ms timed out` or `off`), stop->done; no text.
-- Model catalog: `CleanupProvider.listModels()` = `GET https://ai-gateway.vercel.sh/v1/models` (checked
-  2026-11-11: public, no auth needed; an invalid Bearer key gets 401, so the request is sent unauthenticated and
-  the key is never read). Body `{object:"list", data:[{id, type, ...}]}` with `type` one of
+- Cleanup, OpenRouter (`cleanup.openrouter.OpenRouterCleanup`, pure parts in `OpenRouterProtocol.kt`): sources
+  https://openrouter.ai/docs/api_reference/overview, `/guides/features/structured-outputs`,
+  `/guides/best-practices/reasoning-tokens`, `/api_reference/errors-and-debugging`,
+  `/guides/routing/provider-selection` (2026-11-13; top-level `reasoning_effort` and the 200-with-error shapes are
+  assumed, not live-verified). `POST https://openrouter.ai/api/v1/chat/completions`, only `Authorization: Bearer <key>`
+  (no `HTTP-Referer` / `X-OpenRouter-Title`); body = the Gateway's `chatRequest` (same structured output,
+  `reasoning_effort`, framing) with options under `provider`. Missing key = "Add your OpenRouter API key in Iris
+  settings" (no request). Checks in order: non-2xx -> `openRouterHttpErrorMessage` (401 key, 402 "OpenRouter account
+  is out of credits", 429 rate limit, 502 "the model's provider failed", 503 "No OpenRouter provider available for
+  this model (check provider options)", other 5xx server, else "OpenRouter error: <error.message>" or "OpenRouter
+  request failed (HTTP n)"; 403 is moderation/forbidden there, so it is not a key message); a 200 carrying an error
+  (`parseOpenRouterError`: top-level `error` without `choices`, or `choices[0].error` / `finish_reason "error"`) =
+  "OpenRouter error: <message | generation failed>"; no `choices[0]` = "Unexpected response from OpenRouter";
+  `length` = cut off; a refusal with no content = "Model refused: ..." BEFORE `content_filter` (OpenRouter reports
+  refusals with that finish reason); `content_filter` = blocked; unusable text = unexpected. Same clients and
+  timeouts as the Gateway's (30 s call timeout, no read timeout for cleanup); `execute` wraps `stt.await` (cancelling
+  cancels the call). Catalog: keyless `GET https://openrouter.ai/api/v1/models?supported_parameters=structured_outputs`
+  (curl 2026-11-13: 200, 67 KB, 372 entries, 82 `:batch`); `parseOpenRouterModels` keeps non-blank ids, drops
+  `:batch` ids (batch API only), sorts by id, `GatewayModel(id, null, [], efforts)`; efforts =
+  `reasoning.supported_efforts` (listed high -> low, e.g. luna `max..none`) re-ordered to `REASONING_EFFORTS` order,
+  unknown values last; missing/empty = null. Errors as above; transport `modelsNetworkErrorMessage`. Warm-up: keyless
+  `HEAD https://openrouter.ai/api/v1/models` (no query) on the base client, `Log.d` only; the cleanup POST reuses the
+  connection (unit tested).
+- Model catalog: `VercelGatewayCleanup.listModels()` (`AppContainer.gatewayModels`) =
+  `GET https://ai-gateway.vercel.sh/v1/models` (checked 2026-11-11: public, no auth needed; an invalid Bearer key gets
+  401, so the request is sent unauthenticated and the key is never read). Body
+  `{object:"list", data:[{id, type, ...}]}` with `type` one of
   `language|embedding|image|video|speech|transcription|realtime|reranking|evaluation`. It returns every entry with
   an id, sorted by id, as `GatewayModel(id, type, tags, reasoningEfforts)` (`tags` = the string entries of `tags`,
   e.g. `websocket-transcription`, `open-weights`); callers filter: cleanup with `isChatModel` (`type ==
@@ -619,9 +662,9 @@ Providers (settings store a provider id for each):
   `low..max`; `openai/gpt-4.1-mini` has no `reasoning_options`. HTTP errors map as above; timeout = "Loading models
   timed out", other transport errors = "Couldn't load models (network error)" (no raw exception in the UI); no `data`
   array = "Unexpected response from AI Gateway".
-  No separate API keys card: each key field sits with the provider that uses it. Transcription shows only the
-  selected provider's key; Cleanup always shows the Gateway key (the same stored key, so with Gateway STT both
-  cards show it and saving either updates both).
+  No separate API keys card: each key field sits with the provider that uses it. Transcription and Cleanup each show
+  only the selected provider's key (the Gateway key is one stored key, so with Gateway on both cards show it and
+  saving either updates both).
   Settings > Transcription: four radio rows (OpenAI (direct) / Vercel AI Gateway / Deepgram / Soniox, each naming
   its key; the selected one appends " · not set" in the error colour without its key), then the selected provider's
   key field, then (Soniox only) a read-only "Region" dropdown (`SonioxRegionField`, `PrimaryNotEditable`, saves on
@@ -651,9 +694,10 @@ Providers (settings store a provider id for each):
   Settings shows the cleanup model (and both STT models: `ModelField`) as an editable M3
   `ExposedDropdownMenuBox` (`PrimaryEditable` field): any
   custom id can be typed; typing filters the list (case-insensitive substring); explicit Save as other fields.
-  The catalog (`models`/loading/error) lives in `SettingsScreen`, shared by both model fields and the reasoning
-  level, in memory only (refetched on each `MainActivity` creation, incl. rotation). It loads when the screen
-  opens with cleanup or Gateway STT on (or when either is turned on, if not loaded yet), once on a model menu's
+  The Gateway catalog (`models`/loading/error, loaded via `AppContainer.gatewayModels`) lives in `SettingsScreen`,
+  shared by the Gateway STT and cleanup model fields and the Gateway reasoning level, in memory only (refetched on
+  each `MainActivity` creation, incl. rotation). It loads when the screen
+  opens with Gateway cleanup or Gateway STT on (or when either is turned on, if not loaded yet), once on a model menu's
   first open if
   still not loaded (later failures need refresh), or via refresh; one fetch at a time (a load in progress isn't
   restarted). A failed load shows its error under the model field. The OpenAI list has its own state in
@@ -674,6 +718,20 @@ Providers (settings store a provider id for each):
   model's list is known and lacks the saved value; the value is sent anyway (a cleanup error falls back to the raw
   transcript). Under that, a "Timeout" `SliderSetting` (1..30 s, step 1) for `cleanupTimeoutSeconds`, hint "If
   cleanup takes longer, the original text is inserted."
+  Settings > Cleanup: the "AI cleanup" toggle (subtitle "Polish text with an LLM"), then (all dimmed while off) two
+  radio rows (`ProviderRow`: Vercel AI Gateway "Uses the AI Gateway API key (shared with transcription)" /
+  OpenRouter "Uses the OpenRouter API key"), then the selected provider's key, model field and reasoning level
+  (separate `if/else` calls, so unsaved input never carries over), the shared Timeout slider, then a divider and the
+  "Provider options" accordion (`ProviderOptionsField`, collapsed by default, `rememberSaveable`; header row is a
+  `Role.Button` with "Expand"/"Collapse" click label and "Expanded"/"Collapsed" state description, "Not set"/"Set"
+  subtitle and a rotating `ic_expand_more` chevron; `AnimatedVisibility`). Inside: a monospace multiline "JSON" field
+  (3..10 lines, no autocorrect) with an inline error from `parseProviderOptions` that disables Save; blank + Save
+  clears. Hints: Gateway "Sent as providerOptions, e.g. {"gateway": {"order": ["azure", "openai"]}}. See the AI
+  Gateway provider options docs. Leave blank to send none. Stored unencrypted: don't put API keys here."; OpenRouter
+  "Sent as provider (routing), e.g. {"order": ["openai"], "allow_fallbacks": false}. See OpenRouter's provider routing
+  docs. Leave blank to send none." The OpenRouter catalog (`AppContainer.openRouterModels`) has its own state, loaded
+  when the screen opens with OpenRouter cleanup on (or when it is turned on), on first menu open or via refresh;
+  switching the cleanup provider never touches the Gateway catalog (Gateway STT model menu).
 
 ## Key decisions (don't re-litigate without a concrete reason)
 - **STT providers**: OpenAI Realtime (direct) stays the default. Vercel AI Gateway's streaming transcription
@@ -685,6 +743,9 @@ Providers (settings store a provider id for each):
   follows the catalogue's `transcription_mode` (id rule `stt-rt-*` until it loads). Soniox real-time disables
   speed-up (billed by stream time). The catalogue is app-level (`SonioxCatalog`), not just the settings screen's,
   because the start frame needs `supports_language_hints_strict` (sending it to a model without it is a 400).
+- **OpenRouter is a second cleanup provider** beside the Gateway (own key, model, reasoning level and options; the
+  Gateway keeps the original `cleanup*` fields, no migration). Provider options are wrapped per provider
+  (`providerOptions` / `provider`), never merged into the top level; cleanup only, not Gateway STT.
 - **Deepgram's mode follows a setting, not the model** (the one exception): every Nova model does both, so the
   Deepgram-only "Disable realtime streaming (cheaper)" switch picks the ~44 % cheaper pre-recorded upload.
 - **VAD on device (Silero, ONNX Runtime 1.28.0 pinned)** to cut STT cost; fails open, never loses dictation.
@@ -701,7 +762,7 @@ Providers (settings store a provider id for each):
   CP3 must record with that source. Still unverified on real devices/OEMs. Fallback if capture is silenced:
   start a `microphone` FGS from the bubble tap. Android 17 (target 37) background-audio rules cover playback/focus.
 - **Only two abstractions**: `SpeechToTextProvider` and `CleanupProvider`. No others without a reason (provider
-  choice is a `(Settings) -> SpeechToTextProvider` lambda, not a router provider).
+  choice is a `(Settings) -> SpeechToTextProvider` lambda / `AppContainer.cleanup(settings)`, not a router provider).
 
 ## Commands
 Run from repo root in Git Bash on Windows:
@@ -801,6 +862,12 @@ Not covered by unit tests; check on a real device (ideally more than one OEM) af
 - Short dictation (< 2 s) at 2.0x with an upload model: transcribed (WAV padding path).
 - Billing: the provider's usage page shows fewer audio seconds for the same dictation at 2.0x.
 - Gateway brief network drop at 2.0x: reconnect + resend still gives a complete transcript.
+- OpenRouter cleanup with a real key: the default model, a non-OpenAI model and a reasoning level clean the text;
+  402/503 show as notices with the raw text inserted. Provider options: Gateway `{"gateway":{"order":["azure",
+  "openai"]}}` and OpenRouter `{"order":["openai"],"allow_fallbacks":false}` are accepted; an impossible routing
+  (e.g. `{"only":["nonexistent"]}`) shows the 503/400 notice. The accordion is collapsed by default, TalkBack reads
+  "Provider options, Collapsed"; invalid JSON disables Save; switching the cleanup provider keeps the Gateway STT
+  model menu.
 
 ### Emulator / Android MCP
 Checked 2026-11-11 on `emulator-5554` (AVD `Medium_Phone_API_37.0`, API 37, 1080x2400; SDK `K:\Android\SDK`).
@@ -836,3 +903,4 @@ Update this section as checkpoints land.
 | CP8 | Speed-up (time-stretch) | Done (real-voice device check pending) |
 | CP9 | Deepgram Nova-3 STT | Done (real-voice device check pending) |
 | CP10 | Soniox STT (real-time + async) | Done (real-voice device check pending) |
+| CP11 | OpenRouter cleanup provider + provider options | Done (device check pending) |

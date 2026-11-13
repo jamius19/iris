@@ -23,6 +23,7 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import dev.jamius.iris.IrisApp
 import dev.jamius.iris.cleanup.CleanupException
+import dev.jamius.iris.cleanup.parseProviderOptions
 import dev.jamius.iris.data.settings.Settings
 import dev.jamius.iris.dictation.DictationController
 import dev.jamius.iris.dictation.DictationState
@@ -260,11 +261,12 @@ class IrisAccessibilityService : AccessibilityService() {
                 try {
                     // OrNull: a plain withTimeout's exception is a CancellationException and would be rethrown.
                     val cleaned = withTimeoutOrNull(settings.cleanupTimeoutSeconds * 1000L) {
-                        container.cleanup.cleanup(
+                        container.cleanup(settings).cleanup(
                             transcript,
                             prompt.systemPrompt,
-                            settings.cleanupModel,
-                            settings.cleanupReasoningEffort
+                            settings.activeCleanupModel,
+                            settings.activeCleanupReasoningEffort,
+                            parseProviderOptions(settings.activeCleanupProviderOptions)
                         )
                     }
                     if (cleaned != null) {
