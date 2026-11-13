@@ -12,6 +12,7 @@ import dev.jamius.iris.R
 import dev.jamius.iris.data.settings.Secret
 import dev.jamius.iris.data.settings.Settings
 import dev.jamius.iris.data.settings.SettingsRepository
+import dev.jamius.iris.data.settings.sttProviderLabel
 import dev.jamius.iris.stt.deepgram.DEEPGRAM_MODELS
 import dev.jamius.iris.stt.ondevice.OnDeviceEngine
 import dev.jamius.iris.stt.ondevice.OnDeviceModelStore

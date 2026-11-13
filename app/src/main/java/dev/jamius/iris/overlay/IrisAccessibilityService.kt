@@ -24,6 +24,7 @@ import android.view.accessibility.AccessibilityWindowInfo
 import dev.jamius.iris.IrisApp
 import dev.jamius.iris.cleanup.CleanupException
 import dev.jamius.iris.cleanup.parseProviderOptions
+import dev.jamius.iris.cleanup.timedCleanup
 import dev.jamius.iris.data.settings.Settings
 import dev.jamius.iris.dictation.DictationController
 import dev.jamius.iris.dictation.DictationState
@@ -33,7 +34,6 @@ import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Shows the bubble overlay while an editable, non-password field in another app has input focus, or the keyboard is
@@ -263,8 +263,11 @@ class IrisAccessibilityService : AccessibilityService() {
                 val prompt = settings.activePrompt ?: Settings.DEFAULT_PROMPT
                 val cleanupStart = SystemClock.elapsedRealtime()
                 try {
-                    // OrNull: a plain withTimeout's exception is a CancellationException and would be rethrown.
-                    val cleaned = withTimeoutOrNull(settings.cleanupTimeoutSeconds * 1000L) {
+                    val cleaned = timedCleanup(
+                        settings.cleanupTimeoutSeconds * 1000L,
+                        SystemClock::elapsedRealtime,
+                        { container.statistics.recordCleanup(settings, it) }
+                    ) {
                         container.cleanup(settings).cleanup(
                             transcript,
                             prompt.systemPrompt,

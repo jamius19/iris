@@ -7,6 +7,8 @@ package dev.jamius.iris.ui.settings
 
 import dev.jamius.iris.data.settings.CustomCleanupProvider
 import dev.jamius.iris.data.settings.Settings
+import dev.jamius.iris.data.settings.cleanupProviderLabel
+import dev.jamius.iris.data.settings.sttProviderLabel
 import dev.jamius.iris.stt.ondevice.SpeedVerdict
 import dev.jamius.iris.stt.ondevice.onDeviceModel
 import dev.jamius.iris.stt.ondevice.speedVerdict
@@ -199,6 +201,47 @@ class SettingsTextTest {
     fun statsBasisTexts() {
         assertEquals("From your last dictation.", statsBasisText(1))
         assertEquals("From your last 12 dictations.", statsBasisText(12))
+        assertEquals("From your last cleanup.", statsBasisText(1, "cleanup"))
+        assertEquals("From your last 5 cleanups.", statsBasisText(5, "cleanup"))
+    }
+
+    @Test
+    fun minutesTexts() {
+        assertEquals("0.0 min", minutesText(0))
+        assertEquals("12.4 min", minutesText(744_000))
+        assertEquals("0.5 min", minutesText(30_000))
+    }
+
+    @Test
+    fun savedPercents() {
+        assertEquals(0, savedPercent(10_000, 10_000))
+        assertEquals(38, savedPercent(10_000, 6_200))
+        assertEquals(100, savedPercent(10_000, 0))
+        // Floored and capped: anything billed is under 100, any saving is at least 1.
+        assertEquals(99, savedPercent(10_000, 30))
+        assertEquals(1, savedPercent(10_000, 9_960))
+        // Clamped: billed over recorded (e.g. Sonic's tail) saves nothing.
+        assertEquals(0, savedPercent(10_000, 10_500))
+        assertEquals(0, savedPercent(0, 0))
+    }
+
+    @Test
+    fun audioSavedTexts() {
+        assertEquals("38% less than recorded (Skip Silence, Audio Speed).", audioSavedText(38))
+        assertEquals("As recorded: nothing saved.", audioSavedText(0))
+    }
+
+    @Test
+    fun durationTexts() {
+        assertEquals("0 s", durationText(0))
+        assertEquals("35 s", durationText(35_000))
+        assertEquals("59 s", durationText(59_999))
+        assertEquals("1 min", durationText(60_000))
+        assertEquals("47 min", durationText(47 * 60_000L + 59_000))
+        assertEquals("3 h 12 min", durationText((3 * 60 + 12) * 60_000L))
+        assertEquals("2 h", durationText(2 * 3_600_000L))
+        // The summary card's net Time Saved may be negative: shown as nothing saved.
+        assertEquals("0 s", durationText(-90_000))
     }
 
     @Test

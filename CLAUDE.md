@@ -76,15 +76,15 @@ Silero VAD ("Skip silence") decides which audio is sent (cloud: to cut STT cost;
 ## Architecture
 | Package | Responsibility |
 |---|---|
-| (root) | `IrisApp` (Application; releases the on-device model on memory trim), `AppContainer` (manual DI, app scope, Soniox catalogue, on-device recognizer + model store + stats, picks the STT and cleanup providers), `MainActivity` (hosts settings UI) |
-| `data.settings` | Settings model, `SettingsRepository` (DataStore), `SecretStore` (Keystore crypto) |
+| (root) | `IrisApp` (Application; releases the on-device model on memory trim), `AppContainer` (manual DI, app scope, Soniox catalogue, on-device recognizer + model store, the `Statistics` store, picks the STT and cleanup providers), `MainActivity` (hosts settings UI) |
+| `data.settings` | Settings model, `SettingsRepository` (DataStore), `SecretStore` (Keystore crypto), provider labels (`sttProviderLabel`, `cleanupProviderLabel`: menus and stats titles) |
 | `ui.settings` | `SettingsApp` (navigation, catalogue load triggers), the five pages, `ModelCatalogs`, `SettingsText` (pure copy/format helpers), `Favicons` (custom providers' icons) |
 | `ui.components` | The design system: cards, rows, buttons, switch, slider, text fields, dropdowns, page scaffold, `Saver`, pure `commitDecision` / `dropdownPlacement` / `sliderValue` / `filterModels` |
 | `ui.theme` | `IrisTheme` (own CompositionLocals, no Material): `IrisColors` (light + derived dark), `IrisType` (Inter + Blinker) |
 | `audio` | PCM16 mono recorder (rate per session); `SileroVad` (sherpa `Vad` wrapper), `SpeechGate` (pure VAD gate); `timeStretched` (Sonic speed-up) |
-| `stt` | `SpeechToTextProvider`; `stt.openai` / `stt.vercel` / `stt.deepgram` / `stt.soniox` streaming + upload providers; `stt.ondevice` (On device: `OnDeviceModels` catalogue, `OnDeviceModelStore` downloads, `OnDeviceRecognizer` sherpa holder, `OnDeviceSpeechToText` provider, `OnDeviceStats` per-model statistics); `Wav.kt` (upload helpers) |
+| `stt` | `SpeechToTextProvider`; `stt.openai` / `stt.vercel` / `stt.deepgram` / `stt.soniox` streaming + upload providers; `stt.ondevice` (On device: `OnDeviceModels` catalogue, `OnDeviceModelStore` downloads, `OnDeviceRecognizer` sherpa holder, `OnDeviceSpeechToText` provider, `OnDeviceStats` the on-device statistics' pure parts); `Wav.kt` (upload helpers) |
 | `cleanup` | `CleanupProvider` interface, `parseProviderOptions`; `cleanup.vercel` / `cleanup.openrouter` / `cleanup.compatible` (user-added OpenAI-compatible) implementations (Chat Completions helpers shared in `GatewayProtocol.kt`) |
-| `dictation` | Session state machine/controller: audio -> STT -> cleanup -> insertion |
+| `dictation` | Session state machine/controller: audio -> STT -> cleanup -> insertion; `Statistics` (the Statistics page's store: on-device, cloud, cleanup, totals) |
 | `overlay` | AccessibilityService, bubble overlay view, live-text panel |
 
 Overlay (`overlay`, View-based, not Compose: a Compose window in a service needs lifecycle/savedstate owners):
@@ -233,6 +233,18 @@ Dictation (CP3):
   always finishes.
   Service destroy cancels its scope. Errors other than `SttException`/`AudioCaptureException` are logged and shown
   as "Something went wrong".
+- Statistics record (CP17): `record: (Settings, DictationRecord) -> Unit` (default no-op; `AppContainer` passes
+  `Statistics.recordDictation`) is called once per session after `onFinalTranscript` returns its Done (so: stopped,
+  non-blank text), for every provider (On device too: its totals), with the session's settings and
+  `DictationRecord(recordedMs, billedMs, waitMs, doneMs, words)`: recordedMs = `recordedBytes` (the whole recording,
+  pauses included); billedMs = recordedMs if `!allowsSpeedUp` (Soniox real-time bills the stream), else the sent
+  bytes (`sentBytes`, before Sonic), divided by `sttSpeedPercent / 100` when stretched; waitMs = stop -> `transcribe`
+  returned (the service's `stop->transcript` span); doneMs = stop -> the hook returned; words = `wordCount(Done.text)`
+  (inserted or copied, after cleanup; the text itself never reaches the stats layer). The stop time is read when
+  `transcribe` returns. Keep-alive zeros, WAV/commit padding, Sonic's +-ms and per-request minimums are ignored.
+  Nothing is recorded for a blank transcript, "No speech detected", STT/audio errors, cancellation, a hook that
+  throws (decided: it never should; the session ends in Error) or a transcript that arrives before the stop (the
+  Gateway's early `finish`; also when stop is tapped while the hook runs: unit tested).
 - Final hook: `suspend IrisAccessibilityService.onFinalTranscript(text): Done`, called directly inside the session
   (state still Finalizing). It does cleanup + insertion and returns the Done to show (inserted text, plus a notice
   on fallback). No retry/skip.
@@ -311,7 +323,8 @@ Speed (CP8):
   usable; it lands in hangover silence).
 - Placement: after `onCompletion` (VAD), before `stt.transcribe`, only when `sttSpeedPercent != 100` and
   `stt.allowsSpeedUp` (otherwise no Sonic object, the same arrays). Soniox real-time is never stretched (billed by
-  wall-clock stream time, wants real-time pace) and the "Audio Speed" slider is hidden for a live Soniox model. After
+  wall-clock stream time, wants real-time pace; `allowsSpeedUp` false also means the statistics count the whole
+  recording as billed) and the "Audio Speed" slider is hidden for a live Soniox model. After
   `transformWhile`, so only sent chunks reach Sonic and the flush happens exactly at the stop; after `onCompletion`, so
   `NO_SPEECH` is thrown before any flush output (nothing reaches the provider). Every provider acts (commit /
   `audio-done` / upload) only after its `audio.collect` returns, i.e. after the tail. Keep-alive zeros go through Sonic
@@ -337,8 +350,10 @@ Cleanup + insertion (CP4):
   the UI, is the generic "Cleanup failed") inserts the raw transcript; Done's notice is the error plus "Inserted the
   original text" (or "Original copied to clipboard"), so dictation is never lost. Other unexpected cleanup exceptions
   are logged and treated the same. Overall deadline: `Settings.cleanupTimeoutSeconds` (1..30, default 5, like Handy's
-  `post_process_timeout_secs`); `onFinalTranscript` wraps the cleanup call in `withTimeoutOrNull` (not `withTimeout`:
-  its `TimeoutCancellationException` is a `CancellationException` and would be rethrown, losing the dictation).
+  `post_process_timeout_secs`); `onFinalTranscript` wraps the cleanup call in `timedCleanup` (`CleanupProvider.kt`, unit
+  tested): `withTimeoutOrNull` (not `withTimeout`: its `TimeoutCancellationException` is a `CancellationException`
+  and would be rethrown, losing the dictation), and only a returned text's duration goes to
+  `Statistics.recordCleanup` (timeouts and failures record nothing; CP17).
   Cancelling cancels the OkHttp call (`invokeOnCancellation`). On timeout the raw transcript is inserted with the
   notice "Cleanup timeout. Pasted original text." (if it was copied instead: "Cleanup timeout." plus the clipboard
   line from `doneNotice`).
@@ -719,8 +734,8 @@ Providers (settings store a provider id for each):
   ~180 ms; release build PSS ~244 MB with it loaded (native heap ~204 MB).
   Statistics hooks (CP16): `decode` returns `Decoded(text, busyMs)` (the native decode's time) and `stream` emits
   `Decoded(text, busyMs so far)` (chunk decodes + the stop flush, cumulative); log lines unchanged. The recognizer's
-  `onLoaded(modelId, ms)` (= `OnDeviceStats.recordLoad`) runs after each successful load (the `Loaded` log, preloads
-  included). The provider's `record(modelId, audioMs, decodeMs, waitMs)` (= `OnDeviceStats.recordDictation`) is
+  `onLoaded(modelId, ms)` (= `Statistics.recordLoad`) runs after each successful load (the `Loaded` log, preloads
+  included). The provider's `record(modelId, audioMs, decodeMs, waitMs)` (= `Statistics.recordOnDevice`) is
   called once per dictation whose final text is non-empty: audioMs = the non-empty chunks' bytes at 16 kHz (model
   input, i.e. after Speed), decodeMs = the segments' busy times summed (offline) or the last emission's (streaming),
   waitMs = stop -> decoder joined (the `Timing: stop->final` span). Nothing is recorded for "No speech detected"
@@ -903,8 +918,8 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
   (Accessibility Service / Microphone Permission: "Enabled" in blue, "Disabled" in the failure colour with "Setup →"
   (accessibility settings / the permission request; permanently denied after an earlier request -> App info;
   accessibility also shows the restricted-settings hint); both re-checked on `ON_RESUME`), then nav cards
-  Transcription Provider (audio-lines), Post Processing Provider (sparkles), Appearance (eye), Statistics (gauge, "How
-  on-device models run on this phone"); footer
+  Transcription Provider (audio-lines), Post Processing Provider (sparkles), Appearance (eye), Statistics (gauge,
+  "Transcription and cleanup times and usage"); footer
   "Version <versionName>" (PackageManager), pinned to the bottom while the content is short.
 - Transcription Provider: picker card (audio-lines icon, "Transcription Provider" black dropdown: On device, OpenAI,
   Vercel AI Gateway, Deepgram, Soniox, each with its brand mark in a `ProviderIconBox` (On device: Lucide `smartphone`;
@@ -992,26 +1007,60 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
   Level (default "Model default"), the shared Timeout, "Send JSON Schema" switch; no Provider Options.
 - Appearance: "Text Panel": "Lines" (1..6, "Lines of live text the panel shows.", helper "Notices show at least 4
   lines.") and "Max Width" (30..90 step 10, shown "50%", "Share of the screen width the panel can use.").
-- Statistics (CP16, `StatisticsPage.kt`; data in `stt/ondevice/OnDeviceStats.kt`, pure parts unit tested): per
-  on-device model with at least one sample (`modelsWithStats`: catalogue order, unknown ids dropped), from its last 20
-  dictations (`MAX_SAMPLES`; `StatsSample(speechMs, decodeMs, waitMs)`, `ModelStats(samples, lastLoadMs)`), a
+- Statistics (CP16 + CP17, `StatisticsPage.kt`; data in `dictation/Statistics.kt` (store + cloud/cleanup/totals pure
+  parts) and `stt/ondevice/OnDeviceStats.kt` (on-device pure parts), unit tested). Order: summary card, on-device
+  sections, cloud sections (by title), cleanup sections (by title), helpers, Reset; no group headings.
+  Summary card (only with `totals.recordedMs > 0`; `Card(color = statsCard)`, #0061F3 in both modes, white text): two
+  `weight(1f)` columns, each merged for TalkBack: value (`pageTitle`) + label (`subtitle`): `durationText(recordedMs)`
+  "Time Transcribed" and `durationText(savedMs)` "Time Saved" (`durationText`: floored "35 s" / "47 min" / "3 h 12 min"
+  / "2 h"; negative = "0 s"). Helper below it: "Since statistics began or your last reset. Time saved compares
+  dictating with typing the same words at 38 words per minute." (CP16 users' totals start at CP17.)
+  Totals (`Totals(recordedMs, savedMs)`), per dictation with text (the controller's `record`, every provider):
+  recordedMs += the recording; savedMs += `typingSavedMs(words, recordedMs, doneMs)` = words x 60,000 / `TYPING_WPM`
+  (38) - (recording + stop -> done), net (may be negative per dictation); words = `wordCount(Done.text)`
+  (whitespace-separated; CJK without spaces is undercounted).
+  On-device section per model with at least one sample (`modelsWithStats`: catalogue order, unknown ids dropped), from
+  its last 20 dictations (`MAX_SAMPLES`; `StatsSample(speechMs, decodeMs, waitMs)`, `ModelStats(samples, lastLoadMs)`):
   `Section(model.label)` with "Speed" = the verdict (`speedVerdict` on the ratio of sums `speedFactor` = Σ speech ÷
   Σ decode: >= 1.5 "Keeps up" in `enabled`, >= 1.0 "Borderline" in `warning`, else "Falls behind" in `failure`) with
   `speedFactorText` below ("7.1× faster than you speak", "2.0× slower …", "As fast as you speak" when it rounds to
   1.0; verdict and text both use the factor rounded to one decimal, `roundToTenth`, so 1.45 is "Keeps up" with
-  "1.5×"), "Transcription Time" (`medianWaitMs`, even count = mean of the middle two; `tenthsText` "4.8 s"; "Median time
-  from stopping to the final text."), "Model Load" (last load, if known; "Last time the model was loaded into
-  memory."), then `statsBasisText` ("From your last dictation." / "From your last N dictations."). Rows are
-  `StatRow`s (title + value right, subtitle; merged for TalkBack). Below the sections the speed helper and "Reset
-  Statistics" (`DangerButton`, no confirmation: removes every model's samples and load times). No samples at all: a
-  card "No statistics yet" / "Dictate with an on-device model to see how fast it runs on this phone."; before the
-  first read only the header shows (no empty-state flash). `SettingsApp` collects `onDeviceStats.stats` (like
-  `onDeviceModels.state`) and passes the value (null until the first read) to the page, so it is read before the page
-  slides in and re-opening doesn't restart the collection. Storage: `OnDeviceStats` (`AppContainer.onDeviceStats`),
-  its own DataStore file `on_device_stats`, one key `models` holding the JSON map (`encodeStats` / `decodeStats`:
-  `ignoreUnknownKeys`, null or malformed = empty); writes on `appScope` (`edit` serializes them; an `IOException` is
-  only logged; a corrupt file is replaced with an empty one, `ReplaceFileCorruptionHandler`), excluded from backup
-  and device transfer like `secrets` (device-specific numbers). No cloud stats, no usage totals.
+  "1.5×"), "Transcription Time" (`medianWaitMs` = `median` (`OnDeviceStats.kt`, also used for cloud), even count =
+  mean of the middle two;
+  `tenthsText` "4.8 s"; "Median time from stopping to the final text."), "Model Load" (last load, if known; "Last time
+  the model was loaded into memory."), then `statsBasisText` ("From your last dictation." / "From your last N
+  dictations."). The on-device provider records only its own sample (`recordOnDevice`); totals come from the
+  controller, so nothing counts twice.
+  Cloud section per provider + model (`cloudKey`: Gateway / Deepgram / Soniox id, else `openai`, + `|<model>`, +
+  `|upload` for Deepgram with `deepgramUpload`; title `cloudTitle` "OpenAI · gpt-live-transcribe", "Deepgram · nova-3
+  (upload)", provider labels from `sttProviderLabel`), last 20 `CloudSample(waitMs, recordedMs, billedMs)`:
+  "Transcription Time" (median waitMs, same subtitle as on-device), "Audio Sent" (`minutesText(Σ billed)` "12.4 min";
+  subtitle `audioSavedText(savedPercent(Σ recorded, Σ billed))`: "38% less than recorded (Skip Silence, Audio
+  Speed)." or, at 0, "As recorded: nothing saved."; `savedPercent` floored: 0 only when nothing was saved or without
+  a recording, 100 only when nothing was billed, else 1..99; Soniox real-time is always 0 %), then
+  `statsBasisText(n)`.
+  Cleanup section per provider + model (`cleanupKey` = `cleanupProviderId|activeCleanupModel`, a custom one by its
+  UUID; title `cleanupTitle` "Vercel AI Gateway · openai/gpt-6-luna", "<custom name> · <model>" via
+  `cleanupProviderLabel`), last 20 successful cleanup times (`timedCleanup`, the span the service logs as `cleanup X
+  ms`): "Cleanup Time (p75)" ("3 in 4 cleanups finished within this.") and "Cleanup Time (p90)" ("9 in 10 cleanups
+  finished within this."), `percentileMs` by nearest rank (rank = ceil(p x n / 100)), then `statsBasisText(n,
+  "cleanup")`. Titles are stored and refreshed on each record (the page needs no settings); a deleted custom
+  provider's stats stay under its last name until Reset.
+  Helpers, each only if its group shows: the speed helper; cloud "Audio Sent is roughly what the service bills, after
+  Skip Silence and Audio Speed. Soniox real-time bills the whole stream, so nothing is saved there."; cleanup "Only
+  cleanups that finished count; failed and timed-out ones are left out." Then "Reset Statistics" (`DangerButton`, no
+  confirmation: clears everything, totals included). Nothing at all: a card "No statistics yet" / "Dictate to see
+  transcription and cleanup times, audio sent and how on-device models run on this phone."; before the first read
+  only the header shows (no empty-state flash). Rows are `StatRow`s (title + value right, subtitle; merged for
+  TalkBack). `SettingsApp` collects `statistics.stats` (a `StatsSnapshot`, like `onDeviceModels.state`) and passes
+  the value (null until the first read) to the page, so it is read before the page slides in and re-opening doesn't
+  restart the collection. Storage: `Statistics` (`AppContainer.statistics`), DataStore file `on_device_stats` (name
+  kept on purpose: renaming would orphan stored numbers and need backup-rule edits), keys `models` (unchanged from
+  CP16), `cloud`, `cleanup`, `totals`, each one JSON value (`encodeStats` / `encodeCloud` / `encodeCleanup` /
+  `encodeTotals` and their decoders: `ignoreUnknownKeys`, null or malformed = empty / zero); every write is one `edit`
+  that reads and rewrites all four keys, on `appScope` (`edit` serializes them; an `IOException` is only logged; a
+  corrupt file is replaced with an empty one, `ReplaceFileCorruptionHandler`), excluded from backup and device
+  transfer like `secrets` (device-specific numbers).
 - Autosave (no Save buttons, except the custom provider form (CP13)): text fields commit on blur; IME Done, a tap
   on empty space (page `detectTapGestures`),
   every non-text control, the back chevron / gesture and `ON_STOP` (home, app switch, rotation) clear focus, so blur
@@ -1059,6 +1108,7 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
   border #D7D7D7, separator #D8DBDF, services divider #D6D8DD, track #C6C8CC, button text #FDFDFD); dark derived: bg
   #141616, card #212424, text #E8EAEA, muted #9B9EA0, failure #FF5C93 and enabled #5C9DFF (>= 4.5:1 on the card),
   warning (CP16, not in the design: Statistics' "Borderline") #B45309 light (~5:1 on white) / #F59E0B dark (~7:1),
+  statsCard (CP17: the Statistics summary card, white text ~5.2:1) #0061F3 in both modes,
   controls stay black (#0B0C0C + 1 dp #3A3D3E outline), slider/switch "on" = the text colour (a black thumb would
   vanish on a dark card). Shadows via `Modifier.dropShadow` (card y 3 blur 3.1 7 %, button y 2 blur 0.95 8 %,
   panel y 4 blur 12 16 %; dark 35-50 %). `Theme.Iris` (+ `values-night`) sets `windowBackground` to
@@ -1238,6 +1288,12 @@ Not covered by unit tests; check on a real device (ideally more than one OEM) af
   `Decoded … in Y ms` totals (≈ 7×), Transcription Time ≈ the median of the `Timing: stop->final` logs, Model Load = the
   last `Loaded … in X ms`; a "No speech detected" dictation and a ✕ cancel add nothing; Reset empties the page; stats
   survive an app restart; TalkBack reads each row (title, value, subtitle); light and dark verdict colours.
+- Statistics (CP17): cloud Transcription Time ≈ the median of the `Timing: stop->transcript` logs; Audio Sent ≈ the
+  `VAD: sent X ms` total ÷ speed (VAD off: the recording); cleanup p90 ≈ the high end of the `cleanup X ms` logs
+  (timed-out and failed ones not counted); the summary card grows by each recording's length and Time Saved by
+  words / 38 min - (recording + stop->done); Soniox real-time shows 0 % saved; a Deepgram upload session gets its own
+  "(upload)" section; Reset zeroes the card and removes every section; TalkBack reads each card figure (value,
+  label) and each row.
 - Long Gateway upload: a 10 min Gateway after-stop dictation (VAD off) succeeds; on a 413, reuse `splitAtPauses`
   for the Gateway too.
 - Gateway STT with a real voice: live text streams and the final is inserted (default model, plus a 16 kHz one:
@@ -1331,3 +1387,4 @@ Update this section as checkpoints land.
 | CP14 | On-device STT (sherpa-onnx) | Done (emulator-checked with silence; real-voice device check pending) |
 | CP15 | On-device streaming STT (Nemotron) | Done (device check pending) |
 | CP16 | On-device statistics | Done (device check pending) |
+| CP17 | Cloud + cleanup statistics | Done (device check pending) |

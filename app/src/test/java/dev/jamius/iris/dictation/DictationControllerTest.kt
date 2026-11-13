@@ -15,9 +15,11 @@ import dev.jamius.iris.stt.SttException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.currentTime
@@ -40,6 +42,10 @@ class DictationControllerTest {
     private var warmUps = 0
     private val warmUpSettings = mutableListOf<Settings>()
     private var recordedRate = 0
+    private val records = mutableListOf<Pair<Settings, DictationRecord>>()
+
+    /** The final-transcript hook's and the record's calls, in order. */
+    private val events = mutableListOf<String>()
 
     /** A 100 ms chunk every 100 ms until cancelled. */
     private val audio: Flow<ByteArray> = flow {
@@ -125,6 +131,10 @@ class DictationControllerTest {
         // Gate in the test's thread, so virtual time stays deterministic.
         vadContext = EmptyCoroutineContext,
         clock = { currentTime * NANOS_PER_MS },
+        record = { s, d ->
+            events += "record"
+            records += s to d
+        },
     )
 
     /** One 32 ms frame at 16 kHz every 32 ms until cancelled, the Nth (from 0) tagged with N in its first byte. */
@@ -947,6 +957,141 @@ class DictationControllerTest {
 
         assertEquals(DictationState.Error("No speech detected"), controller.state.value)
         assertTrue(stt.received.isEmpty())
+    }
+
+    /** [frames] at 16 kHz (32 ms each): frames 0..100 before the stop at 3,210 ms, frame 101 ends the audio. */
+    private fun TestScope.dictateFrames(controller: DictationController, afterStopMs: Long = 32) {
+        controller.start()
+        runCurrent()
+        advanceTimeBy(100 * 32L + 10)
+        controller.stop()
+        advanceTimeBy(afterStopMs)
+    }
+
+    @Test
+    fun sessionIsRecordedAfterTheHookWithItsTextAndTimes() = runTest {
+        val stt = FakeStt(rate = 16_000) {
+            delay(300)
+            "Hello world"
+        }
+        val controller = controller(stt, audio = frames, onFinalTranscript = {
+            events += "hook"
+            delay(200)
+            DictationState.Done("Hello, world.")
+        })
+
+        dictateFrames(controller, afterStopMs = 32 + 300 + 200)
+
+        assertEquals(DictationState.Done("Hello, world."), controller.state.value)
+        assertEquals(listOf("hook", "record"), events)
+        // 102 frames recorded and sent; stop at 3,210 ms, audio ends at 3,232, STT returns 300 ms later.
+        assertEquals(DictationRecord(3_264, 3_264, 322, 522, 2), records.single().second)
+    }
+
+    @Test
+    fun transcriptBeforeTheStopIsNotRecordedEvenIfStopIsTappedDuringTheHook() = runTest {
+        // Returns after 5 chunks while still listening, like the Gateway's early `finish`.
+        val stt = object : SpeechToTextProvider {
+            override fun sampleRate(model: String) = 16_000
+
+            override suspend fun transcribe(
+                audio: Flow<ByteArray>,
+                model: String,
+                language: String,
+                timeoutMs: Long,
+                onPartial: (String) -> Unit,
+            ): String {
+                audio.take(5).collect()
+                return "Hi"
+            }
+
+            override fun warmUp() = Unit
+        }
+        val controller = controller(stt, audio = frames, onFinalTranscript = {
+            delay(500)
+            DictationState.Done(it)
+        })
+
+        controller.start()
+        runCurrent()
+        advanceTimeBy(5 * 32L + 100) // The transcript is in; the hook runs, the state is still Listening.
+        controller.stop()
+        advanceTimeBy(1_000)
+
+        assertEquals(DictationState.Done("Hi"), controller.state.value)
+        assertTrue(records.isEmpty())
+    }
+
+    @Test
+    fun skipSilenceBillsOnlyTheSentAudio() = runTest {
+        val controller = controller(FakeStt(rate = 16_000) { "Hi" }, audio = frames, vadModel = speechAt(20..29))
+
+        dictateFrames(controller)
+
+        // Frames 6..81 sent (pre-roll, speech, hangover).
+        val record = records.single().second
+        assertEquals(3_264L, record.recordedMs)
+        assertEquals(76 * 32L, record.billedMs)
+        assertEquals(22L, record.waitMs)
+        assertEquals(22L, record.doneMs)
+    }
+
+    @Test
+    fun speedDividesTheBilledAudio() = runTest {
+        val controller = controller(
+            FakeStt(rate = 16_000) { "Hi" },
+            audio = frames,
+            settings = speed(150),
+            vadModel = speechAt(20..29)
+        )
+
+        dictateFrames(controller)
+
+        assertEquals(76 * 32L * 100 / 150, records.single().second.billedMs)
+    }
+
+    @Test
+    fun providerBilledByStreamTimeBillsTheWholeRecording() = runTest {
+        val controller = controller(
+            FakeStt(rate = 16_000, allowsSpeedUp = false) { "Hi" },
+            audio = frames,
+            settings = speed(200),
+            vadModel = speechAt(20..29)
+        )
+
+        dictateFrames(controller)
+
+        val record = records.single().second
+        assertEquals(3_264L, record.billedMs)
+        assertEquals(record.recordedMs, record.billedMs)
+    }
+
+    @Test
+    fun onDeviceSessionIsRecordedToo() = runTest {
+        val settings = emptyPreferences().toSettings(emptySet()).copy(sttProviderId = Settings.STT_PROVIDER_ON_DEVICE)
+        val controller = controller(FakeStt(rate = 16_000) { "Hi" }, audio = frames, settings = settings)
+
+        dictateFrames(controller)
+
+        assertTrue(records.single().first.sttOnDevice)
+    }
+
+    @Test
+    fun sessionsWithoutInsertedTextAreNotRecorded() = runTest {
+        dictateFrames(controller(FakeStt(rate = 16_000) { "  " }, audio = frames))
+        dictateFrames(controller(FakeStt(rate = 16_000) { throw SttException("OpenAI error: Boom") }, audio = frames))
+        dictateFrames(controller(FakeStt(rate = 16_000) { "Hi" }, audio = frames, vadModel = { 0f }))
+        dictateFrames(
+            controller(FakeStt(rate = 16_000) { "Hi" }, audio = frames, onFinalTranscript = { error("Hook failed") })
+        )
+        val cancelled = controller(FakeStt(rate = 16_000) { "Hi" }, audio = frames)
+        cancelled.start()
+        runCurrent()
+        advanceTimeBy(500)
+        cancelled.cancel()
+        advanceTimeBy(500)
+
+        assertTrue(records.isEmpty())
     }
 
     private companion object {

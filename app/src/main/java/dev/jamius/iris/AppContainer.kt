@@ -24,13 +24,13 @@ import dev.jamius.iris.data.settings.Settings
 import dev.jamius.iris.data.settings.SettingsRepository
 import dev.jamius.iris.dictation.DictationController
 import dev.jamius.iris.dictation.DictationState
+import dev.jamius.iris.dictation.Statistics
 import dev.jamius.iris.stt.SpeechToTextProvider
 import dev.jamius.iris.stt.deepgram.DeepgramFileTranscription
 import dev.jamius.iris.stt.deepgram.DeepgramSpeechToText
 import dev.jamius.iris.stt.ondevice.OnDeviceModelStore
 import dev.jamius.iris.stt.ondevice.OnDeviceRecognizer
 import dev.jamius.iris.stt.ondevice.OnDeviceSpeechToText
-import dev.jamius.iris.stt.ondevice.OnDeviceStats
 import dev.jamius.iris.stt.openai.OpenAiFileTranscription
 import dev.jamius.iris.stt.openai.OpenAiRealtimeSpeechToText
 import dev.jamius.iris.stt.openai.isRealtimeTranscriptionModel
@@ -141,10 +141,11 @@ class AppContainer(context: Context) {
     private val modelsDir = File(context.noBackupFilesDir, "models")
 
     /**
-     * On-device models' speed, wait and load time on this phone, for the Statistics page. "on_device_stats" is
-     * excluded from backup (device-specific numbers).
+     * Dictation statistics (on-device models, cloud providers, cleanup, totals) for the Statistics page. The file name
+     * "on_device_stats" is historical (kept so stored numbers survive); it is excluded from backup (device-specific
+     * numbers).
      */
-    val onDeviceStats = OnDeviceStats(
+    val statistics = Statistics(
         // Throwaway numbers: a corrupt file starts over instead of failing every read and write.
         PreferenceDataStoreFactory.create(corruptionHandler = ReplaceFileCorruptionHandler { emptyPreferences() }) {
             context.preferencesDataStoreFile("on_device_stats")
@@ -154,7 +155,7 @@ class AppContainer(context: Context) {
     )
 
     /** The loaded on-device model (sessions; the service's bubble visibility and memory trims release it). */
-    val onDeviceRecognizer = OnDeviceRecognizer(dir = { File(modelsDir, it) }, onLoaded = onDeviceStats::recordLoad)
+    val onDeviceRecognizer = OnDeviceRecognizer(dir = { File(modelsDir, it) }, onLoaded = statistics::recordLoad)
 
     /** On-device model downloads, for the settings screen and the provider's download check. */
     val onDeviceModels = OnDeviceModelStore(
@@ -171,7 +172,7 @@ class AppContainer(context: Context) {
         onDeviceRecognizer::stream,
         selection = { settingsRepository.settings.first().let { it.onDeviceSttModel to it.sttLanguage } },
         scope = appScope,
-        record = onDeviceStats::recordDictation
+        record = statistics::recordOnDevice
     )
 
     // One pair per region: a provider's URLs are fixed.
@@ -264,5 +265,6 @@ class AppContainer(context: Context) {
         warmUpCleanup = { cleanup(it).warmUp() },
         onFinalTranscript = onFinalTranscript,
         vadModel = sileroVad::newStream,
+        record = statistics::recordDictation,
     )
 }

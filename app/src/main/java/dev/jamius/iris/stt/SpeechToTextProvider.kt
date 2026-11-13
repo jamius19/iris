@@ -27,7 +27,8 @@ interface SpeechToTextProvider {
 
     /**
      * The audio may be sped up (Settings' Speed); false = always sent as recorded (Soniox real-time bills wall-clock
-     * time and wants real-time pace, so a speed-up saves nothing and adds risk).
+     * time and wants real-time pace, so a speed-up saves nothing and adds risk). False also means billed by stream
+     * time: the statistics count the whole recording as billed.
      */
     val allowsSpeedUp: Boolean get() = true
 

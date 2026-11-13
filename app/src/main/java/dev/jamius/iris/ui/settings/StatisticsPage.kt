@@ -13,8 +13,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import dev.jamius.iris.stt.ondevice.ModelStats
+import dev.jamius.iris.dictation.StatsSnapshot
+import dev.jamius.iris.dictation.TYPING_WPM
+import dev.jamius.iris.dictation.Totals
+import dev.jamius.iris.dictation.percentileMs
 import dev.jamius.iris.stt.ondevice.SpeedVerdict
+import dev.jamius.iris.stt.ondevice.median
 import dev.jamius.iris.stt.ondevice.medianWaitMs
 import dev.jamius.iris.stt.ondevice.modelsWithStats
 import dev.jamius.iris.stt.ondevice.speedFactor
@@ -28,29 +32,38 @@ import dev.jamius.iris.ui.components.Text
 import dev.jamius.iris.ui.theme.IrisTheme
 
 /**
- * Statistics: per on-device model, its speed against real time (with a verdict), the median transcription time and
- * the last load time, from its last 20 dictations on this phone; Reset clears them all.
+ * Statistics: the all-time summary card; per on-device model, its speed against real time (with a verdict), the
+ * median transcription time and the last load time; per cloud provider + model, the median transcription time and the
+ * audio sent; per cleanup provider + model, its p75 / p90 time; each from its last 20 samples. Reset clears them all.
  */
 @Composable
-fun StatisticsPage(stats: Map<String, ModelStats>?, onReset: () -> Unit, onBack: () -> Unit) {
+fun StatisticsPage(stats: StatsSnapshot?, onReset: () -> Unit, onBack: () -> Unit) {
     val colors = IrisTheme.colors
     val type = IrisTheme.type
     PageScaffold(title = "Statistics", onBack = onBack) {
         // Null until the first read: no empty state flashes in.
         if (stats == null) return@PageScaffold
-        val models = modelsWithStats(stats)
-        if (models.isEmpty()) {
+        val models = modelsWithStats(stats.onDevice)
+        val cloud = stats.cloud.values.filter { it.samples.isNotEmpty() }.sortedBy { it.title }
+        val cleanup = stats.cleanup.values.filter { it.samplesMs.isNotEmpty() }.sortedBy { it.title }
+        val hasTotals = stats.totals.recordedMs > 0
+        if (models.isEmpty() && cloud.isEmpty() && cleanup.isEmpty() && !hasTotals) {
             Card {
                 Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                     Text("No statistics yet", type.title)
                     Text(
-                        "Dictate with an on-device model to see how fast it runs on this phone.",
+                        "Dictate to see transcription and cleanup times, audio sent and how on-device models run " +
+                            "on this phone.",
                         type.subtitle,
                         color = colors.muted
                     )
                 }
             }
             return@PageScaffold
+        }
+        if (hasTotals) {
+            SummaryCard(stats.totals)
+            Text(TOTALS_HELPER, type.helper, color = colors.muted)
         }
         for ((model, s) in models) {
             Section(model.label) {
@@ -76,8 +89,72 @@ fun StatisticsPage(stats: Map<String, ModelStats>?, onReset: () -> Unit, onBack:
                 Text(statsBasisText(s.samples.size), type.helper, color = colors.muted)
             }
         }
-        Text(SPEED_HELPER, type.helper, color = colors.muted)
+        for (c in cloud) {
+            Section(c.title) {
+                val recordedMs = c.samples.sumOf { it.recordedMs }
+                val billedMs = c.samples.sumOf { it.billedMs }
+                StatRow(
+                    "Transcription Time",
+                    tenthsText(checkNotNull(median(c.samples.map { it.waitMs }))),
+                    colors.text,
+                    "Median time from stopping to the final text."
+                )
+                Separator()
+                StatRow(
+                    "Audio Sent",
+                    minutesText(billedMs),
+                    colors.text,
+                    audioSavedText(savedPercent(recordedMs, billedMs))
+                )
+                Text(statsBasisText(c.samples.size), type.helper, color = colors.muted)
+            }
+        }
+        for (c in cleanup) {
+            Section(c.title) {
+                StatRow(
+                    "Cleanup Time (p75)",
+                    tenthsText(checkNotNull(percentileMs(c.samplesMs, 75))),
+                    colors.text,
+                    "3 in 4 cleanups finished within this."
+                )
+                Separator()
+                StatRow(
+                    "Cleanup Time (p90)",
+                    tenthsText(checkNotNull(percentileMs(c.samplesMs, 90))),
+                    colors.text,
+                    "9 in 10 cleanups finished within this."
+                )
+                Text(statsBasisText(c.samplesMs.size, "cleanup"), type.helper, color = colors.muted)
+            }
+        }
+        if (models.isNotEmpty()) Text(SPEED_HELPER, type.helper, color = colors.muted)
+        if (cloud.isNotEmpty()) Text(CLOUD_HELPER, type.helper, color = colors.muted)
+        if (cleanup.isNotEmpty()) Text(CLEANUP_HELPER, type.helper, color = colors.muted)
         DangerButton("Reset Statistics", onClick = onReset)
+    }
+}
+
+/** The all-time totals on the brand blue (both modes), white text; each figure is read as one item. */
+@Composable
+private fun SummaryCard(totals: Totals) {
+    Card(color = IrisTheme.colors.statsCard) {
+        Row {
+            SummaryFigure(durationText(totals.recordedMs), "Time Transcribed", Modifier.weight(1f))
+            // Net per dictation, so the sum may be negative: shown as "0 s".
+            SummaryFigure(durationText(totals.savedMs), "Time Saved", Modifier.weight(1f))
+        }
+    }
+}
+
+@Composable
+private fun SummaryFigure(value: String, label: String, modifier: Modifier) {
+    val type = IrisTheme.type
+    Column(
+        modifier.semantics(mergeDescendants = true) {},
+        verticalArrangement = Arrangement.spacedBy(3.dp)
+    ) {
+        Text(value, type.pageTitle, color = Color.White)
+        Text(label, type.subtitle, color = Color.White)
     }
 }
 
@@ -93,6 +170,14 @@ private fun StatRow(title: String, value: String, valueColor: Color, subtitle: S
         Text(subtitle, type.subtitle, color = IrisTheme.colors.muted)
     }
 }
+
+private const val TOTALS_HELPER = "Since statistics began or your last reset. Time saved compares dictating with " +
+    "typing the same words at $TYPING_WPM words per minute."
+
+private const val CLOUD_HELPER = "Audio Sent is roughly what the service bills, after Skip Silence and Audio Speed. " +
+    "Soniox real-time bills the whole stream, so nothing is saved there."
+
+private const val CLEANUP_HELPER = "Only cleanups that finished count; failed and timed-out ones are left out."
 
 private const val SPEED_HELPER = "Speed compares how long you spoke with how long the model took to transcribe it. " +
     "At 1.5× or more it keeps up; below 1× the text falls behind you."

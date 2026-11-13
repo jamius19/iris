@@ -95,7 +95,7 @@ fun HomePage(onOpen: (Page) -> Unit) {
         NavCard(
             R.drawable.lucide_gauge,
             "Statistics",
-            "How on-device models run on this phone"
+            "Transcription and cleanup times and usage"
         ) { onOpen(Page.Statistics) }
     }
 }

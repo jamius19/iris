@@ -22,6 +22,7 @@ import androidx.compose.ui.graphics.Color
  * | failure | #EC1664 | #FF5C93 | "Disabled", errors, trash icons, "Not set", "Falls behind" |
  * | enabled | #0061F3 | #5C9DFF | "Enabled" status, "Keeps up" |
  * | warning | #B45309 | #F59E0B | "Borderline" (Statistics) |
+ * | statsCard | #0061F3 | #0061F3 | Statistics summary card, white text (~5.2:1) |
  * | control | #2F3031 | #0B0C0C | dropdown fields and panels, small dark buttons |
  * | controlBorder | none | #3A3D3E | 1 dp outline of controls/panels in dark |
  * | onControl | #FFFFFF | #FFFFFF | text + icons on control |
@@ -58,6 +59,7 @@ data class IrisColors(
     val failure: Color,
     val enabled: Color,
     val warning: Color,
+    val statsCard: Color,
     val control: Color,
     /** [Color.Unspecified] = no outline (light). */
     val controlBorder: Color,
@@ -87,6 +89,7 @@ val LightIrisColors = IrisColors(
     failure = Color(0xFFEC1664),
     enabled = Color(0xFF0061F3),
     warning = Color(0xFFB45309),
+    statsCard = Color(0xFF0061F3),
     control = Color(0xFF2F3031),
     controlBorder = Color.Unspecified,
     onControl = Color(0xFFFFFFFF),
@@ -115,6 +118,7 @@ val DarkIrisColors = IrisColors(
     failure = Color(0xFFFF5C93),
     enabled = Color(0xFF5C9DFF),
     warning = Color(0xFFF59E0B),
+    statsCard = Color(0xFF0061F3),
     control = Color(0xFF0B0C0C),
     controlBorder = Color(0xFF3A3D3E),
     onControl = Color(0xFFFFFFFF),

@@ -6,7 +6,6 @@
 package dev.jamius.iris.ui.settings
 
 import dev.jamius.iris.cleanup.parseProviderOptions
-import dev.jamius.iris.data.settings.CustomCleanupProvider
 import dev.jamius.iris.data.settings.Settings
 import dev.jamius.iris.stt.ondevice.OnDeviceModel
 import dev.jamius.iris.stt.ondevice.SpeedVerdict
@@ -35,25 +34,8 @@ val STT_PROVIDERS = listOf(
     Settings.STT_PROVIDER_SONIOX
 )
 
-fun sttProviderLabel(id: String): String = when (id) {
-    Settings.STT_PROVIDER_ON_DEVICE -> "On device"
-    Settings.STT_PROVIDER_VERCEL_GATEWAY -> "Vercel AI Gateway"
-    Settings.STT_PROVIDER_DEEPGRAM -> "Deepgram"
-    Settings.STT_PROVIDER_SONIOX -> "Soniox"
-    else -> "OpenAI"
-}
-
 /** The built-in cleanup providers in menu order (the custom ones follow). */
 val CLEANUP_PROVIDERS = listOf(Settings.CLEANUP_PROVIDER_VERCEL_GATEWAY, Settings.CLEANUP_PROVIDER_OPENROUTER)
-
-/** Built-ins by name, else the saved custom provider's name; a draft (or a blank name) is "Unnamed Provider". */
-fun cleanupProviderLabel(id: String, custom: List<CustomCleanupProvider>): String = when (id) {
-    Settings.CLEANUP_PROVIDER_VERCEL_GATEWAY -> "Vercel AI Gateway"
-    Settings.CLEANUP_PROVIDER_OPENROUTER -> "OpenRouter"
-    else -> custom.firstOrNull { it.id == id }?.name?.takeIf { it.isNotBlank() } ?: UNNAMED_PROVIDER
-}
-
-const val UNNAMED_PROVIDER = "Unnamed Provider"
 
 /** Why a custom provider's Save can't go ahead, per field; all null = [ok]. */
 data class ProviderDraftErrors(val name: String?, val baseUrl: String?, val apiKey: String?) {
@@ -141,9 +123,39 @@ fun tenthsText(ms: Long): String {
     return "${tenths / 10}.${tenths % 10} s"
 }
 
-/** How many dictations a model's statistics come from. */
-fun statsBasisText(count: Int): String =
-    if (count == 1) "From your last dictation." else "From your last $count dictations."
+/** How many dictations (or cleanups: [noun]) a section's statistics come from. */
+fun statsBasisText(count: Int, noun: String = "dictation"): String =
+    if (count == 1) "From your last $noun." else "From your last $count ${noun}s."
+
+/** Milliseconds as minutes, rounded to tenths: "12.4 min". */
+fun minutesText(ms: Long): String {
+    val tenths = (ms + 3_000) / 6_000
+    return "${tenths / 10}.${tenths % 10} min"
+}
+
+/**
+ * How much less than [recordedMs] was billed, in percent, floored: 0 only when nothing was saved (or no recording),
+ * 100 only when nothing was billed, else 1..99.
+ */
+fun savedPercent(recordedMs: Long, billedMs: Long): Int {
+    if (recordedMs <= 0 || billedMs >= recordedMs) return 0
+    if (billedMs <= 0) return 100
+    return ((recordedMs - billedMs) * 100 / recordedMs).toInt().coerceIn(1, 99)
+}
+
+/** The Audio Sent row's subtitle. */
+fun audioSavedText(percent: Int): String =
+    if (percent > 0) "$percent% less than recorded (Skip Silence, Audio Speed)." else "As recorded: nothing saved."
+
+/** A duration, floored: "35 s", "47 min", "3 h 12 min", "2 h"; a negative one is "0 s". */
+fun durationText(ms: Long): String {
+    val seconds = ms.coerceAtLeast(0) / 1_000
+    if (seconds < 60) return "$seconds s"
+    val minutes = seconds / 60
+    if (minutes < 60) return "$minutes min"
+    val hours = minutes / 60
+    return if (minutes % 60 == 0L) "$hours h" else "$hours h ${minutes % 60} min"
+}
 
 /** The API key field's helper; [sharedWith] names the other page using the same key (the Gateway key). */
 fun apiKeyHelper(isSet: Boolean, sharedWith: String? = null): String {

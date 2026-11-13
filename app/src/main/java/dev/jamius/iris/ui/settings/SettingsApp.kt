@@ -41,8 +41,8 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import dev.jamius.iris.cleanup.GatewayModel
 import dev.jamius.iris.data.settings.CustomCleanupProvider
 import dev.jamius.iris.data.settings.SettingsRepository
+import dev.jamius.iris.dictation.Statistics
 import dev.jamius.iris.stt.ondevice.OnDeviceModelStore
-import dev.jamius.iris.stt.ondevice.OnDeviceStats
 import dev.jamius.iris.stt.soniox.SonioxCatalog
 import dev.jamius.iris.ui.components.Saver
 import dev.jamius.iris.ui.theme.IrisTheme
@@ -66,7 +66,7 @@ fun SettingsApp(
     customModels: suspend (CustomCleanupProvider) -> List<GatewayModel>,
     sonioxCatalog: SonioxCatalog,
     onDeviceModels: OnDeviceModelStore,
-    onDeviceStats: OnDeviceStats,
+    statistics: Statistics,
     favicons: Favicons,
 ) {
     val settings = repository.settings.collectAsState(initial = null).value
@@ -75,7 +75,7 @@ fun SettingsApp(
     // App-level too: downloads outlive the screen.
     val onDeviceState by onDeviceModels.state.collectAsState()
     // Here, not in the page: read before the page slides in, and kept while it's closed. Null until the first read.
-    val statistics = onDeviceStats.stats.collectAsState(initial = null).value
+    val stats = statistics.stats.collectAsState(initial = null).value
     val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
     val catalogs = remember { ModelCatalogs(scope, gatewayModels, openRouterModels, openAiModels, customModels) }
@@ -184,7 +184,7 @@ fun SettingsApp(
                         onBack = back
                     )
                     Page.Appearance -> AppearancePage(settings, repository, saver, onBack = back)
-                    Page.Statistics -> StatisticsPage(statistics, onDeviceStats::reset, onBack = back)
+                    Page.Statistics -> StatisticsPage(stats, statistics::reset, onBack = back)
                 }
             }
         }

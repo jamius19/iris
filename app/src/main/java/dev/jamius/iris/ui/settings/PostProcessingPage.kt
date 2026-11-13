@@ -54,6 +54,7 @@ import dev.jamius.iris.data.settings.CustomCleanupProvider
 import dev.jamius.iris.data.settings.Secret
 import dev.jamius.iris.data.settings.Settings
 import dev.jamius.iris.data.settings.SettingsRepository
+import dev.jamius.iris.data.settings.cleanupProviderLabel
 import dev.jamius.iris.ui.components.ApiKeyField
 import dev.jamius.iris.ui.components.AutosaveTextField
 import dev.jamius.iris.ui.components.BrandIcon

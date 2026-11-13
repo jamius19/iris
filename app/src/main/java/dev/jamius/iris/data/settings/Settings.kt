@@ -226,3 +226,20 @@ data class Settings(
         )
     }
 }
+
+fun sttProviderLabel(id: String): String = when (id) {
+    Settings.STT_PROVIDER_ON_DEVICE -> "On device"
+    Settings.STT_PROVIDER_VERCEL_GATEWAY -> "Vercel AI Gateway"
+    Settings.STT_PROVIDER_DEEPGRAM -> "Deepgram"
+    Settings.STT_PROVIDER_SONIOX -> "Soniox"
+    else -> "OpenAI"
+}
+
+/** Built-ins by name, else the saved custom provider's name; a draft (or a blank name) is "Unnamed Provider". */
+fun cleanupProviderLabel(id: String, custom: List<CustomCleanupProvider>): String = when (id) {
+    Settings.CLEANUP_PROVIDER_VERCEL_GATEWAY -> "Vercel AI Gateway"
+    Settings.CLEANUP_PROVIDER_OPENROUTER -> "OpenRouter"
+    else -> custom.firstOrNull { it.id == id }?.name?.takeIf { it.isNotBlank() } ?: UNNAMED_PROVIDER
+}
+
+const val UNNAMED_PROVIDER = "Unnamed Provider"

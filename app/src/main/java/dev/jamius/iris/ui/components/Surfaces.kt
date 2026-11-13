@@ -49,12 +49,13 @@ import kotlinx.coroutines.flow.collectLatest
 
 /**
  * White rounded card with the design's soft shadow; items 15 dp apart. With [onClick] the whole card is one button
- * (press overlay, merged semantics).
+ * (press overlay, merged semantics). [color] replaces the card colour (e.g. the Statistics summary card).
  */
 @Composable
 fun Card(
     modifier: Modifier = Modifier,
     verticalPadding: Dp = 16.dp,
+    color: Color = IrisTheme.colors.card,
     onClick: (() -> Unit)? = null,
     onClickLabel: String? = null,
     content: @Composable ColumnScope.() -> Unit,
@@ -68,7 +69,7 @@ fun Card(
                 Shadow(radius = 3.1.dp, color = colors.cardShadow, offset = DpOffset(0.dp, 3.dp))
             )
             .clip(CardShape)
-            .background(colors.card)
+            .background(color)
             .then(
                 if (onClick != null) {
                     Modifier.clickable(onClickLabel = onClickLabel, role = Role.Button, onClick = onClick)

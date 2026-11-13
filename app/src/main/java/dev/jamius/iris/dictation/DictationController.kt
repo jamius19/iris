@@ -76,6 +76,8 @@ internal const val ERROR_DISPLAY_MS = 2 * DONE_DISPLAY_MS
  * @param vadModel a new Silero stream (16 kHz frame -> speech probability) for each session with VAD on; it is only
  *   called on [vadContext].
  * @param vadContext where the VAD gate runs (model load and inference: CPU work, off the main thread).
+ * @param record called once per session whose [onFinalTranscript] returned (stopped, non-blank text), with the
+ *   session's settings and its measurements; must return at once. Not for a transcript that arrived before the stop.
  */
 class DictationController(
     private val scope: CoroutineScope,
@@ -87,6 +89,7 @@ class DictationController(
     private val vadModel: () -> (FloatArray) -> Float,
     private val vadContext: CoroutineContext = Dispatchers.Default,
     private val clock: () -> Long = SystemClock::elapsedRealtimeNanos,
+    private val record: (Settings, DictationRecord) -> Unit = { _, _ -> },
 ) {
     private val _state = MutableStateFlow<DictationState>(DictationState.Idle)
     val state: StateFlow<DictationState> = _state.asStateFlow()
@@ -154,6 +157,9 @@ class DictationController(
                 // Keep-alive for a socket while the gate withholds audio (servers may end a stream that gets none).
                 val keepAlive = gate != null && stt.streams
                 var lastSentAt: Long? = null
+                // Applied after the gate and the stop: only sent chunks are stretched, and the tail is flushed at
+                // the stop (after a NO_SPEECH check, so a session without speech sends nothing).
+                val asRecorded = config.sttSpeedPercent == Settings.DEFAULT_STT_SPEED_PERCENT || !stt.allowsSpeedUp
                 val text = coroutineScope {
                     val sessionScope = this
                     // VAD inference is CPU work: off the main thread. Every chunk still comes through (level, stop
@@ -194,9 +200,6 @@ class DictationController(
                         // Nothing to transcribe: fail before the provider pads or commits any audio.
                         if (sentBytes == 0L) throw SttException(NO_SPEECH)
                     }
-                    // After the gate and the stop: only sent chunks are stretched, and the tail is flushed at the
-                    // stop (after a NO_SPEECH check, so a session without speech sends nothing).
-                    val asRecorded = config.sttSpeedPercent == Settings.DEFAULT_STT_SPEED_PERCENT || !stt.allowsSpeedUp
                     val sent = if (asRecorded) chunks else {
                         val speed = config.sttSpeedPercent / 100f
                         var inBytes = 0L
@@ -217,7 +220,29 @@ class DictationController(
                         ::onPartial
                     )
                 }
-                if (text.isBlank()) DictationState.Error(NO_SPEECH) else onFinalTranscript(text)
+                val transcribedAt = clock()
+                // Read now: a transcript that arrives before the stop (the Gateway's early `finish`) has none, and a
+                // stop tapped later, during the hook, must not count.
+                val stop = stoppedAt
+                if (text.isBlank()) {
+                    DictationState.Error(NO_SPEECH)
+                } else {
+                    val done = onFinalTranscript(text)
+                    if (stop != null) {
+                        val recordedMs = ms(recordedBytes, rate)
+                        val sentMs = ms(sentBytes, rate)
+                        // Soniox real-time bills the whole stream; Speed shortens what the others get.
+                        val billedMs = when {
+                            !stt.allowsSpeedUp -> recordedMs
+                            asRecorded -> sentMs
+                            else -> sentMs * 100 / config.sttSpeedPercent
+                        }
+                        val waitMs = (transcribedAt - stop) / NANOS_PER_MS
+                        val doneMs = (clock() - stop) / NANOS_PER_MS
+                        record(config, DictationRecord(recordedMs, billedMs, waitMs, doneMs, wordCount(done.text)))
+                    }
+                    done
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -256,5 +281,6 @@ class DictationController(
 
         /** A chunk of zeros goes to a streaming provider after this long without sent audio. */
         const val KEEP_ALIVE_NANOS = 5_000_000_000L
+        const val NANOS_PER_MS = 1_000_000L
     }
 }
