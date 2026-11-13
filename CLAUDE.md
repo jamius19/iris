@@ -729,18 +729,21 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
   listed for this model" error only when the model's list is known and lacks the saved value, which is still sent;
   helper "Model default lets the provider decide."), "Timeout" slider (1..30 s, "If cleanup takes longer, the
   original text is inserted."), "Provider Options" accordion (collapsed, `rememberSaveable`; header `Role.Button`
-  with "Expand"/"Collapse" click label, "Expanded"/"Collapsed" state, "Not set"/"Set" subtitle, rotating
-  chevron-down; inside a monospace "JSON" text area, placeholder "{ }", validated by `providerOptionsError`, blank
-  clears; hints per provider: Gateway "Sent as providerOptions, e.g. {"gateway": {"order": ["azure", "openai"]}}. See
-  the AI Gateway provider options docs. Leave blank to send none. Stored unencrypted: don't put API keys here.",
-  OpenRouter "Sent as provider (routing), e.g. {"order": ["openai"], "allow_fallbacks": false}. See OpenRouter's
-  provider routing docs. Leave blank to send none."); "Prompts": "Active Prompt" read-only dropdown (picks what
-  cleanup uses AND what is edited below) + outlined trash ("Delete prompt <name>", disabled for the last prompt, no
-  confirmation), "New Prompt +" (`newPromptName`: "New prompt", "New prompt 2", …; the default prompt's text; made
-  active; its Name field gets focus with the text selected), then "Name" and "Prompt" (text area, "Instructions the
-  model gets; your transcript is sent with them.") of the active prompt (`key(id)`; trimmed; blank = error, not
-  saved). Gateway and OpenRouter fields are separate calls (as are the four STT providers' fields), so unsaved input
-  never carries over.
+  with "Expand"/"Collapse" click label, "Expanded"/"Collapsed" state, "No provider option"/"Provider option set"
+  subtitle, rotating chevron-down; its press area (8 dp radius) reaches 12 dp past the text horizontally and 10 dp
+  vertically via a `layout` bleed + inner padding, so the text stays aligned and clear of the clip (the old
+  unpadded header clipped the subtitle's bottom-left on the rounded corner); inside a monospace "JSON" text area,
+  placeholder "{ }", validated by `providerOptionsError`, blank clears; hints per provider: Gateway "Sent as
+  providerOptions, e.g. {"gateway": {"order": ["azure", "openai"]}}. See the AI Gateway provider options docs. Leave
+  blank to send none. Stored unencrypted: don't put API keys here.", OpenRouter "Sent as provider (routing), e.g.
+  {"order": ["openai"], "allow_fallbacks": false}. See OpenRouter's provider routing docs. Leave blank to send
+  none."); "Prompts": "Active Prompt" read-only dropdown (picks what cleanup uses AND what is edited below) +
+  outlined plus ("New prompt", 16 dp Lucide plus in the text colour, same box as the trash; `newPromptName`: "New
+  prompt", "New prompt 2", …; the default prompt's text; made active; its Name field gets focus with the text
+  selected) + outlined trash ("Delete prompt <name>", disabled for the last prompt, no confirmation), then "Name"
+  and "Prompt" (text area, "Instructions the model gets; your transcript is sent with them.") of the active prompt
+  (`key(id)`; trimmed; blank = error, not saved). Gateway and OpenRouter fields are separate calls (as are the four
+  STT providers' fields), so unsaved input never carries over.
 - Appearance: "Text Panel": "Lines" (1..6, "Lines of live text the panel shows.", helper "Notices show at least 4
   lines.") and "Max Width" (30..90 step 10, shown "50%", "Share of the screen width the panel can use.").
 - Autosave (no Save buttons): text fields commit on blur; IME Done, a tap on empty space (page `detectTapGestures`),
@@ -946,11 +949,11 @@ Not covered by unit tests; check on a real device (ideally more than one OEM) af
   under the nav bar; autosave on blur, Done, back (chevron and gesture), home button and rotation (value persisted
   after reopening the page), invalid values (blank model, bad JSON, blank prompt name) keep the error and aren't
   saved; API key: eye toggles visibility, Done saves and clears the input, helper switches to "API key saved…",
-  trash clears it ("Not set" in red); New Prompt focuses the name with the text selected, delete is disabled for the
-  last prompt; a Keystore save failure shows "Couldn't save the API key. Try again." (hard to force: e.g. a device
-  with a broken Keystore); TalkBack reads dropdowns ("<label>, <value>, drop down list, Collapsed"), switches,
-  sliders (name + value, volume keys adjust and save), the back button and the icon buttons' labels; large font
-  scale keeps controls unclipped.
+  trash clears it ("Not set" in red); the plus (New prompt) focuses the name with the text selected, delete is
+  disabled for the last prompt; a Keystore save failure shows "Couldn't save the API key. Try again." (hard to
+  force: e.g. a device with a broken Keystore); TalkBack reads dropdowns ("<label>, <value>, drop down list,
+  Collapsed"), switches, sliders (name + value, volume keys adjust and save), the back button and the icon buttons'
+  labels; large font scale keeps controls unclipped.
 
 ### Emulator / Android MCP
 Checked 2026-11-11 on `emulator-5554` (AVD `Medium_Phone_API_37.0`, API 37, 1080x2400; SDK `K:\Android\SDK`).

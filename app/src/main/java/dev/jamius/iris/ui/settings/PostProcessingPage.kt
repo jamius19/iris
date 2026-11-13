@@ -34,11 +34,13 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.offset
 import dev.jamius.iris.R
 import dev.jamius.iris.cleanup.GatewayModel
 import dev.jamius.iris.data.settings.CleanupPrompt
@@ -62,7 +64,6 @@ import dev.jamius.iris.ui.components.SelectDropdown
 import dev.jamius.iris.ui.components.SelectField
 import dev.jamius.iris.ui.components.Separator
 import dev.jamius.iris.ui.components.SliderGroup
-import dev.jamius.iris.ui.components.SmallButton
 import dev.jamius.iris.ui.components.SwitchRow
 import dev.jamius.iris.ui.components.Text
 import dev.jamius.iris.ui.components.rememberSaveState
@@ -284,17 +285,30 @@ private fun ProviderOptionsField(stored: String, hint: String, onSave: suspend (
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                // The press area reaches past the content by the inner padding, so the text stays aligned with
+                // the card's other items and never touches the rounded clip.
+                .layout { measurable, constraints ->
+                    val x = HEADER_BLEED_X.roundToPx()
+                    val y = HEADER_BLEED_Y.roundToPx()
+                    val placeable = measurable.measure(constraints.offset(horizontal = 2 * x))
+                    layout(placeable.width - 2 * x, placeable.height - 2 * y) { placeable.place(-x, -y) }
+                }
                 .clip(ControlShape)
                 .clickable(role = Role.Button, onClickLabel = if (expanded) "Collapse" else "Expand") {
                     focusManager.clearFocus()
                     expanded = !expanded
                 }
-                .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" },
+                .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" }
+                .padding(horizontal = HEADER_BLEED_X, vertical = HEADER_BLEED_Y),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("Provider Options", type.title)
-                Text(if (stored.isBlank()) "Not set" else "Set", type.helper, color = colors.muted)
+                Text(
+                    if (stored.isBlank()) "No provider option" else "Provider option set",
+                    type.helper,
+                    color = colors.muted
+                )
             }
             Icon(R.drawable.lucide_chevron_down, null, colors.text, Modifier.rotate(chevron))
         }
@@ -320,7 +334,7 @@ private fun ProviderOptionsField(stored: String, hint: String, onSave: suspend (
 }
 
 /**
- * The prompts card: the active prompt (also the one being edited) with delete (not the last one) and "New Prompt",
+ * The prompts card: the active prompt (also the one being edited) with "New prompt" and delete (not the last one),
  * then its name and text, which autosave.
  */
 @Composable
@@ -330,43 +344,47 @@ private fun PromptsCard(settings: Settings, repository: SettingsRepository, save
     val active = settings.activePrompt ?: return
     val pickState = rememberSaveState(saver)
     val nameFocus = remember { FocusRequester() }
-    // Set by "New Prompt": once the new prompt shows, its name field gets focus with the text selected.
+    // Set by "New prompt": once the new prompt shows, its name field gets focus with the text selected.
     var focusNewId by remember { mutableStateOf<String?>(null) }
 
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        FieldGroup("Active Prompt", helper = "Cleanup uses this prompt.", error = pickState.error) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                SelectDropdown(
-                    label = "Active Prompt",
-                    options = settings.prompts,
-                    selected = active,
-                    optionLabel = { it.name },
-                    onSelect = { pickState.save { repository.setActivePrompt(it.id) } },
-                    modifier = Modifier.weight(1f)
-                )
-                IconAction(
-                    R.drawable.lucide_trash,
-                    contentDescription = "Delete prompt ${active.name}",
-                    tint = colors.failure,
-                    // Clears focus first (default), so a pending edit commits before the delete.
-                    onClick = { pickState.save { repository.deletePrompt(active.id) } },
-                    modifier = Modifier.border(1.dp, colors.fieldBorder, ControlShape),
-                    enabled = settings.prompts.size > 1
-                )
-            }
-        }
-        SmallButton("New Prompt", R.drawable.lucide_plus, onClick = {
-            val prompt = CleanupPrompt(
-                UUID.randomUUID().toString(),
-                newPromptName(settings.prompts.map { it.name }),
-                Settings.DEFAULT_PROMPT.systemPrompt
+    FieldGroup("Active Prompt", helper = "Cleanup uses this prompt.", error = pickState.error) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            SelectDropdown(
+                label = "Active Prompt",
+                options = settings.prompts,
+                selected = active,
+                optionLabel = { it.name },
+                onSelect = { pickState.save { repository.setActivePrompt(it.id) } },
+                modifier = Modifier.weight(1f)
             )
-            pickState.save {
-                repository.savePrompt(prompt)
-                repository.setActivePrompt(prompt.id)
-            }
-            focusNewId = prompt.id
-        })
+            IconAction(
+                R.drawable.lucide_plus,
+                contentDescription = "New prompt",
+                tint = colors.text,
+                onClick = {
+                    val prompt = CleanupPrompt(
+                        UUID.randomUUID().toString(),
+                        newPromptName(settings.prompts.map { it.name }),
+                        Settings.DEFAULT_PROMPT.systemPrompt
+                    )
+                    pickState.save {
+                        repository.savePrompt(prompt)
+                        repository.setActivePrompt(prompt.id)
+                    }
+                    focusNewId = prompt.id
+                },
+                modifier = Modifier.border(1.dp, colors.fieldBorder, ControlShape)
+            )
+            IconAction(
+                R.drawable.lucide_trash,
+                contentDescription = "Delete prompt ${active.name}",
+                tint = colors.failure,
+                // Clears focus first (default), so a pending edit commits before the delete.
+                onClick = { pickState.save { repository.deletePrompt(active.id) } },
+                modifier = Modifier.border(1.dp, colors.fieldBorder, ControlShape),
+                enabled = settings.prompts.size > 1
+            )
+        }
     }
     key(active.id) {
         val latest by rememberUpdatedState(active)
@@ -405,3 +423,7 @@ private fun PromptsCard(settings: Settings, repository: SettingsRepository, save
 
 private const val MODEL_LABEL = "Cleanup Model"
 private const val MODEL_HELPER = "Model must support structured output."
+
+/** How far the Provider Options header's press area reaches past its text on each side. */
+private val HEADER_BLEED_X = 12.dp
+private val HEADER_BLEED_Y = 10.dp

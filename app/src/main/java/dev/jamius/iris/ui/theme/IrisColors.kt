@@ -25,7 +25,7 @@ import androidx.compose.ui.graphics.Color
  * | controlBorder | none | #3A3D3E | 1 dp outline of controls/panels in dark |
  * | onControl | #FFFFFF | #FFFFFF | text + icons on control |
  * | onControlMuted | #A9ABAD | #8E9193 | placeholder on control |
- * | buttonText | #FDFDFD | #FDFDFD | Setup / New Prompt text + icon |
+ * | buttonText | #FDFDFD | #FDFDFD | Setup text + icon |
  * | fieldBorder | #D7D7D7 | #3D4142 | outlined text field border |
  * | fieldBorderFocused | #2F3031 | #E8EAEA | focused field border |
  * | servicesDivider | #D6D8DD | #343738 | 1 dp divider in the Home Services card |
