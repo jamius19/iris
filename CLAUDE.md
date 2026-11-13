@@ -999,7 +999,7 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
   Σ decode: >= 1.5 "Keeps up" in `enabled`, >= 1.0 "Borderline" in `warning`, else "Falls behind" in `failure`) with
   `speedFactorText` below ("7.1× faster than you speak", "2.0× slower …", "As fast as you speak" when it rounds to
   1.0; verdict and text both use the factor rounded to one decimal, `roundToTenth`, so 1.45 is "Keeps up" with
-  "1.5×"), "Wait After Stop" (`medianWaitMs`, even count = mean of the middle two; `tenthsText` "4.8 s"; "Median time
+  "1.5×"), "Transcription Time" (`medianWaitMs`, even count = mean of the middle two; `tenthsText` "4.8 s"; "Median time
   from stopping to the final text."), "Model Load" (last load, if known; "Last time the model was loaded into
   memory."), then `statsBasisText` ("From your last dictation." / "From your last N dictations."). Rows are
   `StatRow`s (title + value right, subtitle; merged for TalkBack). Below the sections the speed helper and "Reset
@@ -1235,7 +1235,7 @@ Not covered by unit tests; check on a real device (ideally more than one OEM) af
   "No speech detected" (silence only, Skip Silence on), then a normal one, works likewise; with Skip Silence on at
   Speed >= ~1.6x a phrase's last words show only when the next phrase starts or at stop, the final text is complete.
 - Statistics (CP16): after real dictations (e.g. Nemotron at 1.5x) Speed ≈ the `VAD: sent X ms` total ÷ the
-  `Decoded … in Y ms` totals (≈ 7×), Wait After Stop ≈ the median of the `Timing: stop->final` logs, Model Load = the
+  `Decoded … in Y ms` totals (≈ 7×), Transcription Time ≈ the median of the `Timing: stop->final` logs, Model Load = the
   last `Loaded … in X ms`; a "No speech detected" dictation and a ✕ cancel add nothing; Reset empties the page; stats
   survive an app restart; TalkBack reads each row (title, value, subtitle); light and dark verdict colours.
 - Long Gateway upload: a 10 min Gateway after-stop dictation (VAD off) succeeds; on a 413, reuse `splitAtPauses`

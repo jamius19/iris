@@ -28,8 +28,8 @@ import dev.jamius.iris.ui.components.Text
 import dev.jamius.iris.ui.theme.IrisTheme
 
 /**
- * Statistics: per on-device model, its speed against real time (with a verdict), the median wait after stop and the
- * last load time, from its last 20 dictations on this phone; Reset clears them all.
+ * Statistics: per on-device model, its speed against real time (with a verdict), the median transcription time and
+ * the last load time, from its last 20 dictations on this phone; Reset clears them all.
  */
 @Composable
 fun StatisticsPage(stats: Map<String, ModelStats>?, onReset: () -> Unit, onBack: () -> Unit) {
@@ -64,7 +64,7 @@ fun StatisticsPage(stats: Map<String, ModelStats>?, onReset: () -> Unit, onBack:
                 StatRow("Speed", verdictLabel(verdict), verdictColor, speedFactorText(factor))
                 Separator()
                 StatRow(
-                    "Wait After Stop",
+                    "Transcription Time",
                     tenthsText(checkNotNull(s.medianWaitMs())),
                     colors.text,
                     "Median time from stopping to the final text."
