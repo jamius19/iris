@@ -12,8 +12,10 @@ import dev.jamius.iris.audio.AudioRecorder
 import dev.jamius.iris.audio.SileroVad
 import dev.jamius.iris.cleanup.CleanupProvider
 import dev.jamius.iris.cleanup.GatewayModel
+import dev.jamius.iris.cleanup.compatible.OpenAiCompatibleCleanup
 import dev.jamius.iris.cleanup.openrouter.OpenRouterCleanup
 import dev.jamius.iris.cleanup.vercel.VercelGatewayCleanup
+import dev.jamius.iris.data.settings.CustomCleanupProvider
 import dev.jamius.iris.data.settings.Secret
 import dev.jamius.iris.data.settings.SecretStore
 import dev.jamius.iris.data.settings.Settings
@@ -36,6 +38,7 @@ import dev.jamius.iris.stt.soniox.sonioxRegion
 import dev.jamius.iris.stt.soniox.sonioxStreams
 import dev.jamius.iris.stt.vercel.VercelGatewayFileTranscription
 import dev.jamius.iris.stt.vercel.VercelGatewaySpeechToText
+import dev.jamius.iris.ui.settings.Favicons
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -45,6 +48,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
+import java.io.File
 
 /** Manual DI: app-wide singletons, created once by [IrisApp]. */
 class AppContainer(context: Context) {
@@ -177,15 +181,31 @@ class AppContainer(context: Context) {
         apiKey = { secretStore.get(Secret.OPENROUTER_API_KEY) }
     )
 
-    /** The cleanup provider [settings] select (an unknown id means the Gateway). */
+    // A new instance per call is cheap; it shares the pool, so the warm-up connection is reused.
+    private fun compatibleCleanup(p: CustomCleanupProvider) = OpenAiCompatibleCleanup(
+        httpClient,
+        p.name,
+        p.baseUrl,
+        p.sendJsonSchema,
+        apiKey = { secretStore.get(Secret.customCleanupKey(p.id)) }
+    )
+
+    /** The cleanup provider [settings] select: a custom one, OpenRouter, else the Gateway. */
     fun cleanup(settings: Settings): CleanupProvider =
-        if (settings.cleanupOpenRouter) openRouterCleanup else gatewayCleanup
+        settings.activeCustomCleanup?.let(::compatibleCleanup)
+            ?: if (settings.cleanupOpenRouter) openRouterCleanup else gatewayCleanup
 
     /** Vercel AI Gateway's catalog (cleanup and transcription models), for the settings' model menus. */
     suspend fun gatewayModels(): List<GatewayModel> = gatewayCleanup.listModels()
 
     /** OpenRouter's structured-output chat models, for the settings' cleanup model menu. */
     suspend fun openRouterModels(): List<GatewayModel> = openRouterCleanup.listModels()
+
+    /** A custom provider's models (listed with its key), for the settings' cleanup model menu. */
+    suspend fun customCleanupModels(p: CustomCleanupProvider): List<GatewayModel> = compatibleCleanup(p).listModels()
+
+    /** Custom providers' favicons for the settings' provider menu (the cache dir: evicted icons are refetched). */
+    val favicons = Favicons(httpClient, File(context.cacheDir, "favicons"))
 
     /** One per accessibility service; [scope] is the service's main-thread scope. */
     fun dictationController(

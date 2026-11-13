@@ -8,9 +8,12 @@ package dev.jamius.iris.ui.components
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
@@ -50,6 +53,22 @@ fun Text(
 @Composable
 fun Icon(@DrawableRes id: Int, contentDescription: String?, tint: Color, modifier: Modifier = Modifier) {
     Image(painterResource(id), contentDescription, modifier, colorFilter = ColorFilter.tint(tint))
+}
+
+/**
+ * A 24 dp outlined box (radius 4, no fill) around a provider's icon in the black dropdowns; the 30 % on-control
+ * outline reads on the black control in both themes.
+ */
+@Composable
+fun ProviderIconBox(content: @Composable () -> Unit) {
+    Box(
+        Modifier
+            .size(24.dp)
+            .border(1.dp, IrisTheme.colors.onControl.copy(alpha = 0.3f), RoundedCornerShape(4.dp)),
+        contentAlignment = Alignment.Center
+    ) {
+        content()
+    }
 }
 
 /** The 1 dp outline black controls get in dark mode (none in light). */

@@ -30,6 +30,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -251,13 +252,10 @@ fun ApiKeyField(
     saver: Saver,
 ) {
     val colors = IrisTheme.colors
-    val type = IrisTheme.type
     val focusManager = LocalFocusManager.current
     val state = remember { TextFieldState() }
     var visible by remember { mutableStateOf(false) }
-    var focused by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    val focusRequester = remember { FocusRequester() }
 
     fun commit() {
         val key = state.text.toString().trim()
@@ -275,80 +273,236 @@ fun ApiKeyField(
         ) { onSave(key) }
     }
 
-    val hasInput = state.text.isNotEmpty()
     FieldGroup(
         LABEL_API_KEY,
         helper = if (isSet) setHelper else unsetHelper,
         error = error,
         helperColor = if (isSet) colors.muted else colors.failure
     ) {
+        SecureKeyShell(
+            state = state,
+            storedShown = isSet,
+            placeholder = placeholder,
+            hasError = error != null,
+            visible = visible,
+            onToggleVisible = { visible = !visible },
+            onBlur = ::commit,
+            trashDescription = if (isSet) "Delete saved API key" else null
+        ) {
+            // Discarded before the focus is cleared, so the blur commits nothing.
+            state.clearText()
+            state.undoState.clearHistory()
+            focusManager.clearFocus()
+            saver.save({ error = it }, API_KEY_DELETE_ERROR) { onClear() }
+        }
+    }
+}
+
+/**
+ * The API key box: a [BasicSecureTextField] (the eye shows the input while there is some), display-only dots while
+ * [storedShown] and no input (TalkBack: "Saved"), and a trash ([onTrash]) when [trashDescription] is set. [onBlur]
+ * runs when the field loses focus.
+ */
+@Composable
+private fun SecureKeyShell(
+    state: TextFieldState,
+    storedShown: Boolean,
+    placeholder: String,
+    hasError: Boolean,
+    visible: Boolean,
+    onToggleVisible: () -> Unit,
+    onBlur: () -> Unit,
+    trashDescription: String?,
+    onTrash: () -> Unit,
+) {
+    val colors = IrisTheme.colors
+    val type = IrisTheme.type
+    val focusManager = LocalFocusManager.current
+    var focused by remember { mutableStateOf(false) }
+    val focusRequester = remember { FocusRequester() }
+    val hasInput = state.text.isNotEmpty()
+    FieldShell(
+        focused = focused,
+        hasError = hasError,
+        multiLine = false,
+        focusRequester = focusRequester,
+        hasTrailing = hasInput || trashDescription != null,
+        field = {
+            FieldBox(state, if (storedShown) "" else placeholder, type.field) {
+                // Looks like a filled, masked field; the stored key is never read.
+                if (storedShown && !hasInput) {
+                    Text(SAVED_KEY_DOTS, type.field, Modifier.clearAndSetSemantics {}, maxLines = 1)
+                }
+                BasicSecureTextField(
+                    state = state,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(focusRequester)
+                        .onFocusChanged {
+                            if (focused && !it.isFocused) onBlur()
+                            focused = it.isFocused
+                        }
+                        .semantics {
+                            contentDescription = LABEL_API_KEY
+                            if (storedShown && !hasInput) stateDescription = "Saved"
+                        },
+                    textStyle = type.field.copy(color = colors.text),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Password,
+                        autoCorrectEnabled = false,
+                        imeAction = ImeAction.Done
+                    ),
+                    onKeyboardAction = { focusManager.clearFocus() },
+                    cursorBrush = SolidColor(colors.text),
+                    textObfuscationMode = if (visible) TextObfuscationMode.Visible else TextObfuscationMode.Hidden
+                )
+            }
+        },
+        trailing = {
+            if (hasInput) {
+                IconAction(
+                    if (visible) R.drawable.lucide_eye_off else R.drawable.lucide_eye,
+                    contentDescription = if (visible) "Hide API key" else "Show API key",
+                    tint = colors.text,
+                    width = 28.dp,
+                    iconSize = 16.dp,
+                    clearFocus = false,
+                    onClick = onToggleVisible
+                )
+            }
+            if (trashDescription != null) {
+                IconAction(
+                    R.drawable.lucide_trash,
+                    contentDescription = trashDescription,
+                    tint = colors.failure,
+                    width = 28.dp,
+                    clearFocus = false,
+                    onClick = onTrash
+                )
+            }
+        }
+    )
+}
+
+/** Calls [onEdited] on every text change of [state] (not for its initial text). */
+@Composable
+private fun OnEdited(state: TextFieldState, onEdited: () -> Unit) {
+    val latest by rememberUpdatedState(onEdited)
+    LaunchedEffect(state) {
+        snapshotFlow { state.text.toString() }.drop(1).collect { latest() }
+    }
+}
+
+/**
+ * A single-line text field that only edits [state] (a form draft, saved elsewhere): a trash clears it. [error] shows
+ * in the helper slot; [onEdited] runs on each edit (e.g. to clear the error).
+ */
+@Composable
+fun DraftTextField(
+    label: String,
+    state: TextFieldState,
+    placeholder: String,
+    error: String?,
+    onEdited: () -> Unit,
+    focusRequester: FocusRequester = remember { FocusRequester() },
+    helper: String? = null,
+) {
+    val colors = IrisTheme.colors
+    val type = IrisTheme.type
+    val focusManager = LocalFocusManager.current
+    var focused by remember { mutableStateOf(false) }
+    OnEdited(state, onEdited)
+    val showTrash = state.text.isNotEmpty()
+    FieldGroup(label, helper = helper, error = error) {
         FieldShell(
             focused = focused,
             hasError = error != null,
             multiLine = false,
             focusRequester = focusRequester,
-            hasTrailing = hasInput || isSet,
+            hasTrailing = showTrash,
             field = {
-                FieldBox(state, if (isSet) "" else placeholder, type.field) {
-                    // Looks like a filled, masked field; the stored key is never read.
-                    if (isSet && !hasInput) {
-                        Text(SAVED_KEY_DOTS, type.field, Modifier.clearAndSetSemantics {}, maxLines = 1)
-                    }
-                    BasicSecureTextField(
+                FieldBox(state, placeholder, type.field) {
+                    BasicTextField(
                         state = state,
                         modifier = Modifier
                             .fillMaxWidth()
                             .focusRequester(focusRequester)
-                            .onFocusChanged {
-                                if (focused && !it.isFocused) commit()
-                                focused = it.isFocused
-                            }
-                            .semantics {
-                                contentDescription = LABEL_API_KEY
-                                if (isSet && !hasInput) stateDescription = "Saved"
-                            },
+                            .onFocusChanged { focused = it.isFocused }
+                            .semantics { contentDescription = label },
                         textStyle = type.field.copy(color = colors.text),
                         keyboardOptions = KeyboardOptions(
-                            keyboardType = KeyboardType.Password,
+                            capitalization = KeyboardCapitalization.None,
                             autoCorrectEnabled = false,
                             imeAction = ImeAction.Done
                         ),
                         onKeyboardAction = { focusManager.clearFocus() },
-                        cursorBrush = SolidColor(colors.text),
-                        textObfuscationMode = if (visible) TextObfuscationMode.Visible else TextObfuscationMode.Hidden
+                        lineLimits = TextFieldLineLimits.SingleLine,
+                        cursorBrush = SolidColor(colors.text)
                     )
                 }
             },
             trailing = {
-                if (hasInput) {
-                    IconAction(
-                        if (visible) R.drawable.lucide_eye_off else R.drawable.lucide_eye,
-                        contentDescription = if (visible) "Hide API key" else "Show API key",
-                        tint = colors.text,
-                        width = 28.dp,
-                        iconSize = 16.dp,
-                        clearFocus = false,
-                        onClick = { visible = !visible }
-                    )
-                }
-                if (isSet) {
+                if (showTrash) {
                     IconAction(
                         R.drawable.lucide_trash,
-                        contentDescription = "Delete saved API key",
+                        contentDescription = "Clear $label",
                         tint = colors.failure,
                         width = 28.dp,
                         clearFocus = false,
-                        onClick = {
-                            // Discarded before the focus is cleared, so the blur commits nothing.
-                            state.clearText()
-                            state.undoState.clearHistory()
-                            focusManager.clearFocus()
-                            saver.save({ error = it }, API_KEY_DELETE_ERROR) { onClear() }
-                        }
+                        onClick = { state.clearText() }
                     )
                 }
             }
         )
+    }
+}
+
+/**
+ * The API key of a form draft (saved elsewhere): [state] holds the new key. While [storedShown] (a key is stored and
+ * not marked for removal) and no input, it shows the saved dots. The trash clears the input, or without input calls
+ * [onRemoveStored] (marks the stored key for removal). [error] shows in the helper slot; [onEdited] runs on each edit.
+ */
+@OptIn(ExperimentalFoundationApi::class) // undoState: a cleared key must not come back with undo.
+@Composable
+fun DraftApiKeyField(
+    state: TextFieldState,
+    storedShown: Boolean,
+    onRemoveStored: () -> Unit,
+    error: String?,
+    onEdited: () -> Unit,
+) {
+    val colors = IrisTheme.colors
+    var visible by remember { mutableStateOf(false) }
+    OnEdited(state, onEdited)
+    val hasInput = state.text.isNotEmpty()
+    FieldGroup(
+        LABEL_API_KEY,
+        helper = if (storedShown) "API key saved. Enter a new one to replace it." else "Not set",
+        error = error,
+        helperColor = if (storedShown) colors.muted else colors.failure
+    ) {
+        SecureKeyShell(
+            state = state,
+            storedShown = storedShown,
+            placeholder = "Paste your API key",
+            hasError = error != null,
+            visible = visible,
+            onToggleVisible = { visible = !visible },
+            onBlur = {},
+            trashDescription = when {
+                hasInput -> "Clear API key"
+                storedShown -> "Remove saved API key"
+                else -> null
+            }
+        ) {
+            if (hasInput) {
+                state.clearText()
+                state.undoState.clearHistory()
+                visible = false
+            } else {
+                onRemoveStored()
+            }
+        }
     }
 }
 

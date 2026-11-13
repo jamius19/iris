@@ -13,6 +13,7 @@ import androidx.compose.runtime.setValue
 import dev.jamius.iris.cleanup.CleanupException
 import dev.jamius.iris.cleanup.GatewayModel
 import dev.jamius.iris.cleanup.vercel.isChatModel
+import dev.jamius.iris.data.settings.CustomCleanupProvider
 import dev.jamius.iris.stt.SttException
 import dev.jamius.iris.stt.vercel.isStreamingTranscriptionModel
 import dev.jamius.iris.stt.vercel.isTranscriptionModel
@@ -24,14 +25,15 @@ import kotlinx.coroutines.launch
 /**
  * The settings UI's model lists, in memory only (refetched with the activity), one load at a time each:
  * Vercel AI Gateway's catalog (Gateway STT model, cleanup model and reasoning level), OpenRouter's (its cleanup model
- * and reasoning level) and OpenAI's transcription models (listed with the user's key). Soniox's is app-level
- * (`SonioxCatalog`). Use on the main thread.
+ * and reasoning level), OpenAI's transcription models (listed with the user's key) and one custom cleanup provider's
+ * (its key; one slot, for the selected provider). Soniox's is app-level (`SonioxCatalog`). Use on the main thread.
  */
 class ModelCatalogs(
     private val scope: CoroutineScope,
     private val gatewayList: suspend () -> List<GatewayModel>,
     private val openRouterList: suspend () -> List<GatewayModel>,
     private val openAiList: suspend () -> List<String>,
+    private val customList: suspend (CustomCleanupProvider) -> List<GatewayModel>,
 ) {
     var gatewayModels by mutableStateOf<List<GatewayModel>?>(null)
         private set
@@ -62,6 +64,20 @@ class ModelCatalogs(
     var openAiError by mutableStateOf<String?>(null)
         private set
     private var openAiJob: Job? = null
+
+    var customModels by mutableStateOf<List<GatewayModel>?>(null)
+        private set
+    var customLoading by mutableStateOf(false)
+        private set
+    var customError by mutableStateOf<String?>(null)
+        private set
+    /** The provider the custom slot belongs to. */
+    var customId by mutableStateOf<String?>(null)
+        private set
+    private var customJob: Job? = null
+
+    /** The custom slot's models if they belong to provider [id], else null. */
+    fun customModelsFor(id: String): List<GatewayModel>? = customModels.takeIf { customId == id }
 
     fun loadGateway() {
         if (gatewayLoading) return
@@ -127,6 +143,48 @@ class ModelCatalogs(
         openAiError = null
         openAiModels = null
         if (openAiSelected) loadOpenAi()
+    }
+
+    /**
+     * Loads [p]'s models into the custom slot. Another provider's load is cancelled (its result is never written) and
+     * the slot cleared first; the same provider's running load is left alone.
+     */
+    fun loadCustom(p: CustomCleanupProvider) {
+        if (customId != p.id) clearCustom()
+        if (customLoading) return
+        customId = p.id
+        customLoading = true
+        customError = null
+        customJob = scope.launch {
+            try {
+                customModels = customList(p)
+            } catch (e: CleanupException) {
+                customError = e.message
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // E.g. the stored key failed to decrypt. The exception never carries the key.
+                Log.w(TAG, "Loading custom provider models failed", e)
+                customError = "Couldn't load models"
+            } finally {
+                if (customJob === coroutineContext[Job]) customLoading = false
+            }
+        }
+    }
+
+    /** [p]'s URL or key may have changed: drops its list and reloads it. */
+    fun onCustomProviderSaved(p: CustomCleanupProvider) {
+        clearCustom()
+        loadCustom(p)
+    }
+
+    private fun clearCustom() {
+        customJob?.cancel()
+        customJob = null
+        customId = null
+        customLoading = false
+        customError = null
+        customModels = null
     }
 }
 

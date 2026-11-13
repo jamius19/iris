@@ -24,7 +24,9 @@ class MainActivity : ComponentActivity() {
                     gatewayModels = container::gatewayModels,
                     openRouterModels = container::openRouterModels,
                     openAiModels = container::openAiTranscriptionModels,
-                    sonioxCatalog = container.sonioxCatalog
+                    customModels = container::customCleanupModels,
+                    sonioxCatalog = container.sonioxCatalog,
+                    favicons = container.favicons
                 )
             }
         }

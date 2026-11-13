@@ -14,6 +14,29 @@ data class CleanupPrompt(
     val systemPrompt: String,
 )
 
+/**
+ * A user-added cleanup provider (OpenAI-compatible Chat Completions). Its key is the secret
+ * `Secret.customCleanupKey(id)`.
+ */
+@Serializable
+data class CustomCleanupProvider(
+    /** A UUID; also [Settings.cleanupProviderId] when selected. */
+    val id: String,
+    val type: String = TYPE_OPENAI_COMPATIBLE,
+    val name: String,
+    /** Trimmed, no trailing '/', https; `/chat/completions` and `/models` are appended. */
+    val baseUrl: String,
+    val model: String = "",
+    /** Null = model default (not sent): many servers reject `reasoning_effort`. */
+    val reasoningEffort: String? = null,
+    /** Requests structured output (strict JSON schema); false = the reply is inserted as-is. */
+    val sendJsonSchema: Boolean = true,
+) {
+    companion object {
+        const val TYPE_OPENAI_COMPATIBLE = "openai-compatible"
+    }
+}
+
 enum class BubbleSide { LEFT, RIGHT }
 
 data class Settings(
@@ -69,6 +92,10 @@ data class Settings(
     val deepgramKeySet: Boolean,
     val sonioxKeySet: Boolean,
     val openRouterKeySet: Boolean,
+    /** User-added cleanup providers, in creation order. */
+    val customCleanupProviders: List<CustomCleanupProvider>,
+    /** Ids of [customCleanupProviders] that have a stored key. */
+    val customCleanupKeyIds: Set<String>,
     /** Screen edge the overlay bubble is snapped to. */
     val bubbleSide: BubbleSide,
     /** Bubble's vertical position as a fraction (0 = top, 1 = bottom) of the usable screen height. */
@@ -109,16 +136,36 @@ data class Settings(
             else -> openAiKeySet
         }
 
-    /** Cleanup goes through OpenRouter (else Vercel AI Gateway; an unknown id means the Gateway). */
+    /**
+     * Cleanup goes through OpenRouter (else a custom provider, see [activeCustomCleanup], or Vercel AI Gateway; an
+     * unknown id is mapped to the Gateway when read).
+     */
     val cleanupOpenRouter: Boolean get() = cleanupProviderId == CLEANUP_PROVIDER_OPENROUTER
 
-    val activeCleanupModel: String get() = if (cleanupOpenRouter) openRouterCleanupModel else cleanupModel
+    /** The selected custom cleanup provider, or null for a built-in one. */
+    val activeCustomCleanup: CustomCleanupProvider?
+        get() = customCleanupProviders.firstOrNull { it.id == cleanupProviderId }
+
+    val activeCleanupModel: String
+        get() = activeCustomCleanup?.model ?: if (cleanupOpenRouter) openRouterCleanupModel else cleanupModel
 
     val activeCleanupReasoningEffort: String?
-        get() = if (cleanupOpenRouter) openRouterCleanupReasoningEffort else cleanupReasoningEffort
+        get() {
+            val custom = activeCustomCleanup
+            return when {
+                custom != null -> custom.reasoningEffort
+                cleanupOpenRouter -> openRouterCleanupReasoningEffort
+                else -> cleanupReasoningEffort
+            }
+        }
 
+    /** Custom providers have no provider options (""). */
     val activeCleanupProviderOptions: String
-        get() = if (cleanupOpenRouter) openRouterCleanupProviderOptions else cleanupProviderOptions
+        get() = when {
+            activeCustomCleanup != null -> ""
+            cleanupOpenRouter -> openRouterCleanupProviderOptions
+            else -> cleanupProviderOptions
+        }
 
     companion object {
         const val STT_PROVIDER_OPENAI = "openai"

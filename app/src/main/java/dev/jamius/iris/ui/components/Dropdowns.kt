@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -222,9 +223,18 @@ private fun DropdownPanel(
     }
 }
 
-/** One panel row: text (medium when selected), then the "Streams" radio icon and the selected check. */
+/**
+ * One panel row: [leading] (if any), text (medium when selected), then the "Streams" radio icon and the selected
+ * check.
+ */
 @Composable
-private fun PanelItem(text: String, selected: Boolean, streams: Boolean, onClick: () -> Unit) {
+private fun PanelItem(
+    text: String,
+    selected: Boolean,
+    streams: Boolean,
+    leading: (@Composable () -> Unit)? = null,
+    onClick: () -> Unit,
+) {
     val colors = IrisTheme.colors
     val type = IrisTheme.type
     Row(
@@ -242,6 +252,7 @@ private fun PanelItem(text: String, selected: Boolean, streams: Boolean, onClick
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        leading?.invoke()
         Text(
             text,
             if (selected) type.menuItemSelected else type.menuItem,
@@ -257,7 +268,8 @@ private fun PanelItem(text: String, selected: Boolean, streams: Boolean, onClick
 
 /**
  * Read-only black dropdown (fixed choices): shows [selected]; a pick closes the panel and calls [onSelect] if it
- * changed. TalkBack: "[label], <value>, Collapsed/Expanded, drop down list".
+ * changed. [optionIcon] (if any) is drawn before each option's text, in the field and the panel. TalkBack: "[label],
+ * <value>, Collapsed/Expanded, drop down list".
  */
 @Composable
 fun <T> SelectDropdown(
@@ -267,6 +279,7 @@ fun <T> SelectDropdown(
     optionLabel: (T) -> String,
     onSelect: (T) -> Unit,
     modifier: Modifier = Modifier,
+    optionIcon: (@Composable (T) -> Unit)? = null,
 ) {
     val colors = IrisTheme.colors
     val focusManager = LocalFocusManager.current
@@ -292,6 +305,10 @@ fun <T> SelectDropdown(
                     stateDescription = if (open) "Expanded" else "Collapsed"
                 }
         ) {
+            if (optionIcon != null) {
+                optionIcon(selected)
+                Spacer(Modifier.width(8.dp))
+            }
             Text(
                 optionLabel(selected),
                 IrisTheme.type.button,
@@ -319,7 +336,12 @@ fun <T> SelectDropdown(
             initialIndex = options.indexOf(selected)
         ) {
             items(options) { option ->
-                PanelItem(optionLabel(option), option == selected, streams = false) {
+                PanelItem(
+                    optionLabel(option),
+                    option == selected,
+                    streams = false,
+                    leading = optionIcon?.let { { it(option) } }
+                ) {
                     open = false
                     if (option != selected) onSelect(option)
                 }

@@ -9,6 +9,7 @@ import androidx.annotation.DrawableRes
 import androidx.compose.foundation.Indication
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -31,9 +32,14 @@ import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import dev.jamius.iris.ui.theme.IrisTheme
 
-/** The design's small dark button ("Setup →"): hugs its text + 11 dp trailing icon. */
+/** The design's small dark button ("Setup →"): hugs its text + 11 dp trailing icon (if any). */
 @Composable
-fun SmallButton(text: String, @DrawableRes trailingIcon: Int, onClick: () -> Unit, modifier: Modifier = Modifier) {
+fun SmallButton(
+    text: String,
+    @DrawableRes trailingIcon: Int? = null,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val colors = IrisTheme.colors
     val focusManager = LocalFocusManager.current
     Row(
@@ -59,7 +65,28 @@ fun SmallButton(text: String, @DrawableRes trailingIcon: Int, onClick: () -> Uni
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(text, IrisTheme.type.button, color = colors.buttonText)
-        Icon(trailingIcon, contentDescription = null, tint = colors.buttonText)
+        trailingIcon?.let { Icon(it, contentDescription = null, tint = colors.buttonText) }
+    }
+}
+
+/** A destructive action: [SmallButton]'s shape and padding, no fill, failure-coloured outline and text. */
+@Composable
+fun DangerButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val colors = IrisTheme.colors
+    val focusManager = LocalFocusManager.current
+    Box(
+        modifier = modifier
+            .heightIn(min = 32.dp)
+            .clip(ControlShape)
+            .border(1.dp, colors.failure, ControlShape)
+            .clickable(role = Role.Button) {
+                focusManager.clearFocus()
+                onClick()
+            }
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(text, IrisTheme.type.button, color = colors.failure)
     }
 }
 

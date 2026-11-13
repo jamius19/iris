@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import dev.jamius.iris.cleanup.GatewayModel
+import dev.jamius.iris.data.settings.CustomCleanupProvider
 import dev.jamius.iris.data.settings.SettingsRepository
 import dev.jamius.iris.stt.soniox.SonioxCatalog
 import dev.jamius.iris.ui.components.Saver
@@ -60,19 +61,22 @@ fun SettingsApp(
     gatewayModels: suspend () -> List<GatewayModel>,
     openRouterModels: suspend () -> List<GatewayModel>,
     openAiModels: suspend () -> List<String>,
+    customModels: suspend (CustomCleanupProvider) -> List<GatewayModel>,
     sonioxCatalog: SonioxCatalog,
+    favicons: Favicons,
 ) {
     val settings = repository.settings.collectAsState(initial = null).value
     // App-level (sessions use it too); it reloads itself when the Soniox key or region changes.
     val sonioxState by sonioxCatalog.state.collectAsState()
     val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
-    val catalogs = remember { ModelCatalogs(scope, gatewayModels, openRouterModels, openAiModels) }
+    val catalogs = remember { ModelCatalogs(scope, gatewayModels, openRouterModels, openAiModels, customModels) }
 
     // Gateway catalog: when the app opens with Gateway cleanup or Gateway transcription on, and when either is turned
     // on before it has loaded.
     val cleanupEnabled = settings?.cleanupEnabled == true
-    val cleanupGateway = cleanupEnabled && settings?.cleanupOpenRouter != true
+    val custom = settings?.activeCustomCleanup
+    val cleanupGateway = cleanupEnabled && settings?.cleanupOpenRouter != true && custom == null
     val sttGateway = settings?.sttGateway == true
     LaunchedEffect(cleanupGateway, sttGateway) {
         if ((cleanupGateway || sttGateway) && catalogs.gatewayModels == null) catalogs.loadGateway()
@@ -81,6 +85,10 @@ fun SettingsApp(
     val cleanupOpenRouter = cleanupEnabled && settings?.cleanupOpenRouter == true
     LaunchedEffect(cleanupOpenRouter) {
         if (cleanupOpenRouter && catalogs.openRouterModels == null) catalogs.loadOpenRouter()
+    }
+    // The selected custom provider's list (with its key): when it is selected with cleanup on.
+    LaunchedEffect(cleanupEnabled, custom?.id) {
+        if (cleanupEnabled && custom != null && catalogs.customModelsFor(custom.id) == null) catalogs.loadCustom(custom)
     }
     // OpenAI list: when OpenAI transcription is selected. Without a key nothing is requested and the error asks for
     // one.
@@ -156,7 +164,14 @@ fun SettingsApp(
                         sonioxCatalog,
                         onBack = back
                     )
-                    Page.PostProcessing -> PostProcessingPage(settings, repository, saver, catalogs, onBack = back)
+                    Page.PostProcessing -> PostProcessingPage(
+                        settings,
+                        repository,
+                        saver,
+                        catalogs,
+                        favicons,
+                        onBack = back
+                    )
                     Page.Appearance -> AppearancePage(settings, repository, saver, onBack = back)
                 }
             }

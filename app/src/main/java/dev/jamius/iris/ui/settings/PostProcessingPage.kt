@@ -12,13 +12,18 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.foundation.text.input.clearText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -34,8 +39,10 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -44,6 +51,7 @@ import androidx.compose.ui.unit.offset
 import dev.jamius.iris.R
 import dev.jamius.iris.cleanup.GatewayModel
 import dev.jamius.iris.data.settings.CleanupPrompt
+import dev.jamius.iris.data.settings.CustomCleanupProvider
 import dev.jamius.iris.data.settings.Secret
 import dev.jamius.iris.data.settings.Settings
 import dev.jamius.iris.data.settings.SettingsRepository
@@ -53,18 +61,23 @@ import dev.jamius.iris.ui.components.Card
 import dev.jamius.iris.ui.components.ControlHeight
 import dev.jamius.iris.ui.components.ControlShape
 import dev.jamius.iris.ui.components.DISABLED_ALPHA
+import dev.jamius.iris.ui.components.DangerButton
+import dev.jamius.iris.ui.components.DraftApiKeyField
+import dev.jamius.iris.ui.components.DraftTextField
 import dev.jamius.iris.ui.components.FieldGroup
 import dev.jamius.iris.ui.components.Icon
 import dev.jamius.iris.ui.components.IconAction
 import dev.jamius.iris.ui.components.IconRow
 import dev.jamius.iris.ui.components.ModelCombobox
 import dev.jamius.iris.ui.components.PageScaffold
+import dev.jamius.iris.ui.components.ProviderIconBox
 import dev.jamius.iris.ui.components.Saver
 import dev.jamius.iris.ui.components.Section
 import dev.jamius.iris.ui.components.SelectDropdown
 import dev.jamius.iris.ui.components.SelectField
 import dev.jamius.iris.ui.components.Separator
 import dev.jamius.iris.ui.components.SliderGroup
+import dev.jamius.iris.ui.components.SmallButton
 import dev.jamius.iris.ui.components.SwitchRow
 import dev.jamius.iris.ui.components.Text
 import dev.jamius.iris.ui.components.rememberSaveState
@@ -72,8 +85,10 @@ import dev.jamius.iris.ui.theme.IrisTheme
 import java.util.UUID
 
 /**
- * Post Processing Provider: the AI Cleanup switch, then (dimmed while it's off, still editable) the provider, its
- * key, model, reasoning level, timeout and provider options, and the prompts.
+ * Post Processing Provider: the AI Cleanup switch, then (dimmed while it's off, still editable) the provider (plus a
+ * new custom one), its key, model, reasoning level, timeout and provider options, and the prompts. A new custom
+ * provider is an in-memory draft until saved (never used for cleanup); picking another provider or leaving the page
+ * discards it.
  */
 @Composable
 fun PostProcessingPage(
@@ -81,12 +96,21 @@ fun PostProcessingPage(
     repository: SettingsRepository,
     saver: Saver,
     catalogs: ModelCatalogs,
+    favicons: Favicons,
     onBack: () -> Unit,
 ) {
-    val provider = if (settings.cleanupOpenRouter) Settings.CLEANUP_PROVIDER_OPENROUTER
-    else Settings.CLEANUP_PROVIDER_VERCEL_GATEWAY
+    val colors = IrisTheme.colors
     // Not disabled, so cleanup can be configured before it is turned on; dimmed to show it is inactive.
     val dim by animateFloatAsState(if (settings.cleanupEnabled) 1f else DISABLED_ALPHA, tween(150))
+    val pickState = rememberSaveState(saver)
+    var newDraft by remember { mutableStateOf<CustomProviderForm?>(null) }
+    val savedIds = settings.customCleanupProviders.map { it.id }
+    // Once saved, the draft is the saved provider (dropped here, not on the save result, which can come before the
+    // new settings: the previous provider would flash).
+    val draft = newDraft?.takeIf { it.id !in savedIds }
+    LaunchedEffect(draft) { if (draft == null) newDraft = null }
+    val selectedId = draft?.id ?: settings.cleanupProviderId
+    val custom = settings.activeCustomCleanup
 
     PageScaffold(title = "Post Processing Provider", onBack = onBack) {
         Card(verticalPadding = 15.dp) {
@@ -102,21 +126,114 @@ fun PostProcessingPage(
         Column(Modifier.alpha(dim), verticalArrangement = Arrangement.spacedBy(15.dp)) {
             Card(verticalPadding = 15.dp) {
                 IconRow(R.drawable.lucide_cloud, iconTopPadding = 0.dp) {
-                    SelectField(
-                        label = "Post Processing Provider",
-                        options = CLEANUP_PROVIDERS,
-                        selected = provider,
-                        optionLabel = ::cleanupProviderLabel,
-                        onSave = { repository.setCleanupProvider(it) },
-                        saver = saver,
-                        spacing = 9.dp
-                    )
+                    FieldGroup("Post Processing Provider", error = pickState.error, spacing = 9.dp) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            SelectDropdown(
+                                label = "Post Processing Provider",
+                                options = CLEANUP_PROVIDERS + savedIds + listOfNotNull(draft?.id),
+                                selected = selectedId,
+                                optionLabel = { cleanupProviderLabel(it, settings.customCleanupProviders) },
+                                onSelect = {
+                                    newDraft = null
+                                    if (it != settings.cleanupProviderId) {
+                                        pickState.save { repository.setCleanupProvider(it) }
+                                    }
+                                },
+                                modifier = Modifier.weight(1f),
+                                optionIcon = { ProviderIconBox { ProviderIcon(it, settings, favicons) } }
+                            )
+                            IconAction(
+                                R.drawable.lucide_plus,
+                                contentDescription = "New provider",
+                                tint = colors.text,
+                                onClick = {
+                                    if (draft == null) {
+                                        newDraft = CustomProviderForm(UUID.randomUUID().toString(), isNew = true)
+                                    } else {
+                                        draft.nameFocus.requestFocus()
+                                    }
+                                },
+                                modifier = Modifier.border(1.dp, colors.fieldBorder, ControlShape),
+                                width = ControlHeight
+                            )
+                        }
+                    }
                 }
             }
             // Separate calls per provider, so unsaved input and menu state never carry over.
-            if (settings.cleanupOpenRouter) {
+            if (draft != null) {
+                key(draft.id) {
+                    Section("Provider Settings") {
+                        CustomProviderSettings(draft, keyStored = false, repository, saver, catalogs)
+                    }
+                    LaunchedEffect(Unit) { draft.nameFocus.requestFocus() }
+                }
+            } else if (custom != null) {
+                key(custom.id) {
+                    val form = remember { CustomProviderForm(custom.id, isNew = false, custom.name, custom.baseUrl) }
+                    val ownCatalog = catalogs.customId == custom.id
+                    ProviderSections(
+                        providerSettings = {
+                            CustomProviderSettings(
+                                form,
+                                keyStored = custom.id in settings.customCleanupKeyIds,
+                                repository,
+                                saver,
+                                catalogs,
+                                storedBaseUrl = custom.baseUrl
+                            )
+                        },
+                        modelField = {
+                            ModelCombobox(
+                                label = MODEL_LABEL,
+                                stored = custom.model,
+                                models = catalogs.customModelsFor(custom.id)?.map { it.id },
+                                loading = ownCatalog && catalogs.customLoading,
+                                loadError = catalogs.customError.takeIf { ownCatalog },
+                                helper = "Must support structured output while Send JSON Schema is on.",
+                                onLoad = { catalogs.loadCustom(custom) },
+                                onSave = { model ->
+                                    repository.updateCustomCleanupProvider(custom.id) { it.copy(model = model) }
+                                },
+                                saver = saver
+                            )
+                        },
+                        reasoningField = {
+                            ReasoningField(
+                                value = custom.reasoningEffort,
+                                model = custom.model,
+                                catalog = catalogs.customModelsFor(custom.id),
+                                onSave = { effort ->
+                                    repository.updateCustomCleanupProvider(custom.id) {
+                                        it.copy(reasoningEffort = effort)
+                                    }
+                                },
+                                saver = saver
+                            )
+                        },
+                        settings = settings,
+                        repository = repository,
+                        saver = saver,
+                        extraField = {
+                            SwitchRow(
+                                title = "Send JSON Schema",
+                                subtitle = "Requests structured output (strict JSON schema). Off: the reply is " +
+                                    "inserted, minus a leading <think> block.",
+                                checked = custom.sendJsonSchema,
+                                onSave = { on ->
+                                    repository.updateCustomCleanupProvider(custom.id) { it.copy(sendJsonSchema = on) }
+                                },
+                                saver = saver
+                            )
+                        }
+                    )
+                }
+            } else if (settings.cleanupOpenRouter) {
                 ProviderSections(
-                    keyField = {
+                    providerSettings = {
                         ApiKeyField(
                             isSet = settings.openRouterKeySet,
                             placeholder = "sk-or-…",
@@ -152,7 +269,7 @@ fun PostProcessingPage(
                     settings = settings,
                     repository = repository,
                     saver = saver,
-                    optionsField = {
+                    extraField = {
                         ProviderOptionsField(
                             stored = settings.openRouterCleanupProviderOptions,
                             hint = OPENROUTER_OPTIONS_HINT,
@@ -163,7 +280,7 @@ fun PostProcessingPage(
                 )
             } else {
                 ProviderSections(
-                    keyField = {
+                    providerSettings = {
                         ApiKeyField(
                             isSet = settings.gatewayKeySet,
                             placeholder = "Paste your API key",
@@ -199,7 +316,7 @@ fun PostProcessingPage(
                     settings = settings,
                     repository = repository,
                     saver = saver,
-                    optionsField = {
+                    extraField = {
                         ProviderOptionsField(
                             stored = settings.cleanupProviderOptions,
                             hint = GATEWAY_OPTIONS_HINT,
@@ -214,18 +331,146 @@ fun PostProcessingPage(
     }
 }
 
-/** "Provider Settings" (the key) and "Model Settings" (model, reasoning, timeout, provider options). */
+/**
+ * A custom provider's Provider Settings form (type, name, base URL, key): a draft for saved providers too, committed
+ * by Save; the key trash only marks a stored key for removal (Save then needs a new key).
+ */
+private class CustomProviderForm(val id: String, val isNew: Boolean, name: String = "", baseUrl: String = "") {
+    val name = TextFieldState(name)
+    val baseUrl = TextFieldState(baseUrl)
+    val key = TextFieldState()
+    val nameFocus = FocusRequester()
+    var type by mutableStateOf(CustomCleanupProvider.TYPE_OPENAI_COMPATIBLE)
+    var removeStoredKey by mutableStateOf(false)
+    var errors by mutableStateOf(ProviderDraftErrors(null, null, null))
+}
+
+/**
+ * The custom provider form's fields, then Save (checks, saves and selects the provider) and, for a saved provider,
+ * Delete Provider (with its key, no confirmation; the Gateway is selected). [keyStored]: the provider has a key.
+ * [storedBaseUrl]: the saved provider's base URL (null for a new one); Save needs a new key if the host changes.
+ */
+@Composable
+private fun CustomProviderSettings(
+    form: CustomProviderForm,
+    keyStored: Boolean,
+    repository: SettingsRepository,
+    saver: Saver,
+    catalogs: ModelCatalogs,
+    storedBaseUrl: String? = null,
+) {
+    val colors = IrisTheme.colors
+    val saveState = rememberSaveState(saver)
+    val keyShown = keyStored && !form.removeStoredKey
+
+    fun save() {
+        val name = form.name.text.toString().trim()
+        val baseUrl = form.baseUrl.text.toString().trim()
+        val keyInput = form.key.text.toString()
+        // A new host needs a new key: the stored one must never be sent to another server.
+        val keyUsable = keyShown && (storedBaseUrl == null || sameHost(baseUrl, storedBaseUrl))
+        form.errors = providerDraftErrors(name, baseUrl, keyInput, keyUsable)
+        if (!form.errors.ok) return
+        saver.save(
+            onResult = {
+                saveState.error = it
+                if (it == null) {
+                    form.key.clearText()
+                    form.removeStoredKey = false
+                    catalogs.onCustomProviderSaved(
+                        CustomCleanupProvider(id = form.id, name = name, baseUrl = baseUrl.trimEnd('/'))
+                    )
+                }
+            }
+        ) { repository.saveCustomCleanupProvider(form.id, name, baseUrl, keyInput.ifBlank { null }) }
+    }
+
+    FieldGroup("Provider Type") {
+        SelectDropdown(
+            label = "Provider Type",
+            options = listOf(CustomCleanupProvider.TYPE_OPENAI_COMPATIBLE),
+            selected = form.type,
+            optionLabel = { "OpenAI-compatible" },
+            onSelect = { form.type = it }
+        )
+    }
+    Separator()
+    DraftTextField(
+        label = "Provider Name",
+        state = form.name,
+        placeholder = "My provider",
+        error = form.errors.name,
+        onEdited = { form.errors = form.errors.copy(name = null) },
+        focusRequester = form.nameFocus
+    )
+    Separator()
+    DraftTextField(
+        label = "Provider Base URL",
+        state = form.baseUrl,
+        placeholder = "https://api.example.com/v1",
+        error = form.errors.baseUrl,
+        onEdited = { form.errors = form.errors.copy(baseUrl = null) },
+        helper = "Include the version path; /chat/completions and /models are appended."
+    )
+    Separator()
+    DraftApiKeyField(
+        state = form.key,
+        storedShown = keyShown,
+        onRemoveStored = { form.removeStoredKey = true },
+        error = form.errors.apiKey,
+        onEdited = { form.errors = form.errors.copy(apiKey = null) }
+    )
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            SmallButton("Save", onClick = ::save)
+            if (!form.isNew) {
+                DangerButton(
+                    "Delete Provider",
+                    onClick = { saveState.save { repository.deleteCustomCleanupProvider(form.id) } }
+                )
+            }
+        }
+        saveState.error?.let { Text(it, IrisTheme.type.helper, color = colors.failure) }
+    }
+}
+
+/** A provider's icon in the provider menu: the brand marks, a custom provider's favicon, else the cloud. */
+@Composable
+private fun ProviderIcon(id: String, settings: Settings, favicons: Favicons) {
+    val brand = when (id) {
+        Settings.CLEANUP_PROVIDER_VERCEL_GATEWAY -> R.drawable.provider_vercel
+        Settings.CLEANUP_PROVIDER_OPENROUTER -> R.drawable.provider_openrouter
+        else -> null
+    }
+    // Images, not Icon: Icon always tints.
+    if (brand != null) {
+        Image(painterResource(brand), null, Modifier.size(14.dp), contentScale = ContentScale.Fit)
+        return
+    }
+    val favicon = settings.customCleanupProviders.firstOrNull { it.id == id }
+        ?.let { rememberFavicon(it.baseUrl, favicons) }
+    if (favicon != null) {
+        Image(favicon, null, Modifier.size(14.dp), contentScale = ContentScale.Fit)
+    } else {
+        Icon(R.drawable.lucide_cloud, null, IrisTheme.colors.onControl, Modifier.size(14.dp))
+    }
+}
+
+/**
+ * "Provider Settings" (the key, or a custom provider's form) and "Model Settings" (model, reasoning, timeout, and
+ * [extraField] if any).
+ */
 @Composable
 private fun ProviderSections(
-    keyField: @Composable () -> Unit,
+    providerSettings: @Composable ColumnScope.() -> Unit,
     modelField: @Composable () -> Unit,
     reasoningField: @Composable () -> Unit,
     settings: Settings,
     repository: SettingsRepository,
     saver: Saver,
-    optionsField: @Composable () -> Unit,
+    extraField: (@Composable () -> Unit)? = null,
 ) {
-    Section("Provider Settings") { keyField() }
+    Section("Provider Settings", providerSettings)
     Section("Model Settings") {
         modelField()
         Separator()
@@ -241,8 +486,10 @@ private fun ProviderSections(
             onSave = { repository.setCleanupTimeoutSeconds(it) },
             saver = saver
         )
-        Separator()
-        optionsField()
+        if (extraField != null) {
+            Separator()
+            extraField()
+        }
     }
 }
 

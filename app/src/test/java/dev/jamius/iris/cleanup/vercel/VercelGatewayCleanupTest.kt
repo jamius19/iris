@@ -197,6 +197,17 @@ class VercelGatewayCleanupTest {
         }
     }
 
+    @Test
+    fun httpErrorMessageNamesTheService() {
+        val error = """{"error":{"message":"Bad model"}}"""
+        assertEquals("Groq rejected the API key. Check it in Iris settings.", httpErrorMessage(403, "", "Groq"))
+        assertEquals("Groq rate limit or quota reached", httpErrorMessage(429, "", "Groq"))
+        assertEquals("Groq server error (HTTP 502)", httpErrorMessage(502, "", "Groq"))
+        assertEquals("Groq error: Bad model", httpErrorMessage(400, error, "Groq"))
+        assertEquals("Groq request failed (HTTP 404)", httpErrorMessage(404, "nope", "Groq"))
+        assertEquals("AI Gateway error: Bad model", httpErrorMessage(400, error))
+    }
+
     @Test(timeout = TEST_TIMEOUT_MS)
     fun clientErrorShowsGatewayMessageWhenPresent() {
         respond(400, """{"error":{"message":"Model not found","type":"invalid_request_error"}}""")

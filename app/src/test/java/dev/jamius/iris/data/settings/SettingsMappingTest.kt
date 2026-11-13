@@ -36,6 +36,34 @@ class SettingsMappingTest {
         assertEquals(listOf(CleanupPrompt("a", "n", "s")), decoded)
     }
 
+    private val customProviders = listOf(
+        CustomCleanupProvider(
+            id = "c1",
+            name = "Groq",
+            baseUrl = "https://api.groq.com/openai/v1",
+            model = "llama-4",
+            reasoningEffort = "high",
+            sendJsonSchema = false
+        ),
+        CustomCleanupProvider(id = "c2", name = "Local", baseUrl = "https://llm.example.com/v1"),
+    )
+
+    @Test
+    fun customProvidersRoundTrip() {
+        assertEquals(customProviders, decodeCustomProviders(encodeCustomProviders(customProviders)))
+    }
+
+    @Test
+    fun customProviderDecodeIgnoresUnknownKeysAndFillsDefaults() {
+        val decoded = decodeCustomProviders("""[{"id":"c","name":"n","baseUrl":"https://x.example","extra":1}]""")
+
+        assertEquals(listOf(CustomCleanupProvider(id = "c", name = "n", baseUrl = "https://x.example")), decoded)
+        assertEquals(CustomCleanupProvider.TYPE_OPENAI_COMPATIBLE, decoded[0].type)
+        assertEquals("", decoded[0].model)
+        assertNull(decoded[0].reasoningEffort)
+        assertTrue(decoded[0].sendJsonSchema)
+    }
+
     @Test
     fun emptyPreferencesMapToDefaults() {
         val settings = emptyPreferences().toSettings(emptySet())
@@ -77,6 +105,9 @@ class SettingsMappingTest {
         assertFalse(settings.deepgramKeySet)
         assertFalse(settings.sonioxKeySet)
         assertFalse(settings.openRouterKeySet)
+        assertEquals(emptyList<CustomCleanupProvider>(), settings.customCleanupProviders)
+        assertEquals(emptySet<String>(), settings.customCleanupKeyIds)
+        assertNull(settings.activeCustomCleanup)
         assertEquals(Settings.DEFAULT_BUBBLE_SIDE, settings.bubbleSide)
         assertEquals(Settings.DEFAULT_BUBBLE_Y_FRACTION, settings.bubbleYFraction)
         assertEquals(Settings.DEFAULT_PANEL_LINES, settings.panelLines)
@@ -114,10 +145,18 @@ class SettingsMappingTest {
             Keys.BUBBLE_Y_FRACTION to 0.75f,
             Keys.PANEL_LINES to 5,
             Keys.PANEL_WIDTH_PERCENT to 70,
+            Keys.CUSTOM_CLEANUP_PROVIDERS to encodeCustomProviders(customProviders),
         )
 
         val settings = prefs.toSettings(
-            setOf(Secret.GATEWAY_API_KEY, Secret.DEEPGRAM_API_KEY, Secret.SONIOX_API_KEY, Secret.OPENROUTER_API_KEY)
+            setOf(
+                Secret.GATEWAY_API_KEY,
+                Secret.DEEPGRAM_API_KEY,
+                Secret.SONIOX_API_KEY,
+                Secret.OPENROUTER_API_KEY,
+                Secret.customCleanupKey("c2"),
+                Secret.customCleanupKey("deleted"),
+            )
         )
 
         assertEquals(Settings.STT_PROVIDER_VERCEL_GATEWAY, settings.sttProviderId)
@@ -149,6 +188,8 @@ class SettingsMappingTest {
         assertTrue(settings.deepgramKeySet)
         assertTrue(settings.sonioxKeySet)
         assertTrue(settings.openRouterKeySet)
+        assertEquals(customProviders, settings.customCleanupProviders)
+        assertEquals(setOf("c2"), settings.customCleanupKeyIds)
         assertEquals(BubbleSide.LEFT, settings.bubbleSide)
         assertEquals(0.75f, settings.bubbleYFraction)
         assertEquals(5, settings.panelLines)
@@ -229,10 +270,42 @@ class SettingsMappingTest {
 
         prefs[Keys.CLEANUP_PROVIDER_ID] = "unknown"
         val unknown = prefs.toSettings(emptySet())
+        assertEquals(Settings.CLEANUP_PROVIDER_VERCEL_GATEWAY, unknown.cleanupProviderId)
         assertFalse(unknown.cleanupOpenRouter)
         assertEquals("openai/gpt-6-luna", unknown.activeCleanupModel)
         assertEquals("high", unknown.activeCleanupReasoningEffort)
         assertEquals("""{"gateway":{}}""", unknown.activeCleanupProviderOptions)
+
+        prefs[Keys.CUSTOM_CLEANUP_PROVIDERS] = encodeCustomProviders(customProviders)
+        prefs[Keys.CLEANUP_PROVIDER_ID] = "c1"
+        val custom = prefs.toSettings(emptySet())
+        assertEquals("c1", custom.cleanupProviderId)
+        assertEquals(customProviders[0], custom.activeCustomCleanup)
+        assertFalse(custom.cleanupOpenRouter)
+        assertEquals("llama-4", custom.activeCleanupModel)
+        assertEquals("high", custom.activeCleanupReasoningEffort)
+        assertEquals("", custom.activeCleanupProviderOptions)
+
+        prefs[Keys.CLEANUP_PROVIDER_ID] = "c2"
+        val defaults = prefs.toSettings(emptySet())
+        assertEquals("", defaults.activeCleanupModel)
+        assertNull(defaults.activeCleanupReasoningEffort)
+    }
+
+    @Test
+    fun danglingCustomProviderIdMeansTheGateway() {
+        val settings = mutablePreferencesOf(
+            Keys.CUSTOM_CLEANUP_PROVIDERS to encodeCustomProviders(customProviders),
+            Keys.CLEANUP_PROVIDER_ID to "deleted",
+            Keys.CLEANUP_MODEL to "openai/gpt-6-luna",
+            Keys.CLEANUP_PROVIDER_OPTIONS to """{"gateway":{}}""",
+        ).toSettings(emptySet())
+
+        assertEquals(Settings.CLEANUP_PROVIDER_VERCEL_GATEWAY, settings.cleanupProviderId)
+        assertNull(settings.activeCustomCleanup)
+        assertEquals("openai/gpt-6-luna", settings.activeCleanupModel)
+        assertEquals("low", settings.activeCleanupReasoningEffort)
+        assertEquals("""{"gateway":{}}""", settings.activeCleanupProviderOptions)
     }
 
     @Test

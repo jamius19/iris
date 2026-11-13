@@ -6,7 +6,9 @@
 package dev.jamius.iris.ui.settings
 
 import dev.jamius.iris.cleanup.parseProviderOptions
+import dev.jamius.iris.data.settings.CustomCleanupProvider
 import dev.jamius.iris.data.settings.Settings
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /** The saved transcription model's mode, for the model field's helper; [streams] without [live]: text after stop. */
 fun sttModeText(live: Boolean, streams: Boolean = live): String = when {
@@ -36,11 +38,49 @@ fun sttProviderLabel(id: String): String = when (id) {
     else -> "OpenAI"
 }
 
-/** The cleanup providers in menu order; an unknown stored id shows as the Gateway. */
+/** The built-in cleanup providers in menu order (the custom ones follow). */
 val CLEANUP_PROVIDERS = listOf(Settings.CLEANUP_PROVIDER_VERCEL_GATEWAY, Settings.CLEANUP_PROVIDER_OPENROUTER)
 
-fun cleanupProviderLabel(id: String): String =
-    if (id == Settings.CLEANUP_PROVIDER_OPENROUTER) "OpenRouter" else "Vercel AI Gateway"
+/** Built-ins by name, else the saved custom provider's name; a draft (or a blank name) is "Unnamed Provider". */
+fun cleanupProviderLabel(id: String, custom: List<CustomCleanupProvider>): String = when (id) {
+    Settings.CLEANUP_PROVIDER_VERCEL_GATEWAY -> "Vercel AI Gateway"
+    Settings.CLEANUP_PROVIDER_OPENROUTER -> "OpenRouter"
+    else -> custom.firstOrNull { it.id == id }?.name?.takeIf { it.isNotBlank() } ?: UNNAMED_PROVIDER
+}
+
+const val UNNAMED_PROVIDER = "Unnamed Provider"
+
+/** Why a custom provider's Save can't go ahead, per field; all null = [ok]. */
+data class ProviderDraftErrors(val name: String?, val baseUrl: String?, val apiKey: String?) {
+    val ok: Boolean get() = name == null && baseUrl == null && apiKey == null
+}
+
+/**
+ * Checks a custom provider draft: a name, an https base URL, and a key ([keyInput], or one [keyStored] and not marked
+ * for removal).
+ */
+fun providerDraftErrors(name: String, baseUrl: String, keyInput: String, keyStored: Boolean) = ProviderDraftErrors(
+    name = if (name.isBlank()) "Enter a provider name." else null,
+    baseUrl = baseUrlError(baseUrl),
+    apiKey = if (keyInput.isBlank() && !keyStored) "Enter an API key." else null
+)
+
+/** Both URLs parse and have the same host (a provider's stored key is kept only for its own host). */
+fun sameHost(a: String, b: String): Boolean {
+    val host = a.trim().toHttpUrlOrNull()?.host ?: return false
+    return host == b.trim().toHttpUrlOrNull()?.host
+}
+
+/** Why [baseUrl] can't be a custom provider's base URL (blank, not https, unparseable), or null. */
+fun baseUrlError(baseUrl: String): String? {
+    val url = baseUrl.trim()
+    return when {
+        url.isEmpty() -> "Enter a base URL."
+        !url.startsWith("https://", ignoreCase = true) -> "Base URL must start with https://"
+        url.toHttpUrlOrNull() == null -> "Not a valid URL."
+        else -> null
+    }
+}
 
 /** "1.0x" .. "2.0x" (Float.toString: no locale comma). */
 fun speedText(percent: Int): String = "${percent / 100f}x"

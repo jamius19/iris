@@ -24,12 +24,18 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
-enum class Secret(val prefKey: Preferences.Key<String>) {
-    OPENAI_API_KEY(stringPreferencesKey("openai_api_key")),
-    GATEWAY_API_KEY(stringPreferencesKey("gateway_api_key")),
-    DEEPGRAM_API_KEY(stringPreferencesKey("deepgram_api_key")),
-    SONIOX_API_KEY(stringPreferencesKey("soniox_api_key")),
-    OPENROUTER_API_KEY(stringPreferencesKey("openrouter_api_key")),
+/** A stored secret: one pref of the secrets file (`Preferences.Key` equality is by name). */
+data class Secret(val prefKey: Preferences.Key<String>) {
+    companion object {
+        val OPENAI_API_KEY = Secret(stringPreferencesKey("openai_api_key"))
+        val GATEWAY_API_KEY = Secret(stringPreferencesKey("gateway_api_key"))
+        val DEEPGRAM_API_KEY = Secret(stringPreferencesKey("deepgram_api_key"))
+        val SONIOX_API_KEY = Secret(stringPreferencesKey("soniox_api_key"))
+        val OPENROUTER_API_KEY = Secret(stringPreferencesKey("openrouter_api_key"))
+
+        /** The key of the custom cleanup provider [id]. */
+        fun customCleanupKey(id: String) = Secret(stringPreferencesKey("custom_cleanup_key_$id"))
+    }
 }
 
 /**
@@ -39,8 +45,9 @@ enum class Secret(val prefKey: Preferences.Key<String>) {
  */
 class SecretStore(private val dataStore: DataStore<Preferences>) {
 
+    /** Every pref in the secrets file is a secret. */
     val storedSecrets: Flow<Set<Secret>> = dataStore.data.map { prefs ->
-        Secret.entries.filter { prefs.contains(it.prefKey) }.toSet()
+        prefs.asMap().keys.mapTo(HashSet()) { Secret(stringPreferencesKey(it.name)) }
     }
 
     /** Loaded once; `lazy` is synchronized, so get-or-generate can't race. */

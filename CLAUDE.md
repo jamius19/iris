@@ -45,6 +45,9 @@ the provider interfaces so a new provider is just a new implementation. The one 
 - Logo `res/drawable/iris_logo.xml` (104 x 30 dp) converted from the designer's `iris_logo.svg` (viewBox 834.46 x
   240.43); fills `@color/logo_body` / `@color/logo_capsule` (light #3F3F42 / #777A80, `values-night` #D9DBDC /
   #8E9196).
+- Brand marks `res/drawable/provider_vercel.xml` (16 x 13.875 dp, white) / `provider_openrouter.xml` (16 x 11.4 dp,
+  #C8FF00), path data copied from the user-supplied SVGs (viewBoxes 256 x 222 / 1024 x 730); the marks belong to
+  their owners.
 - Manual DI: `AppContainer` held by the custom `Application` class `IrisApp`. No Hilt/Koin.
 - All versions live in `gradle/libs.versions.toml`.
 
@@ -53,12 +56,12 @@ the provider interfaces so a new provider is just a new implementation. The one 
 |---|---|
 | (root) | `IrisApp` (Application), `AppContainer` (manual DI, app scope, Soniox catalogue, picks the STT and cleanup providers), `MainActivity` (hosts settings UI) |
 | `data.settings` | Settings model, `SettingsRepository` (DataStore), `SecretStore` (Keystore crypto) |
-| `ui.settings` | `SettingsApp` (navigation, catalogue load triggers), the four pages, `ModelCatalogs`, `SettingsText` (pure copy/format helpers) |
+| `ui.settings` | `SettingsApp` (navigation, catalogue load triggers), the four pages, `ModelCatalogs`, `SettingsText` (pure copy/format helpers), `Favicons` (custom providers' icons) |
 | `ui.components` | The design system: cards, rows, buttons, switch, slider, text fields, dropdowns, page scaffold, `Saver`, pure `commitDecision` / `dropdownPlacement` / `sliderValue` / `filterModels` |
 | `ui.theme` | `IrisTheme` (own CompositionLocals, no Material): `IrisColors` (light + derived dark), `IrisType` (Inter + Blinker) |
 | `audio` | PCM16 mono recorder (rate per session); `SileroVad` (ORT wrapper), `SpeechGate` (pure VAD gate); `timeStretched` (Sonic speed-up) |
 | `stt` | `SpeechToTextProvider`; `stt.openai` / `stt.vercel` / `stt.deepgram` / `stt.soniox` streaming + upload providers; `Wav.kt` (upload helpers) |
-| `cleanup` | `CleanupProvider` interface, `parseProviderOptions`; `cleanup.vercel` / `cleanup.openrouter` implementations (Chat Completions helpers shared in `GatewayProtocol.kt`) |
+| `cleanup` | `CleanupProvider` interface, `parseProviderOptions`; `cleanup.vercel` / `cleanup.openrouter` / `cleanup.compatible` (user-added OpenAI-compatible) implementations (Chat Completions helpers shared in `GatewayProtocol.kt`) |
 | `dictation` | Session state machine/controller: audio -> STT -> cleanup -> insertion |
 | `overlay` | AccessibilityService, bubble overlay view, live-text panel |
 
@@ -579,15 +582,18 @@ Providers (settings store a provider id for each):
   trimmed on save), separate from the shared `sttLanguage` (other providers take one code).
 - Soniox pricing (2026-11-13): real-time ~$0.12/h, billed by wall-clock stream time (VAD gaps don't cut it, so a
   long pause still costs); async ~$0.10/h by audio duration (VAD and Speed cut it).
-- Cleanup provider: `Settings.cleanupProviderId` (`cleanup_provider_id`): `vercel-gateway` (default) or
-  `openrouter`; an unknown id means the Gateway. `AppContainer.cleanup(settings)` picks the provider. Per provider:
+- Cleanup provider: `Settings.cleanupProviderId` (`cleanup_provider_id`): `vercel-gateway` (default),
+  `openrouter`, or a saved custom provider's id; any other id (e.g. dangling after a delete or a crash mid-write) is
+  read as the Gateway (`toSettings`). `AppContainer.cleanup(settings)` picks the provider: `activeCustomCleanup`,
+  else OpenRouter, else the Gateway. Per built-in provider:
   model, reasoning effort and provider options. Gateway: `cleanupModel` (`cleanup_model`),
   `cleanupReasoningEffort` (`cleanup_reasoning_effort`), `cleanupProviderOptions` (`cleanup_provider_options`);
   OpenRouter: `openRouterCleanupModel` (`openrouter_cleanup_model`, default `openai/gpt-6-luna`),
   `openRouterCleanupReasoningEffort` (`openrouter_cleanup_reasoning_effort`, same `low` default / "" = model
   default), `openRouterCleanupProviderOptions` (`openrouter_cleanup_provider_options`); key `Secret.OPENROUTER_API_KEY`
   (`openrouter_api_key`). `activeCleanupModel` / `activeCleanupReasoningEffort` / `activeCleanupProviderOptions`
-  follow the selection. Provider options are stored as typed (trimmed; blank = not sent; `{}` is sent as-is);
+  follow the selection (custom: its `model` / `reasoningEffort` / "" options). Provider options are stored as
+  typed (trimmed; blank = not sent; `{}` is sent as-is);
   `cleanup.parseProviderOptions` (pure, tested; default `Json` plus a check that every value is a quoted string,
   number, true/false or null) returns null for blank, else the JSON object, else throws `IllegalArgumentException`
   ("Not valid JSON" / "Must be a JSON object: { ... }"). The object goes to
@@ -661,6 +667,29 @@ Providers (settings store a provider id for each):
   unknown values last; missing/empty = null. Errors as above; transport `modelsNetworkErrorMessage`. Warm-up: keyless
   `HEAD https://openrouter.ai/api/v1/models` (no query) on the base client, `Log.d` only; the cleanup POST reuses the
   connection (unit tested).
+- Cleanup, OpenAI-compatible (custom) (`cleanup.compatible.OpenAiCompatibleCleanup`, URL helpers in
+  `OpenAiCompatibleProtocol.kt`): user-added providers, stored as one JSON list `custom_cleanup_providers`
+  (`CustomCleanupProvider(id (UUID), type "openai-compatible", name, baseUrl, model "", reasoningEffort null,
+  sendJsonSchema true)`, unknown keys ignored, defaults filled) plus the secret `custom_cleanup_key_<id>`
+  (`Secret.customCleanupKey(id)`; `Secret` is a data class over the pref key, every pref of the secrets file is a
+  secret; `customCleanupKeyIds` = the ids with one). Repository: `saveCustomCleanupProvider(id, name, baseUrl,
+  apiKey?)` (key first, upsert keeping model settings, selects it), `updateCustomCleanupProvider(id, update)` (model
+  settings autosave; nothing if gone), `deleteCustomCleanupProvider(id)` (key first, then the entry; a selected one
+  falls back to the Gateway). Base URL: https only (UI check), trimmed, trailing `/` dropped; `chatCompletionsUrl` /
+  `modelsUrl` append `/chat/completions` / `/models`, never `/v1`. Request = the Gateway's `chatRequest` with no
+  options and `jsonSchema = sendJsonSchema`: on = the strict `{text}` schema + `TRANSCRIPT_FRAMING`, parsed with
+  `parseCleanedText`; off = no `response_format`, `PLAIN_TRANSCRIPT_FRAMING` ("Reply with only the cleaned text."),
+  the content minus a leading `<think>…</think>` block (`withoutThinkBlock`: dotall, case-insensitive, leading
+  whitespace allowed; unit tested), trimmed, is the text (blank = unexpected response). Blank model = "Set a
+  cleanup model for <name> in Iris settings", missing key =
+  "Add your <name> API key in Iris settings" (no request either way). Errors: `httpErrorMessage(code, body, name)`
+  ("<name> rejected the API key...", rate limit, server error, "<name> error: <error.message>", else "<name> request
+  failed (HTTP n)", e.g. a plain-string `error`); then `length`, `content_filter`, refusal, "Unexpected response
+  from <name>" (Gateway order). Same clients/timeouts as OpenRouter. `listModels`: `GET <base>/models` with the
+  Bearer key (no key = "Set your <name> API key to load models", no request), `parseModelsResponse`, no type filter
+  (some servers use `type: "chat"`). Warm-up: keyless `HEAD <base>/models` (a 401 is fine), `Log.d` only; the POST
+  reuses the connection (unit tested). `AppContainer.compatibleCleanup(p)` builds one instance per call (cheap,
+  shared pool), no cache/registry; `customCleanupModels(p)` for the settings menu.
 - Model catalog: `VercelGatewayCleanup.listModels()` (`AppContainer.gatewayModels`) =
   `GET https://ai-gateway.vercel.sh/v1/models` (checked 2026-11-11: public, no auth needed; an invalid Bearer key gets
   401, so the request is sent unauthenticated and the key is never read). Body
@@ -723,7 +752,8 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
   Deepgram every model while `deepgramUpload` is off, Soniox `sonioxStreams`).
 - Post Processing Provider: "AI Cleanup" switch card (sparkles, "Polish the transcript with an LLM before it's
   inserted."); everything below is dimmed (alpha 0.38, animated) while off but stays editable: picker card ("Vercel
-  AI Gateway" / "OpenRouter"), "Provider Settings" key (Gateway: "(shared with transcription)"; OpenRouter
+  AI Gateway" / "OpenRouter" / custom providers, see CP13 below), "Provider Settings" key (Gateway: "(shared with
+  transcription)"; OpenRouter
   placeholder "sk-or-…"), "Model Settings": "Cleanup Model" combobox ("Model must support structured output."),
   "Reasoning Level" dropdown ("Model default" + the saved model's efforts, else `Settings.REASONING_EFFORTS`; "Not
   listed for this model" error only when the model's list is known and lacks the saved value, which is still sent;
@@ -744,9 +774,34 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
   and "Prompt" (text area, "Instructions the model gets; your transcript is sent with them.") of the active prompt
   (`key(id)`; trimmed; blank = error, not saved). Gateway and OpenRouter fields are separate calls (as are the four
   STT providers' fields), so unsaved input never carries over.
+- Custom cleanup providers (CP13): the picker is `FieldGroup` + `SelectDropdown` (built-ins, saved custom ones, the
+  draft) with an outlined plus ("New provider") beside it. Each option has a `ProviderIconBox` (24 dp, radius 4,
+  1 dp `onControl` 30 % outline): the brand marks (untinted `Image`), a custom provider's favicon, else (draft / no
+  icon) the cloud. Favicons (`Favicons`, `AppContainer.favicons`): `faviconDomain` (registrable domain via
+  `topPrivateDomain()`, computed off main; an IP, localhost or a host with no registrable domain gets none: no fetch,
+  the cloud) -> `https://www.google.com/s2/favicons?domain=<d>&sz=64` (2xx only; an unknown domain gets a 404
+  globe), cached as `cacheDir/favicons/<domain>.png` (written to `<domain>.tmp`, then renamed; an undecodable cached
+  file is deleted and refetched) and in memory (definitive failures only: non-2xx or undecodable; network errors
+  aren't cached, so they retry); `rememberFavicon` clears the old icon when the base URL changes; built-ins never
+  fetch. The plus makes one in-memory draft (plain `remember`, "Unnamed Provider", selected in the UI only,
+  never used for cleanup; a second plus focuses its Name); picking any provider, leaving the page or closing the app
+  discards it. Provider Settings for custom providers (draft and saved) is a form committed only by "Save" (dark
+  `SmallButton`): "Provider Type" (one option "OpenAI-compatible"), "Provider Name" ("My provider"), "Provider Base
+  URL" ("https://api.example.com/v1", "Include the version path; /chat/completions and /models are appended."), "API
+  Key" (`DraftApiKeyField`). Save checks `providerDraftErrors` (name, `baseUrlError`: blank / not https / unparseable,
+  key input or a stored key not marked for removal); errors show per field and clear on edit; success stores, selects
+  it, clears the key input and reloads its catalog. Saved providers keep their last saved values; unsaved form edits
+  are lost on leaving the page or closing the app. Key trash: clears the input, or with none marks the stored key for
+  removal (dots go, "Not set"; Save then needs a key): Save can't leave a saved provider keyless (Delete clears the
+  key first, so a failed delete can). A base URL whose host (`sameHost`, unit tested) differs from the saved one
+  also needs a new key ("Enter an API key."), so the stored key never goes to another server. "Delete Provider"
+  (`DangerButton`, saved only, no confirmation) deletes it and its key; the Gateway is selected. Model Settings
+  (saved only) autosave: model combobox ("Must support structured output while Send JSON Schema is on."), Reasoning
+  Level (default "Model default"), the shared Timeout, "Send JSON Schema" switch; no Provider Options.
 - Appearance: "Text Panel": "Lines" (1..6, "Lines of live text the panel shows.", helper "Notices show at least 4
   lines.") and "Max Width" (30..90 step 10, shown "50%", "Share of the screen width the panel can use.").
-- Autosave (no Save buttons): text fields commit on blur; IME Done, a tap on empty space (page `detectTapGestures`),
+- Autosave (no Save buttons, except the custom provider form (CP13)): text fields commit on blur; IME Done, a tap
+  on empty space (page `detectTapGestures`),
   every non-text control, the back chevron / gesture and `ON_STOP` (home, app switch, rotation) clear focus, so blur
   is the one commit path. `commitDecision(draft, stored, validate)` (pure, tested): trimmed == stored = nothing,
   validator message = `Invalid` (not saved; shown in the helper slot in the failure colour above the helper, red
@@ -781,7 +836,10 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
   likewise with OpenRouter cleanup on (switching the cleanup provider never touches the Gateway catalog); OpenAI's
   with OpenAI selected; a key save/clear cancels a running OpenAI load (its result is never written), drops the
   list and reloads if OpenAI is selected; no key = "Set your OpenAI API key to load models", no request; other
-  failures `Log.w` + "Couldn't load models". Soniox: `SonioxCatalog.refresh()` when Soniox is selected and not
+  failures `Log.w` + "Couldn't load models". Custom: one slot (`customModelsFor(id)`, `customId`) for the selected
+  provider, loaded with cleanup on (or first menu open / refresh); another provider's load is cancelled and the slot
+  cleared; a save reloads it (`onCustomProviderSaved`); `CleanupException` message, else `Log.w` + "Couldn't load
+  models". Soniox: `SonioxCatalog.refresh()` when Soniox is selected and not
   loaded, on first menu open or refresh (it reloads itself on key/region change). Load errors show in the
   combobox's helper slot.
 - Theme: `IrisTheme` follows the system dark mode; `IrisColors` (KDoc table) light = the Figma palette exactly
@@ -822,6 +880,9 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
 - **OpenRouter is a second cleanup provider** beside the Gateway (own key, model, reasoning level and options; the
   Gateway keeps the original `cleanup*` fields, no migration). Provider options are wrapped per provider
   (`providerOptions` / `provider`), never merged into the top level; cleanup only, not Gateway STT.
+- **Custom OpenAI-compatible cleanup providers** are a third `CleanupProvider` implementation, picked in
+  `AppContainer.cleanup` (no registry). HTTPS only. Their Provider Settings are a draft with a Save button (not
+  autosaved), so a half-typed URL or key is never used.
 - **Deepgram's mode follows a setting, not the model** (the one exception): every Nova model does both, so the
   Deepgram-only "Disable realtime streaming (cheaper)" switch picks the ~44 % cheaper pre-recorded upload.
 - **VAD on device (Silero, ONNX Runtime 1.28.0 pinned)** to cut STT cost; fails open, never loses dictation.
@@ -944,6 +1005,10 @@ Not covered by unit tests; check on a real device (ideally more than one OEM) af
   (e.g. `{"only":["nonexistent"]}`) shows the 503/400 notice. The accordion is collapsed by default, TalkBack reads
   "Provider Options, Collapsed"; invalid JSON shows an error and isn't saved; switching the cleanup provider keeps
   the Gateway STT model menu.
+- Custom cleanup providers (CP13): Groq (`https://api.groq.com/openai/v1`) and OpenAI (`https://api.openai.com/v1`)
+  base URLs clean text with a listed model; Send JSON Schema off works with a server that rejects `response_format`;
+  the favicon shows in the menu, or the cloud when offline; a draft is discarded on picking another provider;
+  Delete falls back to the Gateway; TalkBack reads the plus ("New provider"), Save and Delete Provider.
 - Settings UI (CP12): light and dark pages match the Figma PNGs (sizes, spacing, colours, fonts) on a real phone;
   page slides (chevron, 3-button and gesture back) run smoothly to the end with no early cut; gesture-nav predictive
   back shows the sub-page sliding away with Home behind and a cancelled gesture settles back; a saved key shows
@@ -993,3 +1058,4 @@ Update this section as checkpoints land.
 | CP10 | Soniox STT (real-time + async) | Done (real-voice device check pending) |
 | CP11 | OpenRouter cleanup provider + provider options | Done (device check pending) |
 | CP12 | Settings UI redesign (Figma) | Done (emulator-checked; device check pending) |
+| CP13 | Custom OpenAI-compatible cleanup providers | Done (device check pending) |

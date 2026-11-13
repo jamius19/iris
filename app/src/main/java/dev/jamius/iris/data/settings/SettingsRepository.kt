@@ -152,6 +152,51 @@ class SettingsRepository(
         dataStore.edit { it[Keys.PANEL_WIDTH_PERCENT] = percent }
     }
 
+    /**
+     * Saves the custom cleanup provider [id] (adds it, or updates the name and base URL of the existing one, keeping
+     * its model settings) and selects it. A non-null [apiKey] is stored first.
+     */
+    suspend fun saveCustomCleanupProvider(id: String, name: String, baseUrl: String, apiKey: String?) {
+        if (apiKey != null) secretStore.put(Secret.customCleanupKey(id), apiKey.trim())
+        val trimmedName = name.trim()
+        val url = baseUrl.trim().trimEnd('/')
+        dataStore.edit { prefs ->
+            val providers = prefs.customCleanupProviders()
+            prefs.setCustomCleanupProviders(
+                if (providers.any { it.id == id }) {
+                    providers.map { if (it.id == id) it.copy(name = trimmedName, baseUrl = url) else it }
+                } else {
+                    providers + CustomCleanupProvider(id = id, name = trimmedName, baseUrl = url)
+                }
+            )
+            prefs[Keys.CLEANUP_PROVIDER_ID] = id
+        }
+    }
+
+    /** Applies [update] to the custom cleanup provider [id] (its model settings); nothing if it is gone. */
+    suspend fun updateCustomCleanupProvider(id: String, update: (CustomCleanupProvider) -> CustomCleanupProvider) {
+        dataStore.edit { prefs ->
+            val providers = prefs.customCleanupProviders()
+            if (providers.any { it.id == id }) {
+                prefs.setCustomCleanupProviders(providers.map { if (it.id == id) update(it) else it })
+            }
+        }
+    }
+
+    /**
+     * Deletes the custom cleanup provider [id] and its key; if it was selected, the Gateway is. The key goes first,
+     * so a failure leaves a keyless provider (retryable), never an orphaned key.
+     */
+    suspend fun deleteCustomCleanupProvider(id: String) {
+        secretStore.clear(Secret.customCleanupKey(id))
+        dataStore.edit { prefs ->
+            prefs.setCustomCleanupProviders(prefs.customCleanupProviders().filterNot { it.id == id })
+            if (prefs[Keys.CLEANUP_PROVIDER_ID] == id) {
+                prefs[Keys.CLEANUP_PROVIDER_ID] = Settings.CLEANUP_PROVIDER_VERCEL_GATEWAY
+            }
+        }
+    }
+
     suspend fun setApiKey(secret: Secret, value: String) {
         secretStore.put(secret, value.trim())
     }
@@ -162,6 +207,10 @@ class SettingsRepository(
 
     private fun MutablePreferences.setPrompts(prompts: List<CleanupPrompt>) {
         this[Keys.PROMPTS] = encodePrompts(prompts)
+    }
+
+    private fun MutablePreferences.setCustomCleanupProviders(providers: List<CustomCleanupProvider>) {
+        this[Keys.CUSTOM_CLEANUP_PROVIDERS] = encodeCustomProviders(providers)
     }
 }
 
@@ -190,6 +239,7 @@ internal object Keys {
     val CLEANUP_TIMEOUT_SECONDS = intPreferencesKey("cleanup_timeout_seconds")
     val PROMPTS = stringPreferencesKey("cleanup_prompts")
     val ACTIVE_PROMPT_ID = stringPreferencesKey("cleanup_active_prompt_id")
+    val CUSTOM_CLEANUP_PROVIDERS = stringPreferencesKey("custom_cleanup_providers")
     val BUBBLE_SIDE = stringPreferencesKey("bubble_side")
     val BUBBLE_Y_FRACTION = floatPreferencesKey("bubble_y_fraction")
     val PANEL_LINES = intPreferencesKey("panel_lines")
@@ -202,6 +252,14 @@ internal fun encodePrompts(prompts: List<CleanupPrompt>): String = json.encodeTo
 
 internal fun decodePrompts(encoded: String): List<CleanupPrompt> = json.decodeFromString(encoded)
 
+internal fun encodeCustomProviders(providers: List<CustomCleanupProvider>): String = json.encodeToString(providers)
+
+internal fun decodeCustomProviders(encoded: String): List<CustomCleanupProvider> = json.decodeFromString(encoded)
+
+/** Stored custom cleanup providers; none if never saved. */
+internal fun Preferences.customCleanupProviders(): List<CustomCleanupProvider> =
+    this[Keys.CUSTOM_CLEANUP_PROVIDERS]?.let(::decodeCustomProviders).orEmpty()
+
 /** Stored prompts, or the seeded default list if prompts were never saved. */
 internal fun Preferences.prompts(): List<CleanupPrompt> =
     this[Keys.PROMPTS]?.let(::decodePrompts) ?: listOf(Settings.DEFAULT_PROMPT)
@@ -209,6 +267,11 @@ internal fun Preferences.prompts(): List<CleanupPrompt> =
 internal fun Preferences.toSettings(storedSecrets: Set<Secret>): Settings {
     val prompts = prompts()
     val activePromptId = this[Keys.ACTIVE_PROMPT_ID] ?: Settings.DEFAULT_PROMPT.id
+    val customProviders = customCleanupProviders()
+    // A stored id that is neither built in nor a saved custom provider (e.g. deleted) means the Gateway.
+    val cleanupProviderId = this[Keys.CLEANUP_PROVIDER_ID]
+        ?.takeIf { id -> id == Settings.CLEANUP_PROVIDER_OPENROUTER || customProviders.any { it.id == id } }
+        ?: Settings.CLEANUP_PROVIDER_VERCEL_GATEWAY
     return Settings(
         sttProviderId = this[Keys.STT_PROVIDER_ID] ?: Settings.STT_PROVIDER_OPENAI,
         sttModel = this[Keys.STT_MODEL] ?: Settings.DEFAULT_STT_MODEL,
@@ -224,7 +287,7 @@ internal fun Preferences.toSettings(storedSecrets: Set<Secret>): Settings {
         vadEnabled = this[Keys.VAD_ENABLED] ?: true,
         sttSpeedPercent = this[Keys.STT_SPEED_PERCENT] ?: Settings.DEFAULT_STT_SPEED_PERCENT,
         cleanupEnabled = this[Keys.CLEANUP_ENABLED] ?: false,
-        cleanupProviderId = this[Keys.CLEANUP_PROVIDER_ID] ?: Settings.CLEANUP_PROVIDER_VERCEL_GATEWAY,
+        cleanupProviderId = cleanupProviderId,
         cleanupModel = this[Keys.CLEANUP_MODEL] ?: Settings.DEFAULT_CLEANUP_MODEL,
         cleanupReasoningEffort = reasoningEffort(Keys.CLEANUP_REASONING_EFFORT),
         cleanupProviderOptions = this[Keys.CLEANUP_PROVIDER_OPTIONS] ?: "",
@@ -239,6 +302,10 @@ internal fun Preferences.toSettings(storedSecrets: Set<Secret>): Settings {
         deepgramKeySet = Secret.DEEPGRAM_API_KEY in storedSecrets,
         sonioxKeySet = Secret.SONIOX_API_KEY in storedSecrets,
         openRouterKeySet = Secret.OPENROUTER_API_KEY in storedSecrets,
+        customCleanupProviders = customProviders,
+        customCleanupKeyIds = customProviders.mapNotNullTo(HashSet()) { p ->
+            p.id.takeIf { Secret.customCleanupKey(it) in storedSecrets }
+        },
         bubbleSide = this[Keys.BUBBLE_SIDE]?.let(BubbleSide::valueOf) ?: Settings.DEFAULT_BUBBLE_SIDE,
         bubbleYFraction = this[Keys.BUBBLE_Y_FRACTION] ?: Settings.DEFAULT_BUBBLE_Y_FRACTION,
         panelLines = this[Keys.PANEL_LINES] ?: Settings.DEFAULT_PANEL_LINES,
