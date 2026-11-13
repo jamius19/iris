@@ -67,7 +67,7 @@ fun TranscriptionPage(
 
     PageScaffold(title = "Transcription Provider", onBack = onBack) {
         Card(verticalPadding = 15.dp) {
-            IconRow(R.drawable.lucide_cloud, iconTopPadding = 0.dp) {
+            IconRow(R.drawable.lucide_audio_lines, iconTopPadding = 0.dp) {
                 SelectField(
                     label = "Transcription Provider",
                     options = STT_PROVIDERS,

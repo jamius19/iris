@@ -860,8 +860,8 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
   accessibility also shows the restricted-settings hint); both re-checked on `ON_RESUME`), then nav cards
   Transcription Provider (audio-lines), Post Processing Provider (sparkles), Appearance (eye); footer
   "Version <versionName>" (PackageManager), pinned to the bottom while the content is short.
-- Transcription Provider: picker card (cloud icon, "Transcription Provider" black dropdown: On device, OpenAI, Vercel
-  AI Gateway, Deepgram, Soniox, each with its brand mark in a `ProviderIconBox` (On device: Lucide `smartphone`;
+- Transcription Provider: picker card (audio-lines icon, "Transcription Provider" black dropdown: On device, OpenAI,
+  Vercel AI Gateway, Deepgram, Soniox, each with its brand mark in a `ProviderIconBox` (On device: Lucide `smartphone`;
   Gateway: the Vercel mark; `SelectField`'s `optionIcon`); an unknown stored id shows as OpenAI); "Provider
   Settings": the selected provider's "API Key" (Gateway helper "(shared with post processing)"), Soniox "Region"
   dropdown (`SonioxRegion.label`, hint "Your Soniox project's region. The API key has to be region-specific as well.");
