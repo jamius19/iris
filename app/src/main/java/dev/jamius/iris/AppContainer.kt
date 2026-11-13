@@ -6,7 +6,9 @@
 package dev.jamius.iris
 
 import android.content.Context
+import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
+import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.preferencesDataStoreFile
 import dev.jamius.iris.audio.AudioRecorder
 import dev.jamius.iris.audio.SileroVad
@@ -28,6 +30,7 @@ import dev.jamius.iris.stt.deepgram.DeepgramSpeechToText
 import dev.jamius.iris.stt.ondevice.OnDeviceModelStore
 import dev.jamius.iris.stt.ondevice.OnDeviceRecognizer
 import dev.jamius.iris.stt.ondevice.OnDeviceSpeechToText
+import dev.jamius.iris.stt.ondevice.OnDeviceStats
 import dev.jamius.iris.stt.openai.OpenAiFileTranscription
 import dev.jamius.iris.stt.openai.OpenAiRealtimeSpeechToText
 import dev.jamius.iris.stt.openai.isRealtimeTranscriptionModel
@@ -137,8 +140,21 @@ class AppContainer(context: Context) {
     // Never backed up (noBackupFilesDir): hundreds of MB, re-downloadable.
     private val modelsDir = File(context.noBackupFilesDir, "models")
 
+    /**
+     * On-device models' speed, wait and load time on this phone, for the Statistics page. "on_device_stats" is
+     * excluded from backup (device-specific numbers).
+     */
+    val onDeviceStats = OnDeviceStats(
+        // Throwaway numbers: a corrupt file starts over instead of failing every read and write.
+        PreferenceDataStoreFactory.create(corruptionHandler = ReplaceFileCorruptionHandler { emptyPreferences() }) {
+            context.preferencesDataStoreFile("on_device_stats")
+        },
+        appScope,
+        speedPercent = { settingsRepository.settings.first().sttSpeedPercent }
+    )
+
     /** The loaded on-device model (sessions; the service's bubble visibility and memory trims release it). */
-    val onDeviceRecognizer = OnDeviceRecognizer { File(modelsDir, it) }
+    val onDeviceRecognizer = OnDeviceRecognizer(dir = { File(modelsDir, it) }, onLoaded = onDeviceStats::recordLoad)
 
     /** On-device model downloads, for the settings screen and the provider's download check. */
     val onDeviceModels = OnDeviceModelStore(
@@ -154,7 +170,8 @@ class AppContainer(context: Context) {
         onDeviceRecognizer::decode,
         onDeviceRecognizer::stream,
         selection = { settingsRepository.settings.first().let { it.onDeviceSttModel to it.sttLanguage } },
-        scope = appScope
+        scope = appScope,
+        record = onDeviceStats::recordDictation
     )
 
     // One pair per region: a provider's URLs are fixed.

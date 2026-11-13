@@ -4,9 +4,11 @@
    for details.
 -->
 <data-extraction-rules>
-    <!-- Encrypted API keys: the Keystore key that decrypts them is not backed up or transferred. -->
+    <!-- Encrypted API keys: the Keystore key that decrypts them is not backed up or transferred. On-device model
+         statistics: measured on this phone. -->
     <cloud-backup>
         <exclude domain="file" path="datastore/secrets.preferences_pb" />
+        <exclude domain="file" path="datastore/on_device_stats.preferences_pb" />
         <!-- TODO: Use <include> and <exclude> to control what is backed up.
         <include .../>
         <exclude .../>
@@ -14,5 +16,6 @@
     </cloud-backup>
     <device-transfer>
         <exclude domain="file" path="datastore/secrets.preferences_pb" />
+        <exclude domain="file" path="datastore/on_device_stats.preferences_pb" />
     </device-transfer>
 </data-extraction-rules>

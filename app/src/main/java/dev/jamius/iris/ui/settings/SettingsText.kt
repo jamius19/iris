@@ -9,6 +9,8 @@ import dev.jamius.iris.cleanup.parseProviderOptions
 import dev.jamius.iris.data.settings.CustomCleanupProvider
 import dev.jamius.iris.data.settings.Settings
 import dev.jamius.iris.stt.ondevice.OnDeviceModel
+import dev.jamius.iris.stt.ondevice.SpeedVerdict
+import dev.jamius.iris.stt.ondevice.roundToTenth
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /** The saved model's mode, for Soniox's model field helper; [streams] without [live]: text after stop. */
@@ -116,6 +118,32 @@ fun skipSilenceSubtitle(onDeviceModel: OnDeviceModel?): String = when {
 }
 
 fun percentText(percent: Int): String = "$percent%"
+
+/** An on-device model's speed against real time, rounded to one decimal: "7.1× faster than you speak". */
+fun speedFactorText(factor: Double): String = when {
+    oneDecimal(factor) == "1.0" -> "As fast as you speak"
+    factor > 1 -> "${oneDecimal(factor)}× faster than you speak"
+    else -> "${oneDecimal(1 / factor)}× slower than you speak"
+}
+
+/** Locale-free (Double.toString: no comma). */
+private fun oneDecimal(x: Double): String = roundToTenth(x).toString()
+
+fun verdictLabel(verdict: SpeedVerdict): String = when (verdict) {
+    SpeedVerdict.KEEPS_UP -> "Keeps up"
+    SpeedVerdict.BORDERLINE -> "Borderline"
+    SpeedVerdict.FALLS_BEHIND -> "Falls behind"
+}
+
+/** Milliseconds as seconds, rounded to tenths: "4.8 s". */
+fun tenthsText(ms: Long): String {
+    val tenths = (ms + 50) / 100
+    return "${tenths / 10}.${tenths % 10} s"
+}
+
+/** How many dictations a model's statistics come from. */
+fun statsBasisText(count: Int): String =
+    if (count == 1) "From your last dictation." else "From your last $count dictations."
 
 /** The API key field's helper; [sharedWith] names the other page using the same key (the Gateway key). */
 fun apiKeyHelper(isSet: Boolean, sharedWith: String? = null): String {

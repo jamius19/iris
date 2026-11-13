@@ -27,6 +27,7 @@ class MainActivity : ComponentActivity() {
                     customModels = container::customCleanupModels,
                     sonioxCatalog = container.sonioxCatalog,
                     onDeviceModels = container.onDeviceModels,
+                    onDeviceStats = container.onDeviceStats,
                     favicons = container.favicons
                 )
             }

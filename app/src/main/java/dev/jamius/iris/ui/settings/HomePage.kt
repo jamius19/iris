@@ -92,6 +92,11 @@ fun HomePage(onOpen: (Page) -> Unit) {
             "Set up post processing for the transcribed text"
         ) { onOpen(Page.PostProcessing) }
         NavCard(R.drawable.lucide_eye, "Appearance", "Customize Iris to fit you") { onOpen(Page.Appearance) }
+        NavCard(
+            R.drawable.lucide_gauge,
+            "Statistics",
+            "How on-device models run on this phone"
+        ) { onOpen(Page.Statistics) }
     }
 }
 

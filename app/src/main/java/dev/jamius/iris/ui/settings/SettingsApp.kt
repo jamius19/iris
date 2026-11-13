@@ -42,16 +42,17 @@ import dev.jamius.iris.cleanup.GatewayModel
 import dev.jamius.iris.data.settings.CustomCleanupProvider
 import dev.jamius.iris.data.settings.SettingsRepository
 import dev.jamius.iris.stt.ondevice.OnDeviceModelStore
+import dev.jamius.iris.stt.ondevice.OnDeviceStats
 import dev.jamius.iris.stt.soniox.SonioxCatalog
 import dev.jamius.iris.ui.components.Saver
 import dev.jamius.iris.ui.theme.IrisTheme
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
-enum class Page { Home, Transcription, PostProcessing, Appearance }
+enum class Page { Home, Transcription, PostProcessing, Appearance, Statistics }
 
 /**
- * The settings UI: Home and its three sub-pages (own navigation state, slide transitions, predictive back),
+ * The settings UI: Home and its four sub-pages (own navigation state, slide transitions, predictive back),
  * the model catalogues and their load triggers. Leaving a page, the app (ON_STOP) or tapping empty space clears focus,
  * which commits a focused text field.
  */
@@ -65,6 +66,7 @@ fun SettingsApp(
     customModels: suspend (CustomCleanupProvider) -> List<GatewayModel>,
     sonioxCatalog: SonioxCatalog,
     onDeviceModels: OnDeviceModelStore,
+    onDeviceStats: OnDeviceStats,
     favicons: Favicons,
 ) {
     val settings = repository.settings.collectAsState(initial = null).value
@@ -72,6 +74,8 @@ fun SettingsApp(
     val sonioxState by sonioxCatalog.state.collectAsState()
     // App-level too: downloads outlive the screen.
     val onDeviceState by onDeviceModels.state.collectAsState()
+    // Here, not in the page: read before the page slides in, and kept while it's closed. Null until the first read.
+    val statistics = onDeviceStats.stats.collectAsState(initial = null).value
     val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
     val catalogs = remember { ModelCatalogs(scope, gatewayModels, openRouterModels, openAiModels, customModels) }
@@ -180,6 +184,7 @@ fun SettingsApp(
                         onBack = back
                     )
                     Page.Appearance -> AppearancePage(settings, repository, saver, onBack = back)
+                    Page.Statistics -> StatisticsPage(statistics, onDeviceStats::reset, onBack = back)
                 }
             }
         }

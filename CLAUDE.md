@@ -54,11 +54,11 @@ Silero VAD ("Skip silence") decides which audio is sent (cloud: to cut STT cost;
   (81,676 B, SHA-256 `a9a701eb18cbd5f786f28f986c16895ffc0d0337e4a9a63131b619d9542e07d4`); OFL licences ship as
   `assets/inter_OFL.txt` / `assets/blinker_OFL.txt`.
 - Lucide 1.72.0 icons (https://github.com/lucide-icons/lucide/tree/1.72.0/icons) as `res/drawable/lucide_<name>.xml`
-  (17: accessibility, mic, audio-lines, sparkles, eye, eye-off, cloud, arrow-down, arrow-right, refresh-cw, trash,
-  radio, check, chevron-left, chevron-down, plus, smartphone): viewport 24, white stroke (tinted in Compose), round
-  caps/joins, circles/rects converted to paths; `android:width` = the use size and `strokeWidth` chosen so the drawn
-  stroke matches the Figma export (1.5 at 24/16 dp, 1.57 at 23, 1.64 at 22, 1.25 for sparkles, 1.6 at 15, 2.2 at 11;
-  `smartphone` 14 dp at 1.7, drawn untinted by `BrandIcon` as On device's provider icon). The
+  (18: accessibility, mic, audio-lines, sparkles, eye, eye-off, cloud, arrow-down, arrow-right, refresh-cw, trash,
+  radio, check, chevron-left, chevron-down, plus, smartphone, gauge): viewport 24, white stroke (tinted in Compose),
+  round caps/joins, circles/rects converted to paths; `android:width` = the use size and `strokeWidth` chosen so the
+  drawn stroke matches the Figma export (1.5 at 24/16 dp, 1.57 at 23, 1.64 at 22, 1.25 for sparkles, 1.6 at 15, 2.2
+  at 11; `smartphone` 14 dp at 1.7, drawn untinted by `BrandIcon` as On device's provider icon). The
   overlay keeps its own `ic_mic`/`ic_close`/`ic_check`/`ic_exclamation`. `assets/lucide_LICENSE.txt` is the full
   upstream LICENSE (ISC + the Feather MIT block, "Copyright (c) 2013-present Cole Bemis": radio, check, chevrons,
   plus, trash, arrows are Feather-derived).
@@ -76,13 +76,13 @@ Silero VAD ("Skip silence") decides which audio is sent (cloud: to cut STT cost;
 ## Architecture
 | Package | Responsibility |
 |---|---|
-| (root) | `IrisApp` (Application; releases the on-device model on memory trim), `AppContainer` (manual DI, app scope, Soniox catalogue, on-device recognizer + model store, picks the STT and cleanup providers), `MainActivity` (hosts settings UI) |
+| (root) | `IrisApp` (Application; releases the on-device model on memory trim), `AppContainer` (manual DI, app scope, Soniox catalogue, on-device recognizer + model store + stats, picks the STT and cleanup providers), `MainActivity` (hosts settings UI) |
 | `data.settings` | Settings model, `SettingsRepository` (DataStore), `SecretStore` (Keystore crypto) |
-| `ui.settings` | `SettingsApp` (navigation, catalogue load triggers), the four pages, `ModelCatalogs`, `SettingsText` (pure copy/format helpers), `Favicons` (custom providers' icons) |
+| `ui.settings` | `SettingsApp` (navigation, catalogue load triggers), the five pages, `ModelCatalogs`, `SettingsText` (pure copy/format helpers), `Favicons` (custom providers' icons) |
 | `ui.components` | The design system: cards, rows, buttons, switch, slider, text fields, dropdowns, page scaffold, `Saver`, pure `commitDecision` / `dropdownPlacement` / `sliderValue` / `filterModels` |
 | `ui.theme` | `IrisTheme` (own CompositionLocals, no Material): `IrisColors` (light + derived dark), `IrisType` (Inter + Blinker) |
 | `audio` | PCM16 mono recorder (rate per session); `SileroVad` (sherpa `Vad` wrapper), `SpeechGate` (pure VAD gate); `timeStretched` (Sonic speed-up) |
-| `stt` | `SpeechToTextProvider`; `stt.openai` / `stt.vercel` / `stt.deepgram` / `stt.soniox` streaming + upload providers; `stt.ondevice` (On device: `OnDeviceModels` catalogue, `OnDeviceModelStore` downloads, `OnDeviceRecognizer` sherpa holder, `OnDeviceSpeechToText` provider); `Wav.kt` (upload helpers) |
+| `stt` | `SpeechToTextProvider`; `stt.openai` / `stt.vercel` / `stt.deepgram` / `stt.soniox` streaming + upload providers; `stt.ondevice` (On device: `OnDeviceModels` catalogue, `OnDeviceModelStore` downloads, `OnDeviceRecognizer` sherpa holder, `OnDeviceSpeechToText` provider, `OnDeviceStats` per-model statistics); `Wav.kt` (upload helpers) |
 | `cleanup` | `CleanupProvider` interface, `parseProviderOptions`; `cleanup.vercel` / `cleanup.openrouter` / `cleanup.compatible` (user-added OpenAI-compatible) implementations (Chat Completions helpers shared in `GatewayProtocol.kt`) |
 | `dictation` | Session state machine/controller: audio -> STT -> cleanup -> insertion |
 | `overlay` | AccessibilityService, bubble overlay view, live-text panel |
@@ -717,6 +717,18 @@ Providers (settings store a provider id for each):
   rarely fire). Logs `Loaded <id> in X ms`, `Decoded X ms of audio in Y ms` (no text), `Released <id>`. Emulator
   (x86_64, 2026-11-13, Moonshine Base EN): load 1.2-1.9 s, 3-4 s of silence decoded in 109-130 ms, `stop->final`
   ~180 ms; release build PSS ~244 MB with it loaded (native heap ~204 MB).
+  Statistics hooks (CP16): `decode` returns `Decoded(text, busyMs)` (the native decode's time) and `stream` emits
+  `Decoded(text, busyMs so far)` (chunk decodes + the stop flush, cumulative); log lines unchanged. The recognizer's
+  `onLoaded(modelId, ms)` (= `OnDeviceStats.recordLoad`) runs after each successful load (the `Loaded` log, preloads
+  included). The provider's `record(modelId, audioMs, decodeMs, waitMs)` (= `OnDeviceStats.recordDictation`) is
+  called once per dictation whose final text is non-empty: audioMs = the non-empty chunks' bytes at 16 kHz (model
+  input, i.e. after Speed), decodeMs = the segments' busy times summed (offline) or the last emission's (streaming),
+  waitMs = stop -> decoder joined (the `Timing: stop->final` span). Nothing is recorded for "No speech detected"
+  (thrown out of `audio.collect`, or blank text), cancellation, timeout, load/decode failure (all throw first) or a
+  cloud provider. Speech before Speed = `speechMs(audioMs, sttSpeedPercent)` (`audioMs * percent / 100`, Sonic is
+  exact enough), with the speed read from Settings by the stats store on `appScope` when it records: no change to
+  `transcribe`, the controller or the interface, and the audio path never waits (a speed change mid-dictation skews
+  that sample; accepted).
 - Model downloads (`OnDeviceModelStore`, `AppContainer.onDeviceModels`, unit tested with MockWebServer): one at a
   time, on `appScope` (outlives the screen), OkHttp with a 30 s read timeout, files in
   `noBackupFilesDir/models/<modelId>/` (never backed up; no backup-rule change). `init` scans off main: a model is
@@ -873,25 +885,26 @@ Providers (settings store a provider id for each):
   in "Settings UI (CP12)" below.
 
 Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, Compose foundation, no Material):
-- Pages: `SettingsApp` holds `Page` (Home, Transcription, PostProcessing, Appearance) in `rememberSaveable`, a
-  `SeekableTransitionState` + `Transition.AnimatedContent` (push/pop slides, one 300 ms `FastOutSlowInEasing` tween
-  for both pages, no fades or scale: forward the sub-page slides in from the full width over Home, which shifts 1/4
-  left underneath; back the sub-page slides off to the right on top (Home's zIndex -1) while Home returns from 1/4
-  left. The old spec faded the sub-page out in the last 150 ms after a 1/5-width slide, so it vanished abruptly at
-  the end) and a `PredictiveBackHandler` (enabled off Home) that seeks the transition with the gesture
-  (`seekTo(progress, Home)`), animates back on cancel; 3-button back just completes. A tap navigation first does
-  `seekTo(0f, page)` (waits for the new page's composition), then `animateTo`: `animateTo` alone takes its start
-  frame before composing the new page, so that composition time (~100 ms on the emulator) skipped the start of the
-  slide. Skipped after a back gesture (already seeked towards Home) or while a transition is running (seekTo would
-  wait for it to end, then play the reverse: ~600 ms). Each page sits in a `SaveableStateProvider`; sub-pages' saved
-  state is dropped once back on Home (they open fresh; Home keeps its scroll). Sub-page header: Lucide chevron-left
-  ("Back", 32 x 40 dp box) + title (Blinker 22, heading). `MainActivity`: `IrisTheme { SettingsApp(...) }` with a
-  `Saver(container.appScope)` (`AppContainer.appScope` is public for it).
+- Pages: `SettingsApp` holds `Page` (Home, Transcription, PostProcessing, Appearance, Statistics) in `rememberSaveable`,
+  a `SeekableTransitionState` + `Transition.AnimatedContent` (push/pop slides, one 300 ms `FastOutSlowInEasing` tween
+  for both pages, no fades or scale: forward the sub-page slides in from the full width over Home, which shifts 1/4 left
+  underneath; back the sub-page slides off to the right on top (Home's zIndex -1) while Home returns from 1/4 left. The
+  old spec faded the sub-page out in the last 150 ms after a 1/5-width slide, so it vanished abruptly at the end) and a
+  `PredictiveBackHandler` (enabled off Home) that seeks the transition with the gesture (`seekTo(progress, Home)`),
+  animates back on cancel; 3-button back just completes. A tap navigation first does `seekTo(0f, page)` (waits for the
+  new page's composition), then `animateTo`: `animateTo` alone takes its start frame before composing the new page, so
+  that composition time (~100 ms on the emulator) skipped the start of the slide. Skipped after a back gesture (already
+  seeked towards Home) or while a transition is running (seekTo would wait for it to end, then play the reverse: ~600
+  ms). Each page sits in a `SaveableStateProvider`; sub-pages' saved state is dropped once back on Home (they open
+  fresh; Home keeps its scroll). Sub-page header: Lucide chevron-left ("Back", 32 x 40 dp box) + title (Blinker 22,
+  heading). `MainActivity`: `IrisTheme { SettingsApp(...) }` with a `Saver(container.appScope)` (`AppContainer.appScope`
+  is public for it).
 - Home: logo (22 dp to the Services card: 7 dp bottom padding + the 15 dp item spacing), Services card
   (Accessibility Service / Microphone Permission: "Enabled" in blue, "Disabled" in the failure colour with "Setup →"
   (accessibility settings / the permission request; permanently denied after an earlier request -> App info;
   accessibility also shows the restricted-settings hint); both re-checked on `ON_RESUME`), then nav cards
-  Transcription Provider (audio-lines), Post Processing Provider (sparkles), Appearance (eye); footer
+  Transcription Provider (audio-lines), Post Processing Provider (sparkles), Appearance (eye), Statistics (gauge, "How
+  on-device models run on this phone"); footer
   "Version <versionName>" (PackageManager), pinned to the bottom while the content is short.
 - Transcription Provider: picker card (audio-lines icon, "Transcription Provider" black dropdown: On device, OpenAI,
   Vercel AI Gateway, Deepgram, Soniox, each with its brand mark in a `ProviderIconBox` (On device: Lucide `smartphone`;
@@ -979,6 +992,26 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
   Level (default "Model default"), the shared Timeout, "Send JSON Schema" switch; no Provider Options.
 - Appearance: "Text Panel": "Lines" (1..6, "Lines of live text the panel shows.", helper "Notices show at least 4
   lines.") and "Max Width" (30..90 step 10, shown "50%", "Share of the screen width the panel can use.").
+- Statistics (CP16, `StatisticsPage.kt`; data in `stt/ondevice/OnDeviceStats.kt`, pure parts unit tested): per
+  on-device model with at least one sample (`modelsWithStats`: catalogue order, unknown ids dropped), from its last 20
+  dictations (`MAX_SAMPLES`; `StatsSample(speechMs, decodeMs, waitMs)`, `ModelStats(samples, lastLoadMs)`), a
+  `Section(model.label)` with "Speed" = the verdict (`speedVerdict` on the ratio of sums `speedFactor` = Σ speech ÷
+  Σ decode: >= 1.5 "Keeps up" in `enabled`, >= 1.0 "Borderline" in `warning`, else "Falls behind" in `failure`) with
+  `speedFactorText` below ("7.1× faster than you speak", "2.0× slower …", "As fast as you speak" when it rounds to
+  1.0; verdict and text both use the factor rounded to one decimal, `roundToTenth`, so 1.45 is "Keeps up" with
+  "1.5×"), "Wait After Stop" (`medianWaitMs`, even count = mean of the middle two; `tenthsText` "4.8 s"; "Median time
+  from stopping to the final text."), "Model Load" (last load, if known; "Last time the model was loaded into
+  memory."), then `statsBasisText` ("From your last dictation." / "From your last N dictations."). Rows are
+  `StatRow`s (title + value right, subtitle; merged for TalkBack). Below the sections the speed helper and "Reset
+  Statistics" (`DangerButton`, no confirmation: removes every model's samples and load times). No samples at all: a
+  card "No statistics yet" / "Dictate with an on-device model to see how fast it runs on this phone."; before the
+  first read only the header shows (no empty-state flash). `SettingsApp` collects `onDeviceStats.stats` (like
+  `onDeviceModels.state`) and passes the value (null until the first read) to the page, so it is read before the page
+  slides in and re-opening doesn't restart the collection. Storage: `OnDeviceStats` (`AppContainer.onDeviceStats`),
+  its own DataStore file `on_device_stats`, one key `models` holding the JSON map (`encodeStats` / `decodeStats`:
+  `ignoreUnknownKeys`, null or malformed = empty); writes on `appScope` (`edit` serializes them; an `IOException` is
+  only logged; a corrupt file is replaced with an empty one, `ReplaceFileCorruptionHandler`), excluded from backup
+  and device transfer like `secrets` (device-specific numbers). No cloud stats, no usage totals.
 - Autosave (no Save buttons, except the custom provider form (CP13)): text fields commit on blur; IME Done, a tap
   on empty space (page `detectTapGestures`),
   every non-text control, the back chevron / gesture and `ON_STOP` (home, app switch, rotation) clear focus, so blur
@@ -1025,6 +1058,7 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
   (bg #E2E7E7, card #FFFFFF, text #2F3031, muted #6F7173, failure #EC1664, enabled #0061F3, control #2F3031, field
   border #D7D7D7, separator #D8DBDF, services divider #D6D8DD, track #C6C8CC, button text #FDFDFD); dark derived: bg
   #141616, card #212424, text #E8EAEA, muted #9B9EA0, failure #FF5C93 and enabled #5C9DFF (>= 4.5:1 on the card),
+  warning (CP16, not in the design: Statistics' "Borderline") #B45309 light (~5:1 on white) / #F59E0B dark (~7:1),
   controls stay black (#0B0C0C + 1 dp #3A3D3E outline), slider/switch "on" = the text colour (a black thumb would
   vanish on a dark card). Shadows via `Modifier.dropShadow` (card y 3 blur 3.1 7 %, button y 2 blur 0.95 8 %,
   panel y 4 blur 12 16 %; dark 35-50 %). `Theme.Iris` (+ `values-night`) sets `windowBackground` to
@@ -1200,6 +1234,10 @@ Not covered by unit tests; check on a real device (ideally more than one OEM) af
   new session streams (no `Loaded` line, no hang: native stream released, lock handed off); a dictation that ends
   "No speech detected" (silence only, Skip Silence on), then a normal one, works likewise; with Skip Silence on at
   Speed >= ~1.6x a phrase's last words show only when the next phrase starts or at stop, the final text is complete.
+- Statistics (CP16): after real dictations (e.g. Nemotron at 1.5x) Speed ≈ the `VAD: sent X ms` total ÷ the
+  `Decoded … in Y ms` totals (≈ 7×), Wait After Stop ≈ the median of the `Timing: stop->final` logs, Model Load = the
+  last `Loaded … in X ms`; a "No speech detected" dictation and a ✕ cancel add nothing; Reset empties the page; stats
+  survive an app restart; TalkBack reads each row (title, value, subtitle); light and dark verdict colours.
 - Long Gateway upload: a 10 min Gateway after-stop dictation (VAD off) succeeds; on a 413, reuse `splitAtPauses`
   for the Gateway too.
 - Gateway STT with a real voice: live text streams and the final is inserted (default model, plus a 16 kHz one:
@@ -1292,3 +1330,4 @@ Update this section as checkpoints land.
 | CP13 | Custom OpenAI-compatible cleanup providers | Done (device check pending) |
 | CP14 | On-device STT (sherpa-onnx) | Done (emulator-checked with silence; real-voice device check pending) |
 | CP15 | On-device streaming STT (Nemotron) | Done (device check pending) |
+| CP16 | On-device statistics | Done (device check pending) |

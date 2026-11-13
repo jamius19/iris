@@ -7,7 +7,9 @@ package dev.jamius.iris.ui.settings
 
 import dev.jamius.iris.data.settings.CustomCleanupProvider
 import dev.jamius.iris.data.settings.Settings
+import dev.jamius.iris.stt.ondevice.SpeedVerdict
 import dev.jamius.iris.stt.ondevice.onDeviceModel
+import dev.jamius.iris.stt.ondevice.speedVerdict
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -152,6 +154,51 @@ class SettingsTextTest {
         assertFalse(sameHost("https://api.groq.com/openai/v1", "https://evil.example/openai/v1"))
         assertFalse(sameHost("https://api.groq.com/v1", "https://groq.com/v1"))
         assertFalse(sameHost("not a url", "not a url"))
+    }
+
+    @Test
+    fun speedFactorTexts() {
+        assertEquals("7.1× faster than you speak", speedFactorText(7.098))
+        assertEquals("2.0× slower than you speak", speedFactorText(0.5))
+        assertEquals("As fast as you speak", speedFactorText(1.02))
+        assertEquals("As fast as you speak", speedFactorText(0.98))
+    }
+
+    @Test
+    fun theVerdictAgreesWithTheSpeedTextAtTheThresholds() {
+        val cases = mapOf(
+            0.94 to ("Falls behind" to "1.1× slower than you speak"),
+            0.95 to ("Borderline" to "As fast as you speak"),
+            0.98 to ("Borderline" to "As fast as you speak"),
+            1.44 to ("Borderline" to "1.4× faster than you speak"),
+            1.45 to ("Keeps up" to "1.5× faster than you speak"),
+            1.499 to ("Keeps up" to "1.5× faster than you speak"),
+        )
+        for ((factor, expected) in cases) {
+            assertEquals("$factor", expected, verdictLabel(speedVerdict(factor)) to speedFactorText(factor))
+        }
+    }
+
+    @Test
+    fun tenthsTexts() {
+        assertEquals("0.2 s", tenthsText(191))
+        assertEquals("4.8 s", tenthsText(4_849))
+        assertEquals("12.3 s", tenthsText(12_340))
+        assertEquals("0.1 s", tenthsText(50))
+        assertEquals("0.0 s", tenthsText(0))
+    }
+
+    @Test
+    fun verdictLabels() {
+        assertEquals("Keeps up", verdictLabel(SpeedVerdict.KEEPS_UP))
+        assertEquals("Borderline", verdictLabel(SpeedVerdict.BORDERLINE))
+        assertEquals("Falls behind", verdictLabel(SpeedVerdict.FALLS_BEHIND))
+    }
+
+    @Test
+    fun statsBasisTexts() {
+        assertEquals("From your last dictation.", statsBasisText(1))
+        assertEquals("From your last 12 dictations.", statsBasisText(12))
     }
 
     @Test

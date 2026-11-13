@@ -12,6 +12,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.withIndex
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
@@ -33,6 +35,9 @@ class OnDeviceSpeechToTextTest {
     private val partials = mutableListOf<String>()
     private var streams = 0
 
+    /** `record` calls: model id, audio ms, decode ms (wait is 0: SystemClock returns defaults in unit tests). */
+    private val records = mutableListOf<Triple<String, Long, Long>>()
+
     private fun TestScope.provider(
         downloaded: Boolean = true,
         maxSegmentBytes: Int = MAX_SEGMENT_BYTES,
@@ -44,15 +49,17 @@ class OnDeviceSpeechToTextTest {
         decode = { _, language, samples ->
             decoded += samples
             languages += language
-            decode(samples)
+            Decoded(decode(samples), busyMs = 10)
         },
+        // Cumulative busy time: 10 ms per emission.
         stream = { _, chunks ->
             streams++
-            stream(chunks)
+            stream(chunks).withIndex().map { Decoded(it.value, busyMs = 10L * (it.index + 1)) }
         },
         selection = { MOONSHINE to "" },
         scope = backgroundScope,
-        maxSegmentBytes = maxSegmentBytes
+        maxSegmentBytes = maxSegmentBytes,
+        record = { id, audioMs, decodeMs, _ -> records += Triple(id, audioMs, decodeMs) }
     )
 
     /** Replies with [texts] in order. */
@@ -183,6 +190,7 @@ class OnDeviceSpeechToTextTest {
         }
         // 60 s plus twice the pending audio.
         assertEquals(62_000L, currentTime)
+        assertTrue(records.isEmpty())
     }
 
     @Test
@@ -317,6 +325,7 @@ class OnDeviceSpeechToTextTest {
         }
         // 60 s plus twice the pending audio.
         assertEquals(62_000L, currentTime)
+        assertTrue(records.isEmpty())
     }
 
     @Test
@@ -342,6 +351,7 @@ class OnDeviceSpeechToTextTest {
             assertEquals("On-device transcription timed out", e.message)
         }
         assertEquals(62_000L, currentTime)
+        assertTrue(records.isEmpty())
     }
 
     @Test
@@ -398,6 +408,92 @@ class OnDeviceSpeechToTextTest {
         }
         assertTrue(streamCancelled)
         assertEquals(0L, currentTime)
+    }
+
+    @Test
+    fun noSpeechIsNotRecorded() = runTest {
+        // Text was decoded before the audio flow failed (the VAD's "No speech detected" from the controller).
+        val offline = flow {
+            emit(chunk(10))
+            emit(ByteArray(0))
+            yield() // The segment is decoded.
+            throw SttException("No speech detected")
+        }
+        val streamed = flow {
+            emit(chunk(10))
+            yield() // The stream has taken the chunk and emitted text.
+            throw SttException("No speech detected")
+        }
+        try {
+            provider(decode = replies("Hello.")).run(offline)
+            fail("Expected SttException")
+        } catch (e: SttException) {
+            assertEquals("No speech detected", e.message)
+        }
+        try {
+            provider(stream = streamTexts("a", final = "a.")).run(streamed, model = NEMOTRON)
+            fail("Expected SttException")
+        } catch (e: SttException) {
+            assertEquals("No speech detected", e.message)
+        }
+        // Both had text, still nothing recorded.
+        assertEquals(listOf("Hello.", "a"), partials)
+        assertTrue(records.isEmpty())
+    }
+
+    @Test
+    fun aDictationWithTextIsRecordedOnce() = runTest {
+        val stt = provider(decode = replies("Hello.", "Bye."))
+        // 16,000 + 8,000 samples = 48,000 bytes = 1.5 s.
+        stt.run(flowOf(chunk(16_000), ByteArray(0), chunk(8_000)))
+
+        assertEquals(listOf(Triple(MOONSHINE, 1_500L, 20L)), records)
+    }
+
+    @Test
+    fun aStreamedDictationRecordsTheLastBusyTime() = runTest {
+        val stt = provider(stream = streamTexts("a", "a b", final = "a b."))
+        stt.run(flowOf(chunk(16_000), ByteArray(0), chunk(16_000)), model = NEMOTRON)
+
+        // Three emissions: the last one's cumulative 30 ms, not the sum.
+        assertEquals(listOf(Triple(NEMOTRON, 2_000L, 30L)), records)
+    }
+
+    @Test
+    fun blankTextIsNotRecorded() = runTest {
+        provider(decode = replies(" ")).run(flowOf(chunk(10)))
+        provider(stream = streamTexts(" ", final = "")).run(flowOf(chunk(10)), model = NEMOTRON)
+
+        assertTrue(records.isEmpty())
+    }
+
+    @Test
+    fun failuresAreNotRecorded() = runTest {
+        try {
+            provider(decode = { throw SttException("On-device transcription failed") }).run(flowOf(chunk(10)))
+            fail("Expected SttException")
+        } catch (e: SttException) {
+            assertEquals("On-device transcription failed", e.message)
+        }
+        try {
+            provider(downloaded = false).run(flowOf(chunk(10)))
+            fail("Expected SttException")
+        } catch (e: SttException) {
+            assertEquals("Download the Moonshine Base EN model in Iris settings", e.message)
+        }
+
+        assertTrue(records.isEmpty())
+    }
+
+    @Test
+    fun aCancelledDictationIsNotRecorded() = runTest {
+        val stt = provider(decode = { awaitCancellation() })
+        val session = launch { stt.run(flowOf(chunk(10))) }
+        runCurrent()
+        session.cancel()
+        runCurrent()
+
+        assertTrue(records.isEmpty())
     }
 
     private companion object {

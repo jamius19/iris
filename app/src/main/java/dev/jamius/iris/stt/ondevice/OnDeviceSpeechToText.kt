@@ -37,15 +37,18 @@ private const val SPLIT_SEARCH_BYTES = 8 * 16_000 * 2
  *   closes; cancellable (the recognizer's).
  * @param selection the stored (model id, language) for [warmUp].
  * @param scope where [warmUp] reads [selection] (the app scope).
+ * @param record a dictation that produced text: model id, model input in ms (after Speed), the recognizer's busy time,
+ *   stop -> final text. Must not block.
  */
 class OnDeviceSpeechToText(
     private val isDownloaded: (String) -> Boolean,
     private val preload: (OnDeviceModel, language: String) -> Unit,
-    private val decode: suspend (OnDeviceModel, language: String, FloatArray) -> String,
-    private val stream: (OnDeviceModel, ReceiveChannel<ByteArray>) -> Flow<String>,
+    private val decode: suspend (OnDeviceModel, language: String, FloatArray) -> Decoded,
+    private val stream: (OnDeviceModel, ReceiveChannel<ByteArray>) -> Flow<Decoded>,
     private val selection: suspend () -> Pair<String, String>,
     private val scope: CoroutineScope,
     private val maxSegmentBytes: Int = MAX_SEGMENT_BYTES,
+    private val record: (modelId: String, audioMs: Long, decodeMs: Long, waitMs: Long) -> Unit = { _, _, _, _ -> },
 ) : SpeechToTextProvider {
 
     override fun sampleRate(model: String): Int = SAMPLE_RATE
@@ -77,10 +80,14 @@ class OnDeviceSpeechToText(
             var count = 0
             // Queued and buffered audio not decoded yet, for the deadline after stop.
             var pendingBytes = 0L
+            var audioBytes = 0L
+            var decodeMs = 0L
             // Never makes the collector wait (the mic would overflow): segments queue up.
             val decoder = launch {
                 for (segment in segments) {
-                    val part = decode(m, lang, pcm16ToFloats(segment)).trim()
+                    val result = decode(m, lang, pcm16ToFloats(segment))
+                    decodeMs += result.busyMs
+                    val part = result.text.trim()
                     pendingBytes -= segment.sumOf { it.size }
                     count++
                     if (part.isNotEmpty()) {
@@ -105,6 +112,7 @@ class OnDeviceSpeechToText(
                 buffer += chunk
                 bufferBytes += chunk.size
                 pendingBytes += chunk.size
+                audioBytes += chunk.size
                 if (bufferBytes > maxSegmentBytes) {
                     val parts = splitAtPauses(buffer, maxSegmentBytes, SPLIT_SEARCH_BYTES).map { it.toList() }
                     parts.dropLast(1).forEach(::queue)
@@ -121,7 +129,9 @@ class OnDeviceSpeechToText(
             val pendingMs = pendingBytes * 1000 / (SAMPLE_RATE * 2)
             withTimeoutOrNull(BASE_DEADLINE_MS + 2 * pendingMs) { decoder.join() }
                 ?: throw SttException("On-device transcription timed out")
-            Log.d(TAG, "Timing: stop->final ${SystemClock.elapsedRealtime() - stoppedAt} ms, $count segments")
+            val waitMs = SystemClock.elapsedRealtime() - stoppedAt
+            Log.d(TAG, "Timing: stop->final $waitMs ms, $count segments")
+            if (text.isNotEmpty()) record(m.id, audioMs(audioBytes), decodeMs, waitMs)
             text
         }
     }
@@ -136,12 +146,16 @@ class OnDeviceSpeechToText(
         // Bytes per chunk not decoded yet, oldest first, for the deadline after stop.
         val queued = ArrayDeque<Int>()
         var pendingBytes = 0L
+        var audioBytes = 0L
+        var decodeMs = 0L
         var text = ""
         val decoder = launch {
             stream(m, chunks).collect {
                 // The final emission has no chunk.
                 queued.removeFirstOrNull()?.let { bytes -> pendingBytes -= bytes }
-                val t = it.trim()
+                // Cumulative: the last emission has the whole dictation's.
+                decodeMs = it.busyMs
+                val t = it.text.trim()
                 if (t != text) {
                     text = t
                     onPartial(t)
@@ -152,6 +166,7 @@ class OnDeviceSpeechToText(
             if (chunk.isEmpty()) return@collect
             queued.addLast(chunk.size)
             pendingBytes += chunk.size
+            audioBytes += chunk.size
             chunks.trySend(chunk)
         }
         val stoppedAt = SystemClock.elapsedRealtime()
@@ -159,7 +174,9 @@ class OnDeviceSpeechToText(
         val pendingMs = pendingBytes * 1000 / (SAMPLE_RATE * 2)
         withTimeoutOrNull(BASE_DEADLINE_MS + 2 * pendingMs) { decoder.join() }
             ?: throw SttException("On-device transcription timed out")
-        Log.d(TAG, "Timing: stop->final ${SystemClock.elapsedRealtime() - stoppedAt} ms, streamed")
+        val waitMs = SystemClock.elapsedRealtime() - stoppedAt
+        Log.d(TAG, "Timing: stop->final $waitMs ms, streamed")
+        if (text.isNotEmpty()) record(m.id, audioMs(audioBytes), decodeMs, waitMs)
         text
     }
 
@@ -170,6 +187,8 @@ class OnDeviceSpeechToText(
             if (isDownloaded(m.id)) preload(m, languageFor(m, language))
         }
     }
+
+    private fun audioMs(bytes: Long): Long = bytes * 1000 / (SAMPLE_RATE * 2)
 
     /** Only Whisper takes a language, and only one it knows. */
     private fun languageFor(model: OnDeviceModel, language: String): String =

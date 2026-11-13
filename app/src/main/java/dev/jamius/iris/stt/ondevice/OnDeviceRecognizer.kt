@@ -36,6 +36,9 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 
+/** A decode's text and the recognizer's busy time for it (a stream's: so far). */
+data class Decoded(val text: String, val busyMs: Long)
+
 /**
  * Holds one sherpa-onnx recognizer (one model + language; offline, or online for a streaming model) at a time. Load,
  * decode, unload and release all run on one worker thread under one lock: decodes are serialized across sessions
@@ -44,8 +47,12 @@ import java.io.File
  * for it to end. Released 5 min after the bubble hides (or on memory trim). Not unit tested (native).
  *
  * @param dir a model's download directory (the store's).
+ * @param onLoaded a model's load time after each successful load (on the worker; must not block).
  */
-class OnDeviceRecognizer(private val dir: (modelId: String) -> File) {
+class OnDeviceRecognizer(
+    private val dir: (modelId: String) -> File,
+    private val onLoaded: (modelId: String, ms: Long) -> Unit,
+) {
 
     private val worker = Dispatchers.IO.limitedParallelism(1)
     private val scope = CoroutineScope(SupervisorJob() + worker)
@@ -92,10 +99,10 @@ class OnDeviceRecognizer(private val dir: (modelId: String) -> File) {
     }
 
     /**
-     * The text of [samples] (16 kHz mono, -1..1). Cancelling returns at once; the native decode (not interruptible)
-     * still finishes on the worker and its result is dropped.
+     * The text of [samples] (16 kHz mono, -1..1) and the decode's time. Cancelling returns at once; the native decode
+     * (not interruptible) still finishes on the worker and its result is dropped.
      */
-    suspend fun decode(model: OnDeviceModel, language: String, samples: FloatArray): String = scope.async {
+    suspend fun decode(model: OnDeviceModel, language: String, samples: FloatArray): Decoded = scope.async {
         inUse.withLock {
             val recognizer = checkNotNull(ensureLoaded(model, language).offline)
             val started = SystemClock.elapsedRealtime()
@@ -104,10 +111,10 @@ class OnDeviceRecognizer(private val dir: (modelId: String) -> File) {
             try {
                 stream.acceptWaveform(samples, SAMPLE_RATE)
                 recognizer.decode(stream)
-                recognizer.getResult(stream).text.also {
-                    val ms = SystemClock.elapsedRealtime() - started
-                    Log.d(TAG, "Decoded ${samples.size * 1000L / SAMPLE_RATE} ms of audio in $ms ms")
-                }
+                val text = recognizer.getResult(stream).text
+                val ms = SystemClock.elapsedRealtime() - started
+                Log.d(TAG, "Decoded ${samples.size * 1000L / SAMPLE_RATE} ms of audio in $ms ms")
+                Decoded(text, ms)
             } catch (e: Exception) {
                 Log.e(TAG, "Decode failed", e)
                 throw SttException("On-device transcription failed")
@@ -120,10 +127,10 @@ class OnDeviceRecognizer(private val dir: (modelId: String) -> File) {
 
     /**
      * One dictation through [model]'s online recognizer: emits the whole text after each chunk taken from [audio]
-     * (16 kHz PCM16), then the final text once [audio] closes. Cancelling returns at once; the native stream is
-     * released after any decode in flight.
+     * (16 kHz PCM16), then the final text once [audio] closes, each with the decode time so far. Cancelling returns at
+     * once; the native stream is released after any decode in flight.
      */
-    fun stream(model: OnDeviceModel, audio: ReceiveChannel<ByteArray>): Flow<String> = channelFlow {
+    fun stream(model: OnDeviceModel, audio: ReceiveChannel<ByteArray>): Flow<Decoded> = channelFlow {
         // In the recognizer's scope, not the caller's: a cancelled caller returns without waiting for a native decode.
         val session = scope.async {
             inUse.withLock {
@@ -143,7 +150,7 @@ class OnDeviceRecognizer(private val dir: (modelId: String) -> File) {
                         }
                         samples += floats.size
                         busyMs += SystemClock.elapsedRealtime() - started
-                        send(recognizer.getResult(stream).text)
+                        send(Decoded(recognizer.getResult(stream).text, busyMs))
                     }
                     val started = SystemClock.elapsedRealtime()
                     stream.acceptWaveform(FloatArray(TAIL_PADDING_SAMPLES), SAMPLE_RATE)
@@ -151,7 +158,7 @@ class OnDeviceRecognizer(private val dir: (modelId: String) -> File) {
                     while (recognizer.isReady(stream)) recognizer.decode(stream)
                     busyMs += SystemClock.elapsedRealtime() - started
                     Log.d(TAG, "Decoded ${samples * 1000 / SAMPLE_RATE} ms of audio in $busyMs ms")
-                    send(recognizer.getResult(stream).text)
+                    send(Decoded(recognizer.getResult(stream).text, busyMs))
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -223,6 +230,7 @@ class OnDeviceRecognizer(private val dir: (modelId: String) -> File) {
         loaded = new
         lastUse = SystemClock.elapsedRealtime()
         Log.d(TAG, "Loaded ${model.id} in ${lastUse - started} ms")
+        onLoaded(model.id, lastUse - started)
         return new
     }
 

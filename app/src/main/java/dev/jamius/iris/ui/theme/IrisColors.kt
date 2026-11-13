@@ -19,8 +19,9 @@ import androidx.compose.ui.graphics.Color
  * | card | #FFFFFF | #212424 | cards |
  * | text | #2F3031 | #E8EAEA | titles, labels, headings, typed text, card icons |
  * | muted | #6F7173 | #9B9EA0 | subtitles, helper, placeholders, footer |
- * | failure | #EC1664 | #FF5C93 | "Disabled", errors, trash icons, "Not set" |
- * | enabled | #0061F3 | #5C9DFF | "Enabled" status |
+ * | failure | #EC1664 | #FF5C93 | "Disabled", errors, trash icons, "Not set", "Falls behind" |
+ * | enabled | #0061F3 | #5C9DFF | "Enabled" status, "Keeps up" |
+ * | warning | #B45309 | #F59E0B | "Borderline" (Statistics) |
  * | control | #2F3031 | #0B0C0C | dropdown fields and panels, small dark buttons |
  * | controlBorder | none | #3A3D3E | 1 dp outline of controls/panels in dark |
  * | onControl | #FFFFFF | #FFFFFF | text + icons on control |
@@ -45,7 +46,8 @@ import androidx.compose.ui.graphics.Color
  * 1 dp outline so the edge reads), so "all dropdowns black" holds in both themes. The slider and switch "on" colour
  * is [accent] (the text colour), not [control]: a black thumb would vanish on a dark card. Failure and enabled are
  * lightened to keep >= 4.5:1 on the dark card at 11-12 sp (#EC1664 ~3.7:1 -> #FF5C93 ~5.4:1; #0061F3 ~2.8:1 ->
- * #5C9DFF ~5.8:1).
+ * #5C9DFF ~5.8:1). Warning (not in the design) is an amber with the same contrast: #B45309 ~5:1 on white, #F59E0B
+ * ~7:1 on the dark card.
  */
 @Immutable
 data class IrisColors(
@@ -55,6 +57,7 @@ data class IrisColors(
     val muted: Color,
     val failure: Color,
     val enabled: Color,
+    val warning: Color,
     val control: Color,
     /** [Color.Unspecified] = no outline (light). */
     val controlBorder: Color,
@@ -83,6 +86,7 @@ val LightIrisColors = IrisColors(
     muted = Color(0xFF6F7173),
     failure = Color(0xFFEC1664),
     enabled = Color(0xFF0061F3),
+    warning = Color(0xFFB45309),
     control = Color(0xFF2F3031),
     controlBorder = Color.Unspecified,
     onControl = Color(0xFFFFFFFF),
@@ -110,6 +114,7 @@ val DarkIrisColors = IrisColors(
     muted = Color(0xFF9B9EA0),
     failure = Color(0xFFFF5C93),
     enabled = Color(0xFF5C9DFF),
+    warning = Color(0xFFF59E0B),
     control = Color(0xFF0B0C0C),
     controlBorder = Color(0xFF3A3D3E),
     onControl = Color(0xFFFFFFFF),
