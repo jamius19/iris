@@ -83,7 +83,7 @@ fun PageScaffold(title: String?, onBack: (() -> Unit)?, content: @Composable Col
                         painterResource(R.drawable.iris_logo),
                         contentDescription = "Iris",
                         modifier = Modifier
-                            .padding(start = 7.dp)
+                            .padding(start = 7.dp, bottom = 15.dp) // 30 dp to the first card
                             .height(30.dp)
                     )
                 } else {

@@ -12,9 +12,6 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.SeekableTransitionState
 import androidx.compose.animation.core.rememberTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
@@ -52,7 +49,7 @@ import kotlinx.coroutines.launch
 enum class Page { Home, Transcription, PostProcessing, Appearance }
 
 /**
- * The settings UI: Home and its three sub-pages (own navigation state, slide + fade transitions, predictive back),
+ * The settings UI: Home and its three sub-pages (own navigation state, slide transitions, predictive back),
  * the model catalogues and their load triggers. Leaving a page, the app (ON_STOP) or tapping empty space clears focus,
  * which commits a focused text field.
  */
@@ -101,7 +98,15 @@ fun SettingsApp(
 
     var page by rememberSaveable { mutableStateOf(Page.Home) }
     val pageState = remember { SeekableTransitionState(page) }
-    LaunchedEffect(page) { pageState.animateTo(page) }
+    LaunchedEffect(page) {
+        // Composing the new page takes a frame or more; seeking to 0 first starts the clock after it, else animateTo
+        // counts that time and skips the start. Not after a back gesture, which already seeked towards Home, nor while
+        // a transition runs: seekTo would wait for it to finish, then play the reverse.
+        if (pageState.currentState == pageState.targetState && pageState.targetState != page) {
+            pageState.seekTo(0f, targetState = page)
+        }
+        pageState.animateTo(page)
+    }
     PredictiveBackHandler(enabled = page != Page.Home) { events ->
         focusManager.clearFocus()
         try {
@@ -127,18 +132,14 @@ fun SettingsApp(
     Box(Modifier.fillMaxSize()) {
         transition.AnimatedContent(
             transitionSpec = {
-                val offset = tween<IntOffset>(PAGE_MS, easing = FastOutSlowInEasing)
-                val fade = tween<Float>(PAGE_MS, easing = FastOutSlowInEasing)
+                // One spec for both pages, no fades: nothing disappears before the slide ends.
+                val slide = tween<IntOffset>(PAGE_MS, easing = FastOutSlowInEasing)
                 if (targetState != Page.Home) {
-                    (slideInHorizontally(offset) { it / 5 } + fadeIn(fade))
-                        .togetherWith(slideOutHorizontally(offset) { -it / 10 } + fadeOut(fade))
+                    // The sub-page slides in over Home, which shifts a quarter left underneath.
+                    slideInHorizontally(slide) { it } togetherWith slideOutHorizontally(slide) { -it / 4 }
                 } else {
-                    // Home comes in underneath (zIndex -1), no fade; the sub-page stays opaque for the first half.
-                    slideInHorizontally(offset) { -it / 10 }
-                        .togetherWith(
-                            scaleOut(fade, targetScale = 0.9f) + slideOutHorizontally(offset) { it / 5 } +
-                                fadeOut(tween(PAGE_MS / 2, delayMillis = PAGE_MS / 2))
-                        )
+                    // The sub-page slides off on top (Home's zIndex -1); Home comes back underneath.
+                    (slideInHorizontally(slide) { -it / 4 } togetherWith slideOutHorizontally(slide) { it })
                         .apply { targetContentZIndex = -1f }
                 }.using(SizeTransform(clip = false))
             }

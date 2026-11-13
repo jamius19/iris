@@ -41,8 +41,10 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
@@ -91,7 +93,7 @@ private fun FieldShell(
     }
 }
 
-/** The text field's own box: vertical padding, placeholder while empty. */
+/** The text field's own box: vertical padding, placeholder (if any) while empty. */
 @Composable
 private fun RowScope.FieldBox(
     state: TextFieldState,
@@ -104,7 +106,9 @@ private fun RowScope.FieldBox(
             .weight(1f)
             .padding(vertical = 8.dp)
     ) {
-        if (state.text.isEmpty()) Text(placeholder, style, color = IrisTheme.colors.muted, maxLines = 1)
+        if (state.text.isEmpty() && placeholder.isNotEmpty()) {
+            Text(placeholder, style, color = IrisTheme.colors.muted, maxLines = 1)
+        }
         content()
     }
 }
@@ -232,7 +236,8 @@ fun AutosaveTextField(
 /**
  * Write-only API key field: always starts empty (plain remember: never saved instance state, never seeded or read
  * back). A trimmed non-blank input commits on blur / Done (cleared once saved); the trash deletes the stored key; the
- * eye shows the input while typing. [unsetHelper] shows in the failure colour (the key blocks its provider).
+ * eye shows the input while typing. With a key saved and no input it shows display-only dots instead of [placeholder]
+ * (TalkBack: "Saved"). [unsetHelper] shows in the failure colour (the key blocks its provider).
  */
 @OptIn(ExperimentalFoundationApi::class) // undoState: a cleared key must not come back with undo.
 @Composable
@@ -284,7 +289,11 @@ fun ApiKeyField(
             focusRequester = focusRequester,
             hasTrailing = hasInput || isSet,
             field = {
-                FieldBox(state, placeholder, type.field) {
+                FieldBox(state, if (isSet) "" else placeholder, type.field) {
+                    // Looks like a filled, masked field; the stored key is never read.
+                    if (isSet && !hasInput) {
+                        Text(SAVED_KEY_DOTS, type.field, Modifier.clearAndSetSemantics {}, maxLines = 1)
+                    }
                     BasicSecureTextField(
                         state = state,
                         modifier = Modifier
@@ -294,7 +303,10 @@ fun ApiKeyField(
                                 if (focused && !it.isFocused) commit()
                                 focused = it.isFocused
                             }
-                            .semantics { contentDescription = LABEL_API_KEY },
+                            .semantics {
+                                contentDescription = LABEL_API_KEY
+                                if (isSet && !hasInput) stateDescription = "Saved"
+                            },
                         textStyle = type.field.copy(color = colors.text),
                         keyboardOptions = KeyboardOptions(
                             keyboardType = KeyboardType.Password,
@@ -341,3 +353,4 @@ fun ApiKeyField(
 }
 
 private const val LABEL_API_KEY = "API Key"
+private const val SAVED_KEY_DOTS = "••••••••••"

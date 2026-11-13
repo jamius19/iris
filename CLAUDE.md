@@ -684,19 +684,25 @@ Providers (settings store a provider id for each):
 
 Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, Compose foundation, no Material):
 - Pages: `SettingsApp` holds `Page` (Home, Transcription, PostProcessing, Appearance) in `rememberSaveable`, a
-  `SeekableTransitionState` + `Transition.AnimatedContent` (300 ms `FastOutSlowInEasing`; forward: sub-page slides in
-  from 1/5 width + fade, Home slides 1/10 left + fades; back: the sub-page stays on top (Home's zIndex -1), scales to
-  0.9 + slides 1/5 right and fades only in the second half; Home slides back underneath (no fade)) and a
-  `PredictiveBackHandler` (enabled off Home) that seeks the transition with the gesture
-  (`seekTo(progress, Home)`), animates back on cancel; 3-button back just completes. Each page sits in a
-  `SaveableStateProvider`; sub-pages' saved state is dropped once back on Home (they open fresh; Home keeps its
-  scroll). Sub-page header: Lucide chevron-left ("Back", 32 dp box) + title (Blinker 20, heading). `MainActivity`:
-  `IrisTheme { SettingsApp(...) }` with a `Saver(container.appScope)` (`AppContainer.appScope` is public for it).
-- Home: logo, Services card (Accessibility Service / Microphone Permission: "Enabled" in blue, "Disabled" in the
-  failure colour with "Setup →" (accessibility settings / the permission request; permanently denied after an
-  earlier request -> App info; accessibility also shows the restricted-settings hint); both re-checked on
-  `ON_RESUME`), then nav cards Transcription Provider (audio-lines), Post Processing Provider (sparkles), Appearance
-  (eye); footer "Version <versionName>" (PackageManager), pinned to the bottom while the content is short.
+  `SeekableTransitionState` + `Transition.AnimatedContent` (push/pop slides, one 300 ms `FastOutSlowInEasing` tween
+  for both pages, no fades or scale: forward the sub-page slides in from the full width over Home, which shifts 1/4
+  left underneath; back the sub-page slides off to the right on top (Home's zIndex -1) while Home returns from 1/4
+  left. The old spec faded the sub-page out in the last 150 ms after a 1/5-width slide, so it vanished abruptly at
+  the end) and a `PredictiveBackHandler` (enabled off Home) that seeks the transition with the gesture
+  (`seekTo(progress, Home)`), animates back on cancel; 3-button back just completes. A tap navigation first does
+  `seekTo(0f, page)` (waits for the new page's composition), then `animateTo`: `animateTo` alone takes its start
+  frame before composing the new page, so that composition time (~100 ms on the emulator) skipped the start of the
+  slide. Skipped after a back gesture (already seeked towards Home) or while a transition is running (seekTo would
+  wait for it to end, then play the reverse: ~600 ms). Each page sits in a `SaveableStateProvider`; sub-pages' saved
+  state is dropped once back on Home (they open fresh; Home keeps its scroll). Sub-page header: Lucide chevron-left
+  ("Back", 32 dp box) + title (Blinker 20, heading). `MainActivity`: `IrisTheme { SettingsApp(...) }` with a
+  `Saver(container.appScope)` (`AppContainer.appScope` is public for it).
+- Home: logo (30 dp to the Services card: 15 dp bottom padding + the 15 dp item spacing), Services card
+  (Accessibility Service / Microphone Permission: "Enabled" in blue, "Disabled" in the failure colour with "Setup →"
+  (accessibility settings / the permission request; permanently denied after an earlier request -> App info;
+  accessibility also shows the restricted-settings hint); both re-checked on `ON_RESUME`), then nav cards
+  Transcription Provider (audio-lines), Post Processing Provider (sparkles), Appearance (eye); footer
+  "Version <versionName>" (PackageManager), pinned to the bottom while the content is short.
 - Transcription Provider: picker card (cloud icon, "Transcription Provider" black dropdown: OpenAI, Vercel AI Gateway,
   Deepgram, Soniox; an unknown stored id shows as OpenAI); "Provider Settings": the selected provider's "API Key"
   (Gateway helper "(shared with post processing)"), Soniox "Region" dropdown (`SonioxRegion.label`, hint "Your Soniox
@@ -747,7 +753,9 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
   (e.g. Keystore in `SecretStore.put`) is logged without the value and shows "Couldn't save. Try again." (keys:
   "Couldn't save the API key. Try again.") in that control's helper slot. Language fields (blank valid) have a trash
   that clears and saves "".
-- API key field: write-only, starts empty with a placeholder (OpenAI "sk-…", others "Paste your API key"); a plain
+- API key field: write-only, starts empty with a placeholder (OpenAI "sk-…", others "Paste your API key"), or with
+  a key saved 10 display-only dots "••••••••••" in the text colour (hidden from TalkBack; the field's state
+  description is "Saved") until the user types (focus alone keeps them); a plain
   `remember` `TextFieldState` in a `BasicSecureTextField` (hidden; eye / eye-off shows it while there is input),
   never seeded, saved or read back; a trimmed non-blank input commits on blur/Done and is cleared once saved; the
   trash ("Delete saved API key", only when one is set) discards the input, then clears the stored key. Helper "API
@@ -932,16 +940,17 @@ Not covered by unit tests; check on a real device (ideally more than one OEM) af
   "Provider Options, Collapsed"; invalid JSON shows an error and isn't saved; switching the cleanup provider keeps
   the Gateway STT model menu.
 - Settings UI (CP12): light and dark pages match the Figma PNGs (sizes, spacing, colours, fonts) on a real phone;
-  gesture-nav predictive back shows the sub-page sliding/scaling away with Home behind and a cancelled gesture
-  settles back; dropdown panels open above the IME when it covers the space below and never under the nav bar;
-  autosave on blur, Done, back (chevron and gesture), home button and rotation (value persisted after reopening the
-  page), invalid values (blank model, bad JSON, blank prompt name) keep the error and aren't saved; API key: eye
-  toggles visibility, Done saves and clears the input, helper switches to "API key saved…", trash clears it ("Not
-  set" in red); New Prompt focuses the name with the text selected, delete is disabled for the last prompt; a
-  Keystore save failure shows "Couldn't save the API key. Try again." (hard to force: e.g. a device with a broken
-  Keystore); TalkBack reads dropdowns ("<label>, <value>, drop down list, Collapsed"), switches, sliders (name +
-  value, volume keys adjust and save), the back button and the icon buttons' labels; large font scale keeps
-  controls unclipped.
+  page slides (chevron, 3-button and gesture back) run smoothly to the end with no early cut; gesture-nav predictive
+  back shows the sub-page sliding away with Home behind and a cancelled gesture settles back; a saved key shows
+  dots (TalkBack: "API Key, Saved"); dropdown panels open above the IME when it covers the space below and never
+  under the nav bar; autosave on blur, Done, back (chevron and gesture), home button and rotation (value persisted
+  after reopening the page), invalid values (blank model, bad JSON, blank prompt name) keep the error and aren't
+  saved; API key: eye toggles visibility, Done saves and clears the input, helper switches to "API key saved…",
+  trash clears it ("Not set" in red); New Prompt focuses the name with the text selected, delete is disabled for the
+  last prompt; a Keystore save failure shows "Couldn't save the API key. Try again." (hard to force: e.g. a device
+  with a broken Keystore); TalkBack reads dropdowns ("<label>, <value>, drop down list, Collapsed"), switches,
+  sliders (name + value, volume keys adjust and save), the back button and the icon buttons' labels; large font
+  scale keeps controls unclipped.
 
 ### Emulator / Android MCP
 Checked 2026-11-11 on `emulator-5554` (AVD `Medium_Phone_API_37.0`, API 37, 1080x2400; SDK `K:\Android\SDK`).
