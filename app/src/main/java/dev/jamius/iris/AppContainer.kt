@@ -61,8 +61,11 @@ class AppContainer(context: Context) {
 
     private val httpClient = OkHttpClient()
 
-    /** Process lifetime, main thread: app-wide state such as the Soniox catalogue. */
-    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    /**
+     * Process lifetime, main thread: app-wide state such as the Soniox catalogue. The settings UI saves on it too, so
+     * a write started when leaving a page or the app outlives the activity.
+     */
+    val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     private val audioRecorder = AudioRecorder(context)
 

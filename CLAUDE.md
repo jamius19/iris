@@ -16,8 +16,8 @@ the provider interfaces so a new provider is just a new implementation. The one 
 - AGP 9.x with built-in Kotlin (no separate `kotlin-android` plugin). Kotlin 2.2.10, Compose compiler plugin,
   kotlinx.serialization plugin.
 - `minSdk 30`, `targetSdk`/`compileSdk 37`, Java 11 target. JDK 25 locally.
-- Compose Material3 (app UI), OkHttp (HTTP + WebSocket), kotlinx.serialization (JSON),
-  Jetpack DataStore Preferences, Coroutines/Flow.
+- Compose foundation (custom settings UI, no Material), activity-compose 1.13.0 (`PredictiveBackHandler`), OkHttp
+  (HTTP + WebSocket), kotlinx.serialization (JSON), Jetpack DataStore Preferences, Coroutines/Flow.
 - ONNX Runtime Android 1.28.0 (Silero VAD), pinned: 1.29+ adds default-on telemetry (INTERNET permission + an
   `ai.onnxruntime.TelemetryInitializer` ContentProvider); 1.28.0's AAR manifest is empty (checked 2026-11-12: the
   merged manifest gets nothing from it; INTERNET comes from OkHttp) and its libs are 16 KB page aligned.
@@ -28,8 +28,23 @@ the provider interfaces so a new provider is just a new implementation. The one 
   https://github.com/waywardgeek/sonic commit `1d7051354f32392a3b3cdb8a8bcfe56e6f8b744f` (upstream file SHA-256
   `c23fb313fafa9cdab4c9aa291bfdc2426f33a42d0e19e3e8d1cfd3f85258d7df`); only the package line changed (noted in its
   header); licence ships as `assets/sonic_LICENSE.txt`.
-- Lucide icon `audio-lines` (https://lucide.dev/icons/audio-lines, ISC) as `res/drawable/ic_audio_lines.xml`
-  (converted from the 24x24 SVG: stroke 2, round caps/joins); licence ships as `assets/lucide_LICENSE.txt`.
+- Fonts, bundled in `res/font` (not downloadable fonts), from https://github.com/google/fonts commit
+  `3e5667764ccfea32ce0c3d58a3a4756de890adc1` (2026-11-13): `inter.ttf` = `ofl/inter/Inter[opsz,wght].ttf` (variable,
+  876,576 B, SHA-256 `29160a80ff49ddcab2c97711247e08b1fab27a484a329ce8b813d820dc559031`; one instance per weight
+  400/500/600/800 via `FontVariation`, opsz left at 14) and `blinker_semibold.ttf` = `ofl/blinker/Blinker-SemiBold.ttf`
+  (81,676 B, SHA-256 `a9a701eb18cbd5f786f28f986c16895ffc0d0337e4a9a63131b619d9542e07d4`); OFL licences ship as
+  `assets/inter_OFL.txt` / `assets/blinker_OFL.txt`.
+- Lucide 1.72.0 icons (https://github.com/lucide-icons/lucide/tree/1.72.0/icons) as `res/drawable/lucide_<name>.xml`
+  (16: accessibility, mic, audio-lines, sparkles, eye, eye-off, cloud, arrow-down, arrow-right, refresh-cw, trash,
+  radio, check, chevron-left, chevron-down, plus): viewport 24, white stroke (tinted in Compose), round caps/joins,
+  circles/rects converted to paths; `android:width` = the use size and `strokeWidth` chosen so the drawn stroke
+  matches the Figma export (1.5 at 24/16 dp, 1.57 at 23, 1.64 at 22, 1.25 for sparkles, 1.6 at 15, 2.2 at 11). The
+  overlay keeps its own `ic_mic`/`ic_close`/`ic_check`/`ic_exclamation`. `assets/lucide_LICENSE.txt` is the full
+  upstream LICENSE (ISC + the Feather MIT block, "Copyright (c) 2013-present Cole Bemis": radio, check, chevrons,
+  plus, trash, arrows are Feather-derived).
+- Logo `res/drawable/iris_logo.xml` (104 x 30 dp) converted from the designer's `iris_logo.svg` (viewBox 834.46 x
+  240.43); fills `@color/logo_body` / `@color/logo_capsule` (light #3F3F42 / #777A80, `values-night` #D9DBDC /
+  #8E9196).
 - Manual DI: `AppContainer` held by the custom `Application` class `IrisApp`. No Hilt/Koin.
 - All versions live in `gradle/libs.versions.toml`.
 
@@ -38,7 +53,9 @@ the provider interfaces so a new provider is just a new implementation. The one 
 |---|---|
 | (root) | `IrisApp` (Application), `AppContainer` (manual DI, app scope, Soniox catalogue, picks the STT and cleanup providers), `MainActivity` (hosts settings UI) |
 | `data.settings` | Settings model, `SettingsRepository` (DataStore), `SecretStore` (Keystore crypto) |
-| `ui.settings` | Settings screen (Compose) |
+| `ui.settings` | `SettingsApp` (navigation, catalogue load triggers), the four pages, `ModelCatalogs`, `SettingsText` (pure copy/format helpers) |
+| `ui.components` | The design system: cards, rows, buttons, switch, slider, text fields, dropdowns, page scaffold, `Saver`, pure `commitDecision` / `dropdownPlacement` / `sliderValue` / `filterModels` |
+| `ui.theme` | `IrisTheme` (own CompositionLocals, no Material): `IrisColors` (light + derived dark), `IrisType` (Inter + Blinker) |
 | `audio` | PCM16 mono recorder (rate per session); `SileroVad` (ORT wrapper), `SpeechGate` (pure VAD gate); `timeStretched` (Sonic speed-up) |
 | `stt` | `SpeechToTextProvider`; `stt.openai` / `stt.vercel` / `stt.deepgram` / `stt.soniox` streaming + upload providers; `Wav.kt` (upload helpers) |
 | `cleanup` | `CleanupProvider` interface, `parseProviderOptions`; `cleanup.vercel` / `cleanup.openrouter` implementations (Chat Completions helpers shared in `GatewayProtocol.kt`) |
@@ -122,8 +139,8 @@ Overlay (`overlay`, View-based, not Compose: a Compose window in a service needs
 - Bubble position persists as `Settings.bubbleSide` + `bubbleYFraction` (fraction of usable height, so it
   survives rotation). Placement math is in `BubbleGeometry.kt` (unit tested). Panel size persists as
   `Settings.panelLines` (1..6, default 3) and `panelWidthPercent` (30..90, default 50); the service collects
-  settings and calls `setPanelSize` (also before the first show), applied live. Settings > Text panel: two sliders,
-  saved on release.
+  settings and calls `setPanelSize` (also before the first show), applied live. Appearance > Text Panel: two
+  sliders ("Lines", "Max Width"), saved on release.
 - `BubbleView`: 40 dp circle (`circlePx`) inside a 52 dp view (`sizePx`, the touch target; 6 dp margin each side
   for touch and shadow, plus `shadowRoomPx` 6 dp below). Panel: max width `panelWidthPercent` % of the display, clamped to the usable width beside
   the snapped bubble (`panelMaxWidth`), 15 sp text; vertical padding makes one line exactly the circle's height.
@@ -229,9 +246,9 @@ VAD ("Skip silence", CP7):
   are billed; the Gateway upstreams' limits are undocumented); pings only keep the TCP/NAT path. ~1 % of the withheld
   silence. Zeros don't count in `sentBytes`: a session with no speech still ends with "No speech detected" and no commit
   / `audio-done` (if it ran >= 5 s, the socket got only keep-alive zeros). Upload providers get none.
-- Setting `Settings.vadEnabled` (`vad_enabled`, default on): Settings > Transcription > "Skip silence" switch
-  (`ic_mic`), subtitle "Detects speech on-device and sends only that, to cut cost" (live Soniox model: "Detects
-  speech on-device and sends only that; no saving on Soniox real-time (billed by session length)").
+- Setting `Settings.vadEnabled` (`vad_enabled`, default on): Transcription Provider > Audio > "Skip Silence" switch,
+  subtitle "Detects speech on-device and sends only that, to cut cost." (live Soniox model: "Detects speech on-device
+  and sends only that; no saving on Soniox real-time (billed by session length).").
 
 Speed (CP8):
 - `audio.timeStretched(sampleRate, speed)` (`TimeStretch.kt`, pure, unit tested): `Flow<ByteArray>` of PCM16 mono
@@ -242,7 +259,7 @@ Speed (CP8):
   with no flush. Never emits empty arrays.
 - Placement: after `onCompletion` (VAD), before `stt.transcribe`, only when `sttSpeedPercent != 100` and
   `stt.allowsSpeedUp` (otherwise no Sonic object, the same arrays). Soniox real-time is never stretched (billed by
-  wall-clock stream time, wants real-time pace) and Settings hides the slider for a live Soniox model. After
+  wall-clock stream time, wants real-time pace) and the "Audio Speed" slider is hidden for a live Soniox model. After
   `transformWhile`, so only sent chunks reach Sonic and the flush happens exactly at the stop; after `onCompletion`, so
   `NO_SPEECH` is thrown before any flush output (nothing reaches the provider). Every provider acts (commit /
   `audio-done` / upload) only after its `audio.collect` returns, i.e. after the tail. Keep-alive zeros go through Sonic
@@ -497,8 +514,8 @@ Providers (settings store a provider id for each):
   Pricing (pay as you go, 2026-11-13): Nova-3 $0.0043/min mono-language, $0.0052 multi: ~44 % cheaper than
   streaming. Warm-up: keyless `HEAD /v1/listen` through the default (h2) client, 3 min throttle (reset by a
   failure). Logs `Timing: upload X KB, stop->response Y ms`.
-- Deepgram mode: `Settings.deepgramUpload` (`deepgram_upload`, default false), Settings > Transcription switch
-  "Disable realtime streaming (cheaper)", shown only with Deepgram selected.
+- Deepgram mode: `Settings.deepgramUpload` (`deepgram_upload`, default false), Transcription Provider > Model
+  Settings switch "Disable Realtime Streaming", shown only with Deepgram selected.
 - STT, Soniox (direct) (`stt.soniox.SonioxSpeechToText`, `real_time` models): WebSocket, one socket, no reconnect,
   no async fallback. Verified 2026-11-13 (`stt.soniox.SonioxProtocol.kt`) against
   https://docs.soniox.com/api-reference/stt/websocket-api, `/authentication/websocket-authentication`,
@@ -662,76 +679,122 @@ Providers (settings store a provider id for each):
   `low..max`; `openai/gpt-4.1-mini` has no `reasoning_options`. HTTP errors map as above; timeout = "Loading models
   timed out", other transport errors = "Couldn't load models (network error)" (no raw exception in the UI); no `data`
   array = "Unexpected response from AI Gateway".
-  No separate API keys card: each key field sits with the provider that uses it. Transcription and Cleanup each show
-  only the selected provider's key (the Gateway key is one stored key, so with Gateway on both cards show it and
-  saving either updates both).
-  Settings > Transcription: four radio rows (OpenAI (direct) / Vercel AI Gateway / Deepgram / Soniox, each naming
-  its key; the selected one appends " · not set" in the error colour without its key), then the selected provider's
-  key field, then (Soniox only) a read-only "Region" dropdown (`SonioxRegionField`, `PrimaryNotEditable`, saves on
-  select, hint "Your Soniox project's region (data residency); its key works only there."), then the OpenAI model
-  combobox
-  (below; lists the key's transcription models (OpenAI model list above); hint "Realtime models
-  (gpt-live-transcribe, gpt-transcribe, ...) stream; other models upload after you stop. Mode: live|streams, text after stop|after stop") or the Gateway
-  model combobox (lists all transcription models; hint "Live models show text as you speak; others transcribe after
-  you stop. Mode: ..." for the saved model) or the Deepgram model combobox (static `DEEPGRAM_MODELS`, no fetch:
-  refresh only reopens the menu; hint "Deepgram models stream unless realtime streaming is disabled below. Mode:
-  live|after stop") or the Soniox model combobox (the app-level catalogue's ids; hint "Real-time models (stt-rt-…)
-  stream; async models upload after you stop. Mode: live|after stop"). In the menus a streaming model's item ends
-  with the `ic_audio_lines`
-  icon (18 dp, `onSurfaceVariant`, content description "Streams"; `streams`: OpenAI `isRealtimeTranscriptionModel`,
-  Gateway `isStreamingTranscriptionModel`, Deepgram every model while `deepgramUpload` is off, Soniox
-  `sonioxStreams`), others with nothing. The OpenAI list loads only while OpenAI is selected (`sttOpenAi` = none of
-  Gateway/Deepgram/Soniox); the Soniox catalogue loads when the screen opens with Soniox selected (or it is
-  selected) if not loaded, and reloads itself on a key/region change. Then the shared language field (Soniox: its
-  own field, "Language codes (optional, e.g. en, bn)", hint "Comma-separated; Soniox sticks to these. Leave blank to
-  auto-detect.", `sonioxLanguages`), then a "Timeout" `SliderSetting` (5..30 s, step 1) for `sttTimeoutSeconds`, hint
-  "How long to wait for the final transcript after you stop.", then (Deepgram only) a divider and the "Disable realtime
-  streaming (cheaper)" switch row (`ic_audio_lines`, subtitle "Uploads after you stop: no live text, about 44% cheaper",
-  `deepgramUpload`), then a divider and the "Skip silence" switch row (`vadEnabled`), then a divider and a "Speed"
-  `SliderSetting` (100..200 %, step 10, shown "1.0x".."2.0x") for `sttSpeedPercent`, hint "Speeds up the audio sent
-  (pitch kept), so less is billed. Higher speeds can lower accuracy; services with a per-request minimum may not save.",
-  saved on release; hidden (with its divider) for a live Soniox model.
-  Settings shows the cleanup model (and both STT models: `ModelField`) as an editable M3
-  `ExposedDropdownMenuBox` (`PrimaryEditable` field): any
-  custom id can be typed; typing filters the list (case-insensitive substring); explicit Save as other fields.
-  The Gateway catalog (`models`/loading/error, loaded via `AppContainer.gatewayModels`) lives in `SettingsScreen`,
-  shared by the Gateway STT and cleanup model fields and the Gateway reasoning level, in memory only (refetched on
-  each `MainActivity` creation, incl. rotation). It loads when the screen
-  opens with Gateway cleanup or Gateway STT on (or when either is turned on, if not loaded yet), once on a model menu's
-  first open if
-  still not loaded (later failures need refresh), or via refresh; one fetch at a time (a load in progress isn't
-  restarted). A failed load shows its error under the model field. The OpenAI list has its own state in
-  `SettingsScreen`, same lifecycle: loads when the screen opens with OpenAI selected (or when it is selected, if not
-  loaded yet), on first menu open, or via refresh. Saving or clearing the OpenAI key cancels a running load (it
-  writes nothing), drops the list and reloads at once if OpenAI is selected (else on the next switch to it); without
-  a key the error asks for one. Other load failures (e.g. the key fails to decrypt) are logged (`Log.w`) and shown
-  as "Couldn't load models". The menu renders a lazy,
-  height-bounded `LazyColumn` (fixed to the field's width: the menu measures intrinsic width, which lazy lists
-  don't support). Refresh is an `IconButton` beside the field (not in it), so it doesn't focus the field or
-  clear the filter; the box gets `expanded` only while the field is focused, since it focuses its anchor (IME)
-  while expanded. The field's anchor also sees taps on the trailing Save (it toggles the menu first), so Save
-  closes the menu explicitly. A fetch error re-triggers the field's bring-into-view above the IME. The model hint
-  reads "Model must support structured output".
-  Under it, "Reasoning level" is a read-only `ExposedDropdownMenuBox` (`PrimaryNotEditable`) that saves on
-  selection. Options: "Model default" plus the saved model's efforts, else `Settings.REASONING_EFFORTS` (model not
-  in the catalog, catalog not loaded or failed). "Not listed for this model" (error colour) shows only when the
-  model's list is known and lacks the saved value; the value is sent anyway (a cleanup error falls back to the raw
-  transcript). Under that, a "Timeout" `SliderSetting` (1..30 s, step 1) for `cleanupTimeoutSeconds`, hint "If
-  cleanup takes longer, the original text is inserted."
-  Settings > Cleanup: the "AI cleanup" toggle (subtitle "Polish text with an LLM"), then (all dimmed while off) two
-  radio rows (`ProviderRow`: Vercel AI Gateway "Uses the AI Gateway API key (shared with transcription)" /
-  OpenRouter "Uses the OpenRouter API key"), then the selected provider's key, model field and reasoning level
-  (separate `if/else` calls, so unsaved input never carries over), the shared Timeout slider, then a divider and the
-  "Provider options" accordion (`ProviderOptionsField`, collapsed by default, `rememberSaveable`; header row is a
-  `Role.Button` with "Expand"/"Collapse" click label and "Expanded"/"Collapsed" state description, "Not set"/"Set"
-  subtitle and a rotating `ic_expand_more` chevron; `AnimatedVisibility`). Inside: a monospace multiline "JSON" field
-  (3..10 lines, no autocorrect) with an inline error from `parseProviderOptions` that disables Save; blank + Save
-  clears. Hints: Gateway "Sent as providerOptions, e.g. {"gateway": {"order": ["azure", "openai"]}}. See the AI
-  Gateway provider options docs. Leave blank to send none. Stored unencrypted: don't put API keys here."; OpenRouter
-  "Sent as provider (routing), e.g. {"order": ["openai"], "allow_fallbacks": false}. See OpenRouter's provider routing
-  docs. Leave blank to send none." The OpenRouter catalog (`AppContainer.openRouterModels`) has its own state, loaded
-  when the screen opens with OpenRouter cleanup on (or when it is turned on), on first menu open or via refresh;
-  switching the cleanup provider never touches the Gateway catalog (Gateway STT model menu).
+  The settings UI for all of this (provider pickers, key fields, model comboboxes, catalogue loading) is described
+  in "Settings UI (CP12)" below.
+
+Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, Compose foundation, no Material):
+- Pages: `SettingsApp` holds `Page` (Home, Transcription, PostProcessing, Appearance) in `rememberSaveable`, a
+  `SeekableTransitionState` + `Transition.AnimatedContent` (300 ms `FastOutSlowInEasing`; forward: sub-page slides in
+  from 1/5 width + fade, Home slides 1/10 left + fades; back: the sub-page stays on top (Home's zIndex -1), scales to
+  0.9 + slides 1/5 right and fades only in the second half; Home slides back underneath (no fade)) and a
+  `PredictiveBackHandler` (enabled off Home) that seeks the transition with the gesture
+  (`seekTo(progress, Home)`), animates back on cancel; 3-button back just completes. Each page sits in a
+  `SaveableStateProvider`; sub-pages' saved state is dropped once back on Home (they open fresh; Home keeps its
+  scroll). Sub-page header: Lucide chevron-left ("Back", 32 dp box) + title (Blinker 20, heading). `MainActivity`:
+  `IrisTheme { SettingsApp(...) }` with a `Saver(container.appScope)` (`AppContainer.appScope` is public for it).
+- Home: logo, Services card (Accessibility Service / Microphone Permission: "Enabled" in blue, "Disabled" in the
+  failure colour with "Setup →" (accessibility settings / the permission request; permanently denied after an
+  earlier request -> App info; accessibility also shows the restricted-settings hint); both re-checked on
+  `ON_RESUME`), then nav cards Transcription Provider (audio-lines), Post Processing Provider (sparkles), Appearance
+  (eye); footer "Version <versionName>" (PackageManager), pinned to the bottom while the content is short.
+- Transcription Provider: picker card (cloud icon, "Transcription Provider" black dropdown: OpenAI, Vercel AI Gateway,
+  Deepgram, Soniox; an unknown stored id shows as OpenAI); "Provider Settings": the selected provider's "API Key"
+  (Gateway helper "(shared with post processing)"), Soniox "Region" dropdown (`SonioxRegion.label`, hint "Your Soniox
+  project's region (data residency); its key works only there."); "Model Settings": "Speech-to-text Model" combobox
+  (per provider; helper = the provider's mode hint + `sttModeText` of the SAVED model: OpenAI "Realtime models
+  (gpt-live-transcribe, gpt-transcribe, …) stream; other models upload after you stop.", Gateway "Live models show
+  text as you speak; others transcribe after you stop." (save passes `gatewaySttLive(model, catalog)`), Deepgram
+  "Deepgram models stream unless realtime streaming is disabled below." (static `DEEPGRAM_MODELS`, no refresh
+  button), Soniox "Real-time models (stt-rt-…) stream; async models upload after you stop."), Deepgram-only "Disable
+  Realtime Streaming" switch ("Uploads after you stop: no live text, about 44% cheaper."), "Language Code"
+  (placeholder "en", helper "Setting a language can improve accuracy. Leave blank to auto-detect.") or Soniox's
+  "Language Codes" (`sonioxLanguages`, placeholder "en, es, …", helper "Comma-separated; Soniox sticks to these.
+  Leave blank to auto-detect."), "Timeout" slider (5..30 s, "How long to wait for the final transcript after you
+  stop."); "Audio": "Skip Silence" switch, "Audio Speed" slider (100..200 step 10, "1.0x".."2.0x", "Speeds up the
+  audio sent (pitch kept), so less is billed.", helper "Higher speeds can lower accuracy; services with a
+  per-request minimum may not save."; hidden for a live Soniox model). Menu items of streaming models end with the
+  Lucide `radio` icon ("Streams"; OpenAI `isRealtimeTranscriptionModel`, Gateway `isStreamingTranscriptionModel`,
+  Deepgram every model while `deepgramUpload` is off, Soniox `sonioxStreams`).
+- Post Processing Provider: "AI Cleanup" switch card (sparkles, "Polish the transcript with an LLM before it's
+  inserted."); everything below is dimmed (alpha 0.38, animated) while off but stays editable: picker card ("Vercel
+  AI Gateway" / "OpenRouter"), "Provider Settings" key (Gateway: "(shared with transcription)"; OpenRouter
+  placeholder "sk-or-…"), "Model Settings": "Cleanup Model" combobox ("Model must support structured output."),
+  "Reasoning Level" dropdown ("Model default" + the saved model's efforts, else `Settings.REASONING_EFFORTS`; "Not
+  listed for this model" error only when the model's list is known and lacks the saved value, which is still sent;
+  helper "Model default lets the provider decide."), "Timeout" slider (1..30 s, "If cleanup takes longer, the
+  original text is inserted."), "Provider Options" accordion (collapsed, `rememberSaveable`; header `Role.Button`
+  with "Expand"/"Collapse" click label, "Expanded"/"Collapsed" state, "Not set"/"Set" subtitle, rotating
+  chevron-down; inside a monospace "JSON" text area, placeholder "{ }", validated by `providerOptionsError`, blank
+  clears; hints per provider: Gateway "Sent as providerOptions, e.g. {"gateway": {"order": ["azure", "openai"]}}. See
+  the AI Gateway provider options docs. Leave blank to send none. Stored unencrypted: don't put API keys here.",
+  OpenRouter "Sent as provider (routing), e.g. {"order": ["openai"], "allow_fallbacks": false}. See OpenRouter's
+  provider routing docs. Leave blank to send none."); "Prompts": "Active Prompt" read-only dropdown (picks what
+  cleanup uses AND what is edited below) + outlined trash ("Delete prompt <name>", disabled for the last prompt, no
+  confirmation), "New Prompt +" (`newPromptName`: "New prompt", "New prompt 2", …; the default prompt's text; made
+  active; its Name field gets focus with the text selected), then "Name" and "Prompt" (text area, "Instructions the
+  model gets; your transcript is sent with them.") of the active prompt (`key(id)`; trimmed; blank = error, not
+  saved). Gateway and OpenRouter fields are separate calls (as are the four STT providers' fields), so unsaved input
+  never carries over.
+- Appearance: "Text Panel": "Lines" (1..6, "Lines of live text the panel shows.", helper "Notices show at least 4
+  lines.") and "Max Width" (30..90 step 10, shown "50%", "Share of the screen width the panel can use.").
+- Autosave (no Save buttons): text fields commit on blur; IME Done, a tap on empty space (page `detectTapGestures`),
+  every non-text control, the back chevron / gesture and `ON_STOP` (home, app switch, rotation) clear focus, so blur
+  is the one commit path. `commitDecision(draft, stored, validate)` (pure, tested): trimmed == stored = nothing,
+  validator message = `Invalid` (not saved; shown in the helper slot in the failure colour above the helper, red
+  border), else `Save`. Stored values never flow into a focused field; a draft survives rotation
+  (`rememberTextFieldState`). Dropdown picks and switches save at once; sliders on release (or key up / TalkBack
+  `setProgress`) only if changed. Writes go through `Saver` on `appScope` (they outlive the activity); a failed write
+  (e.g. Keystore in `SecretStore.put`) is logged without the value and shows "Couldn't save. Try again." (keys:
+  "Couldn't save the API key. Try again.") in that control's helper slot. Language fields (blank valid) have a trash
+  that clears and saves "".
+- API key field: write-only, starts empty with a placeholder (OpenAI "sk-…", others "Paste your API key"); a plain
+  `remember` `TextFieldState` in a `BasicSecureTextField` (hidden; eye / eye-off shows it while there is input),
+  never seeded, saved or read back; a trimmed non-blank input commits on blur/Done and is cleared once saved; the
+  trash ("Delete saved API key", only when one is set) discards the input, then clears the stored key. Helper "API
+  key saved. Enter a new one to replace it." / "Not set" (failure colour). OpenAI key save/clear calls
+  `ModelCatalogs.onOpenAiKeyChanged`.
+- Dropdowns (all black, panels black): `SelectDropdown` (read-only; `Role.DropdownList`, content description
+  "<label>, <value>", state "Expanded"/"Collapsed", click label "Change"; focusable `Popup`, so back and outside taps
+  close it) and `ModelCombobox` (editable `BasicTextField`: focusing it opens the full list, typing filters with
+  `filterModels` (case-insensitive substring) and reopens it; the arrow ("Show/Hide models") and refresh ("Refresh
+  models", spins and is disabled while loading) act without focusing the field or clearing the filter; the first
+  open of an unloaded list loads it once; a pick saves at once; blank = "Enter a model id."; non-focusable `Popup`
+  so the IME stays; `BackHandler` and blur close it; a tap on the arrow within 400 ms of an outside-tap dismiss
+  doesn't reopen it). `DropdownPanel`: as wide as the field, 4 dp gap, 36 dp rows (selected: medium weight + check),
+  max 260 dp (7 whole rows), lazy, scrolled near the selection; placed by `dropdownPlacement` (pure, tested): below if it fits above
+  the IME / nav bar (minus 8 dp), else on the side with more room, height capped; fades + grows in (120 ms) from the
+  anchor side, fades out (90 ms).
+- Catalogues (`ModelCatalogs`, in memory, refetched with the activity): Gateway's (shared by the Gateway STT model,
+  cleanup model and Gateway reasoning level) loads at app open with Gateway cleanup or Gateway STT on (or when
+  either is turned on, if not loaded), on a combobox's first open or via refresh, one fetch at a time; OpenRouter's
+  likewise with OpenRouter cleanup on (switching the cleanup provider never touches the Gateway catalog); OpenAI's
+  with OpenAI selected; a key save/clear cancels a running OpenAI load (its result is never written), drops the
+  list and reloads if OpenAI is selected; no key = "Set your OpenAI API key to load models", no request; other
+  failures `Log.w` + "Couldn't load models". Soniox: `SonioxCatalog.refresh()` when Soniox is selected and not
+  loaded, on first menu open or refresh (it reloads itself on key/region change). Load errors show in the
+  combobox's helper slot.
+- Theme: `IrisTheme` follows the system dark mode; `IrisColors` (KDoc table) light = the Figma palette exactly
+  (bg #E2E7E7, card #FFFFFF, text #2F3031, muted #6F7173, failure #EC1664, enabled #0061F3, control #2F3031, field
+  border #D7D7D7, separator #D8DBDF, services divider #D6D8DD, track #C6C8CC, button text #FDFDFD); dark derived: bg
+  #141616, card #212424, text #E8EAEA, muted #9B9EA0, failure #FF5C93 and enabled #5C9DFF (>= 4.5:1 on the card),
+  controls stay black (#0B0C0C + 1 dp #3A3D3E outline), slider/switch "on" = the text colour (a black thumb would
+  vanish on a dark card). Shadows via `Modifier.dropShadow` (card y 3 blur 3.1 7 %, button y 2 blur 0.95 8 %,
+  panel y 4 blur 12 16 %; dark 35-50 %). `Theme.Iris` (+ `values-night`) sets `windowBackground` to
+  `settings_background` (no white flash). `IrisType`: Blinker 600 page title 20/24 sp and section heading 15/18;
+  Inter 600 titles 14/17, 500 subtitles/buttons 12/15, 400 field text 12/15, 500 helper 11/13, 800 slider value
+  12/15; letter spacing 0, line height centred. Press feedback is a flat overlay (`PressIndication`: 6 % black /
+  white, 10 % white on black controls; 60 ms in, 150 ms out after the press finished).
+- Controls: card radius 15, padding 22 x 15-16, gap 15; controls 32 dp min height, radius 8, padding 12 / 8; switch
+  34 x 20 track + 16 dp thumb (150 ms, haptic `ToggleOn/Off`, the whole row is `toggleable(Role.Switch)`); slider
+  3 dp track + 7 x 24 dp pill thumb (9 dp while dragged / key-focused), tap or horizontal drag (a vertical drag
+  scrolls the page), haptic tick per step, `progressBarRangeInfo` + `setProgress` + state = the value text, DPAD
+  left/right. Small icon buttons are 32 dp boxes (28 x 32 inside fields; below the 48 dp guideline, since Compose
+  extends touch bounds only where no other target is hit and these sit edge to edge; dense design, accepted).
+- Edge-to-edge + IME: `enableEdgeToEdge()`, safe-drawing top/horizontal padding, `imePadding()` outside the
+  scroll, the nav bar inset as bottom padding inside it; a focused field group (incl. helper/error) is brought above
+  the IME once the inset settles and again when its error changes (`bringIntoViewAboveIme`); nav-bar contrast
+  enforcement off; with 3-button nav a 90 % page-colour scrim (`WindowInsets.tappableElement` height) sits behind the
+  buttons.
 
 ## Key decisions (don't re-litigate without a concrete reason)
 - **STT providers**: OpenAI Realtime (direct) stays the default. Vercel AI Gateway's streaming transcription
@@ -810,7 +873,7 @@ Not covered by unit tests; check on a real device (ideally more than one OEM) af
 - Changing field during cleanup: text is copied with "field changed"; the panel is restored if the bubble re-shows.
 - Panel size: the Lines/Max width sliders change the panel (live text and notices) in another app without
   restarting the service; at 90 % the panel stays on screen on both sides and in landscape.
-- TalkBack reads the Text panel sliders' name and value.
+- TalkBack reads the Text Panel sliders' name and value.
 - Recording UI: mic -> ✕ morph and pill slide are smooth on both edges; dark mode ✕ colours (toggle while it
   shows); the waveform follows voice and settles to dots in silence; drag from the pill never stops, drag from the
   ✕ never cancels; tapping the gap stops; near the IME/bottom the pill opens upward (✕ stays put, panel grows up)
@@ -828,7 +891,7 @@ Not covered by unit tests; check on a real device (ideally more than one OEM) af
   `openai/gpt-4o-transcribe` or `elevenlabs/scribe-v2`): no panel while recording, spinner after stop, text
   inserted; a 2–3 min dictation on mobile data finishes within the timeout; language set; VAD on + silence = no
   upload; picking an after-stop Gateway model from the menu shows "Mode: after stop" and is used at once.
-- OpenAI model dropdown lists transcription models with your key (realtime ones with the audio-lines icon, also
+- OpenAI model dropdown lists transcription models with your key (realtime ones with the radio icon, also
   in the Gateway menu for live models); no key shows "Set your OpenAI API key to load models"; saving a key loads
   the list.
 - Deepgram (V1-V6): real voice with `nova-3` and `en`: live text streams, the final is inserted, log `Timing:
@@ -837,7 +900,7 @@ Not covered by unit tests; check on a real device (ideally more than one OEM) af
   language Nova-3 lacks (e.g. `yo`) = "Deepgram error: ..."; Deepgram console usage of a VAD-gapped session ≈ the
   sent audio (`VAD: sent X ms`), not wall time; speed 1.5x/2.0x accuracy. "Disable realtime streaming" on: no panel
   while recording, spinner after stop, text inserted, console bills it as pre-recorded; the switch shows only with
-  Deepgram selected and the menu's audio-lines icons follow it.
+  Deepgram selected and the menu's radio icons follow it.
 - Soniox (S1-S7): (1) `stt-rt-v6` + `en`: live text streams, the final is inserted, log `Timing: end->finished`;
   (2) languages "en, bn" with mixed speech: the start frame has both hints and `language_hints_strict`; (3) bad key =
   key message while Listening; (4) a pause >= 60 s with VAD on: no 408; (5) `stt-async-v6`: no panel while
@@ -866,8 +929,19 @@ Not covered by unit tests; check on a real device (ideally more than one OEM) af
   402/503 show as notices with the raw text inserted. Provider options: Gateway `{"gateway":{"order":["azure",
   "openai"]}}` and OpenRouter `{"order":["openai"],"allow_fallbacks":false}` are accepted; an impossible routing
   (e.g. `{"only":["nonexistent"]}`) shows the 503/400 notice. The accordion is collapsed by default, TalkBack reads
-  "Provider options, Collapsed"; invalid JSON disables Save; switching the cleanup provider keeps the Gateway STT
-  model menu.
+  "Provider Options, Collapsed"; invalid JSON shows an error and isn't saved; switching the cleanup provider keeps
+  the Gateway STT model menu.
+- Settings UI (CP12): light and dark pages match the Figma PNGs (sizes, spacing, colours, fonts) on a real phone;
+  gesture-nav predictive back shows the sub-page sliding/scaling away with Home behind and a cancelled gesture
+  settles back; dropdown panels open above the IME when it covers the space below and never under the nav bar;
+  autosave on blur, Done, back (chevron and gesture), home button and rotation (value persisted after reopening the
+  page), invalid values (blank model, bad JSON, blank prompt name) keep the error and aren't saved; API key: eye
+  toggles visibility, Done saves and clears the input, helper switches to "API key saved…", trash clears it ("Not
+  set" in red); New Prompt focuses the name with the text selected, delete is disabled for the last prompt; a
+  Keystore save failure shows "Couldn't save the API key. Try again." (hard to force: e.g. a device with a broken
+  Keystore); TalkBack reads dropdowns ("<label>, <value>, drop down list, Collapsed"), switches, sliders (name +
+  value, volume keys adjust and save), the back button and the icon buttons' labels; large font scale keeps
+  controls unclipped.
 
 ### Emulator / Android MCP
 Checked 2026-11-11 on `emulator-5554` (AVD `Medium_Phone_API_37.0`, API 37, 1080x2400; SDK `K:\Android\SDK`).
@@ -904,3 +978,4 @@ Update this section as checkpoints land.
 | CP9 | Deepgram Nova-3 STT | Done (real-voice device check pending) |
 | CP10 | Soniox STT (real-time + async) | Done (real-voice device check pending) |
 | CP11 | OpenRouter cleanup provider + provider options | Done (device check pending) |
+| CP12 | Settings UI redesign (Figma) | Done (emulator-checked; device check pending) |

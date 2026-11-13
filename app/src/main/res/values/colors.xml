@@ -19,4 +19,8 @@
     <color name="pill_bar">#FFFFFFFF</color>
     <color name="panel_background">#000000</color>
     <color name="panel_text">#FFFFFFFF</color>
+    <!-- Settings UI: window background (no flash before Compose draws) and the logo's two tones. -->
+    <color name="settings_background">#FFE2E7E7</color>
+    <color name="logo_body">#FF3F3F42</color>
+    <color name="logo_capsule">#FF777A80</color>
 </resources>

@@ -1,0 +1,25 @@
+<!-- Lucide "mic" 1.72.0 (https://lucide.dev/icons/mic), ISC/MIT: assets/lucide_LICENSE.txt. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="22dp"
+    android:height="22dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:pathData="M12 19v3"
+        android:strokeWidth="1.64"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M19 10v2a7 7 0 0 1-14 0v-2"
+        android:strokeWidth="1.64"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M9,5a3,3 0 0 1 6,0v7a3,3 0 0 1 -6,0z"
+        android:strokeWidth="1.64"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>
