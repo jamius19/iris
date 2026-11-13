@@ -1,23 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Mic from iris_icon.svg (viewBox 253.93 x 340.36), scaled to 50 dp tall and centred, inside the 66 dp safe zone. -->
+<!-- Mic from iris_icon.svg (viewBox 253.92 x 340.37), scaled to 42 dp tall and centred, inside the 66 dp safe zone. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
     <group
-        android:scaleX="0.1469"
-        android:scaleY="0.1469"
-        android:translateX="35.35"
-        android:translateY="29">
+        android:scaleX="0.1234"
+        android:scaleY="0.1234"
+        android:translateX="38.33"
+        android:translateY="33">
         <path
-            android:fillColor="#FF888889"
-            android:pathData="M190.56,158.84c.05,36.11-28.5,64.5-63.53,64.71-34.95.22-64.2-27.96-64.19-63.7V63.45C62.84,28.19,91.77.22,126.29,0c34.46-.22,64.07,27.44,64.12,62.71l.14,96.12Z" />
+            android:fillColor="#FF777A80"
+            android:pathData="M190.56,158.84c.05,36.11-28.5,64.5-63.53,64.71-34.95.22-64.2-27.96-64.19-63.7V63.45c0-35.26,28.93-63.23,63.45-63.45,34.46-.22,64.07,27.44,64.12,62.71l.14,96.12Z" />
         <path
-            android:fillColor="#FF4B4D4F"
+            android:fillColor="#FF3F3F42"
             android:pathData="M253.83,176.04c-7.41,60.94-57.77,107.08-118.02,111.15C68.65,291.73,9.13,243.92.12,176.9c-1.14-8.49,5.91-16.09,13.81-17.08,8.74-1.09,16.92,4.6,18.22,13.58,6.86,47.45,47.61,82.17,94.87,82.15,47.31-.02,87.9-34.75,94.8-82.19,1.23-8.44,8.54-14.07,16.88-13.66,7.37.36,16.25,7.04,15.12,16.33Z" />
         <path
-            android:fillColor="#FF4B4D4F"
+            android:fillColor="#FF3F3F42"
             android:pathData="M159.19,340.23l-63.94.14c-9.1.02-16.01-6.61-16.47-15.23s5.86-16.62,14.95-16.62h65.87c8.81,0,15.04,7.89,14.96,15.93s-6.22,15.76-15.37,15.78Z" />
     </group>
 </vector>
