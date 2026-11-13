@@ -46,8 +46,10 @@ the provider interfaces so a new provider is just a new implementation. The one 
   240.43); fills `@color/logo_body` / `@color/logo_capsule` (light #3F3F42 / #777A80, `values-night` #D9DBDC /
   #8E9196).
 - Brand marks `res/drawable/provider_vercel.xml` (16 x 13.875 dp, white) / `provider_openrouter.xml` (16 x 11.4 dp,
-  #C8FF00), path data copied from the user-supplied SVGs (viewBoxes 256 x 222 / 1024 x 730); the marks belong to
-  their owners.
+  #C8FF00) / `provider_openai.xml` (15.75 x 16 dp, white) / `provider_deepgram.xml` (16 x 16 dp, #E042FF) /
+  `provider_soniox.xml` (13.48 x 16 dp, #1881FF, from the SVG's `.st0` class), path data copied from the
+  user-supplied SVGs (viewBoxes 256 x 222 / 1024 x 730 / 256 x 260 / 24 x 24 / 211.35 x 250.84; no transforms); the
+  marks belong to their owners. `BrandIcon` (`ui.components`) draws one untinted at 14 dp.
 - Manual DI: `AppContainer` held by the custom `Application` class `IrisApp`. No Hilt/Koin.
 - All versions live in `gradle/libs.versions.toml`.
 
@@ -733,7 +735,8 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
   Transcription Provider (audio-lines), Post Processing Provider (sparkles), Appearance (eye); footer
   "Version <versionName>" (PackageManager), pinned to the bottom while the content is short.
 - Transcription Provider: picker card (cloud icon, "Transcription Provider" black dropdown: OpenAI, Vercel AI Gateway,
-  Deepgram, Soniox; an unknown stored id shows as OpenAI); "Provider Settings": the selected provider's "API Key"
+  Deepgram, Soniox, each with its brand mark in a `ProviderIconBox` (Gateway: the Vercel mark; `SelectField`'s
+  `optionIcon`); an unknown stored id shows as OpenAI); "Provider Settings": the selected provider's "API Key"
   (Gateway helper "(shared with post processing)"), Soniox "Region" dropdown (`SonioxRegion.label`, hint "Your Soniox
   project's region (data residency); its key works only there."); "Model Settings": "Speech-to-text Model" combobox
   (per provider; helper = the provider's mode hint + `sttModeText` of the SAVED model: OpenAI "Realtime models

@@ -5,6 +5,7 @@
 
 package dev.jamius.iris.ui.settings
 
+import androidx.annotation.DrawableRes
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.unit.dp
 import dev.jamius.iris.R
@@ -21,10 +22,12 @@ import dev.jamius.iris.stt.soniox.sonioxStreams
 import dev.jamius.iris.stt.vercel.gatewaySttLive
 import dev.jamius.iris.ui.components.ApiKeyField
 import dev.jamius.iris.ui.components.AutosaveTextField
+import dev.jamius.iris.ui.components.BrandIcon
 import dev.jamius.iris.ui.components.Card
 import dev.jamius.iris.ui.components.IconRow
 import dev.jamius.iris.ui.components.ModelCombobox
 import dev.jamius.iris.ui.components.PageScaffold
+import dev.jamius.iris.ui.components.ProviderIconBox
 import dev.jamius.iris.ui.components.Saver
 import dev.jamius.iris.ui.components.Section
 import dev.jamius.iris.ui.components.SelectField
@@ -64,7 +67,8 @@ fun TranscriptionPage(
                     optionLabel = ::sttProviderLabel,
                     onSave = { repository.setSttProvider(it) },
                     saver = saver,
-                    spacing = 9.dp
+                    spacing = 9.dp,
+                    optionIcon = { ProviderIconBox { BrandIcon(sttProviderIcon(it)) } }
                 )
             }
         }
@@ -266,3 +270,12 @@ fun TranscriptionPage(
 
 private const val KEY_PLACEHOLDER = "Paste your API key"
 private const val MODEL_LABEL = "Speech-to-text Model"
+
+/** A transcription provider's brand mark in the provider menu. */
+@DrawableRes
+private fun sttProviderIcon(id: String): Int = when (id) {
+    Settings.STT_PROVIDER_VERCEL_GATEWAY -> R.drawable.provider_vercel
+    Settings.STT_PROVIDER_DEEPGRAM -> R.drawable.provider_deepgram
+    Settings.STT_PROVIDER_SONIOX -> R.drawable.provider_soniox
+    else -> R.drawable.provider_openai
+}

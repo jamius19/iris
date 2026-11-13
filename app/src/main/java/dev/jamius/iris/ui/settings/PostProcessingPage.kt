@@ -42,7 +42,6 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -57,6 +56,7 @@ import dev.jamius.iris.data.settings.Settings
 import dev.jamius.iris.data.settings.SettingsRepository
 import dev.jamius.iris.ui.components.ApiKeyField
 import dev.jamius.iris.ui.components.AutosaveTextField
+import dev.jamius.iris.ui.components.BrandIcon
 import dev.jamius.iris.ui.components.Card
 import dev.jamius.iris.ui.components.ControlHeight
 import dev.jamius.iris.ui.components.ControlShape
@@ -442,9 +442,8 @@ private fun ProviderIcon(id: String, settings: Settings, favicons: Favicons) {
         Settings.CLEANUP_PROVIDER_OPENROUTER -> R.drawable.provider_openrouter
         else -> null
     }
-    // Images, not Icon: Icon always tints.
     if (brand != null) {
-        Image(painterResource(brand), null, Modifier.size(14.dp), contentScale = ContentScale.Fit)
+        BrandIcon(brand)
         return
     }
     val favicon = settings.customCleanupProviders.firstOrNull { it.id == id }

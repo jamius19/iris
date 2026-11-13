@@ -19,6 +19,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.isSpecified
 import androidx.compose.ui.graphics.takeOrElse
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
@@ -69,6 +70,12 @@ fun ProviderIconBox(content: @Composable () -> Unit) {
     ) {
         content()
     }
+}
+
+/** A provider's brand mark for [ProviderIconBox]: 14 dp, untinted ([Icon] always tints). */
+@Composable
+fun BrandIcon(@DrawableRes id: Int) {
+    Image(painterResource(id), null, Modifier.size(14.dp), contentScale = ContentScale.Fit)
 }
 
 /** The 1 dp outline black controls get in dark mode (none in light). */
