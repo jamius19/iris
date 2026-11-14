@@ -5,11 +5,15 @@
 
 package dev.jamius.iris.ui.theme
 
+import android.content.Context
+import android.graphics.Typeface
 import androidx.compose.runtime.Immutable
-import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.AndroidFont
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontLoadingStrategy
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.LineHeightStyle
@@ -17,18 +21,36 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.sp
 import dev.jamius.iris.R
+import android.graphics.fonts.Font as PlatformFont
+import android.graphics.fonts.FontFamily as PlatformFontFamily
 
 /** Inter (variable, `res/font/inter.ttf`): one instance per weight the design uses; optical size left at 14. */
-@OptIn(ExperimentalTextApi::class)
-val Inter = FontFamily(
-    listOf(400, 500, 600, 800).map {
-        Font(
-            R.font.inter,
-            FontWeight(it),
-            variationSettings = FontVariation.Settings(FontVariation.weight(it))
-        )
+val Inter = FontFamily(listOf(400, 500, 600, 800).map { InterFont(FontWeight(it)) })
+
+/**
+ * One Inter weight, built with the platform `Font.Builder`. Not Compose's resource `Font(..., variationSettings)`:
+ * that applies the variation through `Paint.setFontVariationSettings`, and HyperOS (Android 16) swaps the result
+ * back to the default instance, so every weight drew at 400 there.
+ */
+private class InterFont(override val weight: FontWeight) :
+    AndroidFont(FontLoadingStrategy.Blocking, Loader, FontVariation.Settings()) {
+
+    override val style = FontStyle.Normal
+
+    private object Loader : TypefaceLoader {
+        override fun loadBlocking(context: Context, font: AndroidFont): Typeface {
+            val weight = font.weight.weight
+            val inter = PlatformFont.Builder(context.resources, R.font.inter)
+                .setWeight(weight)
+                .setFontVariationSettings("'wght' $weight")
+                .build()
+            return Typeface.CustomFallbackBuilder(PlatformFontFamily.Builder(inter).build()).build()
+        }
+
+        override suspend fun awaitLoad(context: Context, font: AndroidFont): Typeface =
+            throw UnsupportedOperationException("Inter loads blocking")
     }
-)
+}
 
 /** Blinker SemiBold: page titles and section headings only. */
 val Blinker = FontFamily(Font(R.font.blinker_semibold, FontWeight.SemiBold))

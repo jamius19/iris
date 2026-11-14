@@ -50,9 +50,13 @@ Silero VAD ("Skip silence") decides which audio is sent (cloud: to cut STT cost;
 - Fonts, bundled in `res/font` (not downloadable fonts), from https://github.com/google/fonts commit
   `3e5667764ccfea32ce0c3d58a3a4756de890adc1` (2026-11-13): `inter.ttf` = `ofl/inter/Inter[opsz,wght].ttf` (variable,
   876,576 B, SHA-256 `29160a80ff49ddcab2c97711247e08b1fab27a484a329ce8b813d820dc559031`; one instance per weight
-  400/500/600/800 via `FontVariation`, opsz left at 14) and `blinker_semibold.ttf` = `ofl/blinker/Blinker-SemiBold.ttf`
-  (81,676 B, SHA-256 `a9a701eb18cbd5f786f28f986c16895ffc0d0337e4a9a63131b619d9542e07d4`); OFL licences ship as
-  `assets/inter_OFL.txt` / `assets/blinker_OFL.txt`.
+  400/500/600/800, opsz left at 14, each built by `InterFont` (an `AndroidFont`) with the platform `Font.Builder`
+  + `setFontVariationSettings`, not Compose's resource `Font(..., variationSettings)`: that one goes through
+  `Paint.setFontVariationSettings`, which HyperOS 3 (Android 16) swaps back to the default instance, so every weight
+  drew at 400 there (checked 2026-11-14, measured ink per weight)) and `blinker_semibold.ttf` =
+  `ofl/blinker/Blinker-SemiBold.ttf` (81,676 B, SHA-256
+  `a9a701eb18cbd5f786f28f986c16895ffc0d0337e4a9a63131b619d9542e07d4`); OFL licences ship as `assets/inter_OFL.txt` /
+  `assets/blinker_OFL.txt`.
 - Lucide 1.72.0 icons (https://github.com/lucide-icons/lucide/tree/1.72.0/icons) as `res/drawable/lucide_<name>.xml`
   (18: accessibility, mic, audio-lines, sparkles, eye, eye-off, cloud, arrow-down, arrow-right, refresh-cw, trash,
   radio, check, chevron-left, chevron-down, plus, smartphone, gauge): viewport 24, white stroke (tinted in Compose),
