@@ -230,7 +230,7 @@ class OnDeviceRecognizer(
                 val wait = idleReleaseWaitMs(unloadMinutes, idleSince, lastUse, SystemClock.elapsedRealtime())
                     ?: return@launch
                 if (wait <= 0) break
-                delay(wait)
+                delay(minOf(wait, IDLE_CHECK_MS))
             }
             // Under the lock: after any running decode.
             inUse.withLock { if (idle) releaseLoaded() }
@@ -358,6 +358,13 @@ class OnDeviceRecognizer(
          * ~1.2 s of speech would never be decoded.
          */
         const val TAIL_PADDING_SAMPLES = 20_800
+
+        /**
+         * Longest single idle-release wait: `delay`'s clock stops in deep sleep while `elapsedRealtime` keeps counting,
+         * so the loop re-checks real elapsed time at least once per awake minute (a past-due release then comes within
+         * a minute of waking).
+         */
+        const val IDLE_CHECK_MS = 60_000L
     }
 }
 

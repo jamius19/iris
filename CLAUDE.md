@@ -732,8 +732,11 @@ Providers (settings store a provider id for each):
   dictation state calls it; `onDestroy` calls `setIdle(true)`, its scope cancel ends any session) and
   `setUnloadMinutes(onDeviceUnloadMinutes)` from its settings collect (both no-ops on an unchanged value, so `idleSince`
   isn't reset). While idle the model is released once unused for the Unload Model delay, counted from max(became idle,
-  last load/decode) (`idleReleaseWaitMs`, re-checked after each wait), under the lock (after any running decode); Never
-  (-1) = no idle release, Immediately (0) = at once. Not idle during a session: an offline model still decoding queued
+  last load/decode) (`idleReleaseWaitMs`, re-checked after each wait and at least every minute, `IDLE_CHECK_MS`:
+  `delay` stops in deep sleep while `elapsedRealtime` keeps counting, so after the screen comes back a past-due release
+  happens within a minute; it may still be late while the phone sleeps, never early), under the lock (after any running
+  decode); Never (-1) = no idle release, Immediately (0) = at once. Not idle during a session: an offline model still
+  decoding queued
   phrases after focus loss (Finalizing) would otherwise be released between two decodes (the lock is free between them)
   and reload mid-session. A changed setting applies to a running countdown at once (time already idle counts; Never
   cancels it). `IrisApp.onTrimMemory(>= TRIM_MEMORY_BACKGROUND)` releases it too, also with Never (with a bound
