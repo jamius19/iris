@@ -112,6 +112,7 @@ class DictationControllerTest {
             finals += text
             DictationState.Done(text)
         },
+        detectLanguage: suspend (String) -> String? = { null },
     ) = DictationController(
         scope = backgroundScope,
         // Virtual time is the clock: a chunk's read ends when it is emitted.
@@ -135,6 +136,7 @@ class DictationControllerTest {
             events += "record"
             records += s to d
         },
+        detectLanguage = detectLanguage,
     )
 
     /** One 32 ms frame at 16 kHz every 32 ms until cancelled, the Nth (from 0) tagged with N in its first byte. */
@@ -1092,6 +1094,103 @@ class DictationControllerTest {
         advanceTimeBy(500)
 
         assertTrue(records.isEmpty())
+    }
+
+    /** Starts [controller], stops it after the first chunk and lets the chunk recorded during the stop end it. */
+    private fun TestScope.dictate(controller: DictationController) {
+        controller.start()
+        runCurrent()
+        controller.stop()
+        advanceTimeBy(101)
+    }
+
+    @Test
+    fun fillersAreRemovedBeforeTheFinalTranscriptHook() = runTest {
+        val controller = controller(FakeStt { "Uh, so I think, hmm, it works" })
+        dictate(controller)
+
+        assertEquals(listOf("So I think, it works"), finals)
+        assertEquals(DictationState.Done("So I think, it works"), controller.state.value)
+        assertEquals(5, records.single().second.words)
+    }
+
+    @Test
+    fun onlyFillersEndWithNoSpeechAndRecordNothing() = runTest {
+        val controller = controller(FakeStt { "Uh. Hmm." })
+        dictate(controller)
+
+        assertEquals(DictationState.Error("No speech detected"), controller.state.value)
+        assertTrue(finals.isEmpty())
+        assertTrue(records.isEmpty())
+    }
+
+    @Test
+    fun fillerRemovalOffPassesTheTranscriptUnchanged() = runTest {
+        val detections = mutableListOf<String>()
+        val settings = emptyPreferences().toSettings(emptySet()).copy(removeFillerWords = false)
+        val controller = controller(
+            FakeStt { "Uh, um, hello" },
+            settings = settings,
+            detectLanguage = { detections += it; "en" }
+        )
+        dictate(controller)
+
+        assertEquals(listOf("Uh, um, hello"), finals)
+        assertTrue(detections.isEmpty())
+    }
+
+    @Test
+    fun knownLanguageSkipsTheDetector() = runTest {
+        val detections = mutableListOf<String>()
+        val settings = emptyPreferences().toSettings(emptySet()).copy(sttLanguage = "en")
+        val controller = controller(
+            FakeStt { "um hello there" },
+            settings = settings,
+            detectLanguage = { detections += it; null }
+        )
+        dictate(controller)
+
+        assertEquals(listOf("hello there"), finals)
+        assertTrue(detections.isEmpty())
+    }
+
+    @Test
+    fun unknownLanguageAsksTheDetectorWithTheRawText() = runTest {
+        val detections = mutableListOf<String>()
+        dictate(controller(FakeStt { "um hello there" }, detectLanguage = { detections += it; "en" }))
+        dictate(controller(FakeStt { "eu vi um carro" }, detectLanguage = { detections += it; "pt" }))
+
+        assertEquals(listOf("hello there", "eu vi um carro"), finals)
+        assertEquals(listOf("um hello there", "eu vi um carro"), detections)
+    }
+
+    @Test
+    fun detectorIsSkippedWithoutAGatedFiller() = runTest {
+        val detections = mutableListOf<String>()
+        dictate(controller(FakeStt { "uh hello" }, detectLanguage = { detections += it; "en" }))
+
+        assertEquals(listOf("hello"), finals)
+        assertTrue(detections.isEmpty())
+    }
+
+    @Test
+    fun slowDetectorTimesOutToUnknown() = runTest {
+        val controller = controller(
+            FakeStt { "um hello" },
+            detectLanguage = {
+                delay(5_000)
+                "en"
+            }
+        )
+        controller.start()
+        runCurrent()
+        controller.stop()
+        advanceTimeBy(100 + LANGUAGE_DETECTION_TIMEOUT_MS)
+        assertTrue(controller.state.value is DictationState.Finalizing)
+
+        advanceTimeBy(1)
+        assertEquals(DictationState.Done("um hello"), controller.state.value)
+        assertEquals(listOf("um hello"), finals)
     }
 
     private companion object {

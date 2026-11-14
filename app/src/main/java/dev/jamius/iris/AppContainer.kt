@@ -24,6 +24,7 @@ import dev.jamius.iris.data.settings.Settings
 import dev.jamius.iris.data.settings.SettingsRepository
 import dev.jamius.iris.dictation.DictationController
 import dev.jamius.iris.dictation.DictationState
+import dev.jamius.iris.dictation.LanguageDetector
 import dev.jamius.iris.dictation.Statistics
 import dev.jamius.iris.stt.SpeechToTextProvider
 import dev.jamius.iris.stt.deepgram.DeepgramFileTranscription
@@ -81,6 +82,8 @@ class AppContainer(context: Context) {
 
     // Nothing loads until the first session with VAD on.
     private val sileroVad = SileroVad(context)
+
+    private val languageDetector = LanguageDetector(context)
 
     private val openAiStt = OpenAiRealtimeSpeechToText(
         httpClient,
@@ -266,5 +269,6 @@ class AppContainer(context: Context) {
         onFinalTranscript = onFinalTranscript,
         vadModel = sileroVad::newStream,
         record = statistics::recordDictation,
+        detectLanguage = languageDetector::detect,
     )
 }

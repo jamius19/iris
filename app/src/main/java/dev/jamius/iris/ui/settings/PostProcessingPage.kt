@@ -86,10 +86,10 @@ import dev.jamius.iris.ui.theme.IrisTheme
 import java.util.UUID
 
 /**
- * Post Processing Provider: the AI Cleanup switch, then (dimmed while it's off, still editable) the provider (plus a
- * new custom one), its key, model, reasoning level, timeout and provider options, and the prompts. A new custom
- * provider is an in-memory draft until saved (never used for cleanup); picking another provider or leaving the page
- * discards it.
+ * Post Processing Settings: the Remove Filler Words switch, the AI Cleanup switch, then (dimmed while cleanup is off,
+ * still editable) the provider (plus a new custom one), its key, model, reasoning level, timeout and provider options,
+ * and the prompts. A new custom provider is an in-memory draft until saved (never used for cleanup); picking another
+ * provider or leaving the page discards it.
  */
 @Composable
 fun PostProcessingPage(
@@ -113,7 +113,17 @@ fun PostProcessingPage(
     val selectedId = draft?.id ?: settings.cleanupProviderId
     val custom = settings.activeCustomCleanup
 
-    PageScaffold(title = "Post Processing Provider", onBack = onBack) {
+    PageScaffold(title = "Post Processing Settings", onBack = onBack) {
+        Card(verticalPadding = 15.dp) {
+            SwitchRow(
+                title = "Remove Filler Words",
+                subtitle = "Remove common filler words like uh, um, hmm from the transcript.",
+                checked = settings.removeFillerWords,
+                onSave = { repository.setRemoveFillerWords(it) },
+                saver = saver,
+                icon = R.drawable.lucide_eraser
+            )
+        }
         Card(verticalPadding = 15.dp) {
             SwitchRow(
                 title = "AI Cleanup",

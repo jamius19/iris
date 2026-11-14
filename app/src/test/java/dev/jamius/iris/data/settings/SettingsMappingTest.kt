@@ -91,6 +91,7 @@ class SettingsMappingTest {
         assertEquals(Settings.DEFAULT_STT_TIMEOUT_SECONDS, settings.sttTimeoutSeconds)
         assertTrue(settings.vadEnabled)
         assertEquals(Settings.DEFAULT_STT_SPEED_PERCENT, settings.sttSpeedPercent)
+        assertTrue(settings.removeFillerWords)
         assertFalse(settings.cleanupEnabled)
         assertEquals(Settings.CLEANUP_PROVIDER_VERCEL_GATEWAY, settings.cleanupProviderId)
         assertEquals(Settings.DEFAULT_CLEANUP_MODEL, settings.cleanupModel)
@@ -134,6 +135,7 @@ class SettingsMappingTest {
             Keys.STT_TIMEOUT_SECONDS to 20,
             Keys.VAD_ENABLED to false,
             Keys.STT_SPEED_PERCENT to 150,
+            Keys.REMOVE_FILLER_WORDS to false,
             Keys.CLEANUP_ENABLED to true,
             Keys.CLEANUP_MODEL to "google/gemini-2.5-flash",
             Keys.CLEANUP_PROVIDER_ID to Settings.CLEANUP_PROVIDER_OPENROUTER,
@@ -177,6 +179,7 @@ class SettingsMappingTest {
         assertEquals(20, settings.sttTimeoutSeconds)
         assertFalse(settings.vadEnabled)
         assertEquals(150, settings.sttSpeedPercent)
+        assertFalse(settings.removeFillerWords)
         assertTrue(settings.cleanupEnabled)
         assertEquals("google/gemini-2.5-flash", settings.cleanupModel)
         assertEquals("high", settings.cleanupReasoningEffort)

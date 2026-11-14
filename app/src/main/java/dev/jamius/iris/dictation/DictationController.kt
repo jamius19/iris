@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.produceIn
 import kotlinx.coroutines.flow.transformWhile
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.CoroutineContext
 
 sealed interface DictationState {
@@ -59,6 +60,9 @@ sealed interface DictationState {
 internal const val DONE_DISPLAY_MS = 1_500L
 internal const val ERROR_DISPLAY_MS = 2 * DONE_DISPLAY_MS
 
+/** Text language detection (filler words) can't hold up Finalizing longer than this (then: unknown). */
+internal const val LANGUAGE_DETECTION_TIMEOUT_MS = 1_000L
+
 /**
  * Runs one dictation session at a time: Idle -> Listening -> Finalizing -> Done/Error -> Idle.
  * One instance per accessibility service; use on the main thread. [start] begins a session (also while a result
@@ -78,6 +82,9 @@ internal const val ERROR_DISPLAY_MS = 2 * DONE_DISPLAY_MS
  * @param vadContext where the VAD gate runs (model load and inference: CPU work, off the main thread).
  * @param record called once per session whose [onFinalTranscript] returned (stopped, non-blank text), with the
  *   session's settings and its measurements; must return at once. Not for a transcript that arrived before the stop.
+ * @param detectLanguage the transcript's language (ISO 639-1) detected from its text, or null if unsure; only called
+ *   when filler removal is on, the settings don't give the language and a language-gated filler is in the text; must
+ *   not throw. Bounded by [LANGUAGE_DETECTION_TIMEOUT_MS].
  */
 class DictationController(
     private val scope: CoroutineScope,
@@ -90,6 +97,7 @@ class DictationController(
     private val vadContext: CoroutineContext = Dispatchers.Default,
     private val clock: () -> Long = SystemClock::elapsedRealtimeNanos,
     private val record: (Settings, DictationRecord) -> Unit = { _, _ -> },
+    private val detectLanguage: suspend (text: String) -> String? = { null },
 ) {
     private val _state = MutableStateFlow<DictationState>(DictationState.Idle)
     val state: StateFlow<DictationState> = _state.asStateFlow()
@@ -160,7 +168,7 @@ class DictationController(
                 // Applied after the gate and the stop: only sent chunks are stretched, and the tail is flushed at
                 // the stop (after a NO_SPEECH check, so a session without speech sends nothing).
                 val asRecorded = config.sttSpeedPercent == Settings.DEFAULT_STT_SPEED_PERCENT || !stt.allowsSpeedUp
-                val text = coroutineScope {
+                val transcript = coroutineScope {
                     val sessionScope = this
                     // VAD inference is CPU work: off the main thread. Every chunk still comes through (level, stop
                     // check); the gate only decides which bytes ride along with it.
@@ -224,6 +232,7 @@ class DictationController(
                 // Read now: a transcript that arrives before the stop (the Gateway's early `finish`) has none, and a
                 // stop tapped later, during the hook, must not count.
                 val stop = stoppedAt
+                val text = withoutFillers(transcript, config)
                 if (text.isBlank()) {
                     DictationState.Error(NO_SPEECH)
                 } else {
@@ -269,6 +278,21 @@ class DictationController(
                 else -> it
             }
         }
+    }
+
+    /** [text] without filler words if the setting is on; the language from the settings, else detected from [text]. */
+    private suspend fun withoutFillers(text: String, config: Settings): String {
+        if (!config.removeFillerWords) return text
+        val language = outputLanguage(config) ?: if (hasGatedFiller(text)) detectedLanguage(text) else null
+        return removeFillerWords(text, language)
+    }
+
+    private suspend fun detectedLanguage(text: String): String? {
+        val start = clock()
+        val language = withTimeoutOrNull(LANGUAGE_DETECTION_TIMEOUT_MS) { detectLanguage(text) }
+        val elapsedMs = (clock() - start) / NANOS_PER_MS
+        Log.d(TAG, "Filler words: language ${language ?: "unknown"} (detected in $elapsedMs ms)")
+        return language
     }
 
     /** Duration of [bytes] of PCM16 mono at [rate]. */

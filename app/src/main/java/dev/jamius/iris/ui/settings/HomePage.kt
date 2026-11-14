@@ -83,12 +83,12 @@ fun HomePage(onOpen: (Page) -> Unit) {
         }
         NavCard(
             R.drawable.lucide_audio_lines,
-            "Transcription Provider",
+            "Transcription Settings",
             "Set up transcription provider settings"
         ) { onOpen(Page.Transcription) }
         NavCard(
             R.drawable.lucide_sparkles,
-            "Post Processing Provider",
+            "Post Processing Settings",
             "Set up post processing for the transcribed text"
         ) { onOpen(Page.PostProcessing) }
         NavCard(R.drawable.lucide_eye, "Appearance", "Customize Iris to fit you") { onOpen(Page.Appearance) }

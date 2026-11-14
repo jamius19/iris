@@ -58,11 +58,11 @@ Silero VAD ("Skip silence") decides which audio is sent (cloud: to cut STT cost;
   `a9a701eb18cbd5f786f28f986c16895ffc0d0337e4a9a63131b619d9542e07d4`); OFL licences ship as `assets/inter_OFL.txt` /
   `assets/blinker_OFL.txt`.
 - Lucide 1.72.0 icons (https://github.com/lucide-icons/lucide/tree/1.72.0/icons) as `res/drawable/lucide_<name>.xml`
-  (18: accessibility, mic, audio-lines, sparkles, eye, eye-off, cloud, arrow-down, arrow-right, refresh-cw, trash,
-  radio, check, chevron-left, chevron-down, plus, smartphone, gauge): viewport 24, white stroke (tinted in Compose),
-  round caps/joins, circles/rects converted to paths; `android:width` = the use size and `strokeWidth` chosen so the
-  drawn stroke matches the Figma export (1.5 at 24/16 dp, 1.57 at 23, 1.64 at 22, 1.25 for sparkles, 1.6 at 15, 2.2
-  at 11; `smartphone` 14 dp at 1.7, drawn untinted by `BrandIcon` as On device's provider icon). The
+  (19: accessibility, mic, audio-lines, sparkles, eye, eye-off, cloud, arrow-down, arrow-right, refresh-cw, trash,
+  radio, check, chevron-left, chevron-down, plus, smartphone, gauge, eraser): viewport 24, white stroke (tinted in
+  Compose), round caps/joins, circles/rects converted to paths; `android:width` = the use size and `strokeWidth`
+  chosen so the drawn stroke matches the Figma export (1.5 at 24/16 dp, 1.57 at 23, 1.64 at 22, 1.25 for sparkles,
+  1.6 at 15, 2.2 at 11; `smartphone` 14 dp at 1.7, drawn untinted by `BrandIcon` as On device's provider icon). The
   overlay keeps its own `ic_mic`/`ic_close`/`ic_check`/`ic_exclamation`. `assets/lucide_LICENSE.txt` is the full
   upstream LICENSE (ISC + the Feather MIT block, "Copyright (c) 2013-present Cole Bemis": radio, check, chevrons,
   plus, trash, arrows are Feather-derived).
@@ -88,7 +88,7 @@ Silero VAD ("Skip silence") decides which audio is sent (cloud: to cut STT cost;
 | `audio` | PCM16 mono recorder (rate per session); `SileroVad` (sherpa `Vad` wrapper), `SpeechGate` (pure VAD gate); `timeStretched` (Sonic speed-up) |
 | `stt` | `SpeechToTextProvider`; `stt.openai` / `stt.vercel` / `stt.deepgram` / `stt.soniox` streaming + upload providers; `stt.ondevice` (On device: `OnDeviceModels` catalogue, `OnDeviceModelStore` downloads, `OnDeviceRecognizer` sherpa holder, `OnDeviceSpeechToText` provider, `OnDeviceStats` the on-device statistics' pure parts); `Wav.kt` (upload helpers) |
 | `cleanup` | `CleanupProvider` interface, `parseProviderOptions`; `cleanup.vercel` / `cleanup.openrouter` / `cleanup.compatible` (user-added OpenAI-compatible) implementations (Chat Completions helpers shared in `GatewayProtocol.kt`) |
-| `dictation` | Session state machine/controller: audio -> STT -> cleanup -> insertion; `Statistics` (the Statistics page's store: on-device, cloud, cleanup, totals) |
+| `dictation` | Session state machine/controller: audio -> STT -> filler words -> cleanup -> insertion; `Statistics` (the Statistics page's store: on-device, cloud, cleanup, totals); `FillerWords` (pure filler removal + output-language evidence), `LanguageDetector` (system TextClassifier: text language fallback) |
 | `overlay` | AccessibilityService, bubble overlay view, live-text panel |
 
 Overlay (`overlay`, View-based, not Compose: a Compose window in a service needs lifecycle/savedstate owners):
@@ -213,9 +213,10 @@ Dictation (CP3):
   `vadContext` = `Dispatchers.Default`, where the gate runs, tests pass `EmptyCoroutineContext`;
   `warmUpCleanup: (Settings) -> Unit` = `{ AppContainer.cleanup(it).warmUp() }`, called with the session's settings):
   `Idle -> Listening(text) -> Finalizing(text) -> Done(text, notice?) | Error(message) -> Idle` (Done shown 1.5 s,
-  or 3 s with a notice, which the panel shows instead of the text; Error 3 s; blank transcript, or nothing passed
-  VAD = Error "No speech detected"). An upload provider stays at `Listening("")`/`Finalizing("")` (blank text keeps
-  the panel hidden). `start()`: new session (also from Done/Error), ignored while Listening/Finalizing;
+  or 3 s with a notice, which the panel shows instead of the text; Error 3 s; blank transcript, or only filler words,
+  or nothing passed VAD = Error "No speech detected"). An upload provider stays at `Listening("")`/`Finalizing("")`
+  (blank text keeps the panel hidden). `start()`: new session (also from Done/Error), ignored while
+  Listening/Finalizing;
   `stop()`: Listening only; `cancel()`: discards any session. The service maps the button to `cancel()` while
   Listening, else `start()` (so the spinner ignores taps), and the pill to `stop()`. A tap that acts (start, stop,
   cancel; decided from the state at tap time) gets a haptic (`haptic()`: `EFFECT_HEAVY_CLICK`, touch usage, so the
@@ -250,8 +251,8 @@ Dictation (CP3):
   throws (decided: it never should; the session ends in Error) or a transcript that arrives before the stop (the
   Gateway's early `finish`; also when stop is tapped while the hook runs: unit tested).
 - Final hook: `suspend IrisAccessibilityService.onFinalTranscript(text): Done`, called directly inside the session
-  (state still Finalizing). It does cleanup + insertion and returns the Done to show (inserted text, plus a notice
-  on fallback). No retry/skip.
+  (state still Finalizing) with the filler-filtered text (see Filler words). It does cleanup + insertion and returns
+  the Done to show (inserted text, plus a notice on fallback). No retry/skip.
 
 VAD ("Skip silence", CP7):
 - Model: `app/src/main/assets/silero_vad.onnx`, Silero VAD v6.2.3
@@ -300,7 +301,7 @@ VAD ("Skip silence", CP7):
   are billed; the Gateway upstreams' limits are undocumented); pings only keep the TCP/NAT path. ~1 % of the withheld
   silence. Zeros don't count in `sentBytes`: a session with no speech still ends with "No speech detected" and no commit
   / `audio-done` (if it ran >= 5 s, the socket got only keep-alive zeros). Upload providers get none.
-- Setting `Settings.vadEnabled` (`vad_enabled`, default on): Transcription Provider > Audio > "Skip Silence" switch,
+- Setting `Settings.vadEnabled` (`vad_enabled`, default on): Transcription Settings > Audio > "Skip Silence" switch,
   subtitle "Detects speech on-device and sends only that, to cut cost." (same for every cloud model; on Soniox
   real-time it saves nothing, since that is billed by session length); On device: "Detects speech on-device and
   transcribes each phrase as you pause.", or with the streaming model "Detects speech on-device and transcribes only
@@ -379,6 +380,38 @@ Cleanup + insertion (CP4):
   If SET_TEXT returns false: clipboard + `ACTION_PASTE` of the same spaced text (previous clipboard not restored).
   A non-editable node (keyboard only) skips SET_TEXT: clipboard + `ACTION_PASTE` of the unspaced text.
   No/stale node or paste fails: text left on the clipboard, notice "Copied to clipboard".
+
+Filler words (CP18):
+- Port of Handy's built-in removal (`src-tauri/src/audio_toolkit/text.rs`: lists, `remove_filler_matches`); not
+  ported: stutter collapse, custom list, Chinese script handling. `dictation/FillerWords.kt` (pure, unit tested).
+- Lists: universal (always) uh, uhm, umm, uhh, uhhh, ehh, ehm, ahm, hmm, hm, mmm, хм, ммм; gated (language known)
+  en um/ah/eh, de äh/ähm, fr euh (base code: region after `-`/`_` dropped).
+- Match: case-insensitive whole word via lookarounds `(?<![\p{L}\p{N}_'’-])…(?![\p{L}\p{N}_'’-])` (so "Mm-hmm",
+  "Uh-huh", "Uh-oh", "Um's" stay), plus an optional trailing `...`, `…` or one of `, . ! ?` (not
+  `\b`/`UNICODE_CHARACTER_CLASS`: that flag throws on Android). A capitalized filler that opened a sentence hands its
+  capital to the next letter/digit. A comma or ellipsis is just eaten. Unlike Handy, a `.`, `!` or `?` the filler ate
+  still ends the kept text's sentence: if text precedes it and doesn't end in `. ! ? …`, its trailing whitespace and
+  one comma go and the mark is appended ("Let me check, um." -> "Let me check."; "Is it ready, um?" -> "Is it
+  ready?"; "Um. So" -> "So"). Then runs of spaces/tabs -> one space, spaces/tabs around a line break dropped (line
+  breaks kept, same on Android and the JVM), trimmed; a changed text left with no letter/digit becomes "".
+- Language (`outputLanguage(settings)`): On device = the model's `outputLanguage` ("en" for the three English
+  models), Whisper = `whisperLanguage(sttLanguage)`, other on-device models (Parakeet TDT v3) none: the shared
+  language never reaches them; Soniox = `sonioxLanguages` if it holds exactly one code; others = `sttLanguage` if
+  set. Unknown + a gated filler in the text (`hasGatedFiller`) + setting on -> `LanguageDetector.detect`
+  (TextClassificationManager `detectLanguage`, top hypothesis >= 0.9, else unknown; `runInterruptible(Dispatchers.IO)`,
+  never throws; not unit tested), bounded by `LANGUAGE_DETECTION_TIMEOUT_MS` 1 s; unknown = universal list only
+  (fails closed). Logs `Filler words: language X (detected in Y ms)`, no text.
+- Privacy: with the language unknown and a gated candidate in the text, the transcript is passed to Android's system
+  TextClassifier (a system app such as Android System Intelligence; on-device, no network, but it leaves Iris's
+  process). Kept for every provider, On device included (decided).
+- Accepted risk: the language evidence trusts the setting even where the provider treats it as a soft hint (Soniox
+  with one non-strict hint) or ignores it (Gateway models without a language option).
+- Placement: `DictationController`, after `transcribe` returns, before the blank check: fillers only = "No speech
+  detected"; `onFinalTranscript` (cleanup, insertion, every fallback) and the statistics' word count get the
+  filtered text; the panel keeps the raw STT text while Listening/Finalizing. `waitMs` excludes it; the service's
+  `Timing: stop->transcript` includes it.
+- Setting `Settings.removeFillerWords` (`remove_filler_words`, default on): Post Processing Settings > "Remove
+  Filler Words" switch (eraser), independent of AI Cleanup.
 
 Providers (settings store a provider id for each):
 - STT provider: `Settings.sttProviderId` (`stt_provider_id`): `openai` (default) = OpenAI (direct),
@@ -590,7 +623,7 @@ Providers (settings store a provider id for each):
   Pricing (pay as you go, 2026-11-13): Nova-3 $0.0043/min mono-language, $0.0052 multi: ~44 % cheaper than
   streaming. Warm-up: keyless `HEAD /v1/listen` through the default (h2) client, 3 min throttle (reset by a
   failure). Logs `Timing: upload X KB, stop->response Y ms`.
-- Deepgram mode: `Settings.deepgramUpload` (`deepgram_upload`, default false), Transcription Provider > Model
+- Deepgram mode: `Settings.deepgramUpload` (`deepgram_upload`, default false), Transcription Settings > Model
   Settings switch "Disable Realtime Streaming", shown only with Deepgram selected.
 - STT, Soniox (direct) (`stt.soniox.SonioxSpeechToText`, `real_time` models): WebSocket, one socket, no reconnect,
   no async fallback. Verified 2026-11-13 (`stt.soniox.SonioxProtocol.kt`) against
@@ -656,7 +689,8 @@ Providers (settings store a provider id for each):
 - Soniox pricing (2026-11-13): real-time ~$0.12/h, billed by wall-clock stream time (VAD gaps don't cut it, so a
   long pause still costs); async ~$0.10/h by audio duration (VAD and Speed cut it).
 - STT, On device (CP14, `stt.ondevice`): sherpa-onnx offline recognizers (CP15: plus one online recognizer for the
-  streaming model) on CPU, models downloaded in settings; no network while dictating. Catalogue
+  streaming model) on CPU, models downloaded in settings; no network while dictating (the text may still reach the
+  system TextClassifier for filler-word language detection, see Filler words). Catalogue
   (`OnDeviceModels.kt`, pure, unit tested; menu order; files pinned to a Hugging Face commit,
   `https://huggingface.co/<repo>/resolve/<commit>/<file>`; sizes + SHA-256 re-checked against the HF API 2026-11-13):
 
@@ -756,10 +790,11 @@ Providers (settings store a provider id for each):
   input, i.e. after Speed), decodeMs = the segments' busy times summed (offline) or the last emission's (streaming),
   waitMs = stop -> decoder joined (the `Timing: stop->final` span). Nothing is recorded for "No speech detected"
   (thrown out of `audio.collect`, or blank text), cancellation, timeout, load/decode failure (all throw first) or a
-  cloud provider. Speech before Speed = `speechMs(audioMs, sttSpeedPercent)` (`audioMs * percent / 100`, Sonic is
-  exact enough), with the speed read from Settings by the stats store on `appScope` when it records: no change to
-  `transcribe`, the controller or the interface, and the audio path never waits (a speed change mid-dictation skews
-  that sample; accepted).
+  cloud provider. A filler-only text still records its sample (the provider records before the controller's filler
+  removal turns it into "No speech detected"). Speech before Speed = `speechMs(audioMs, sttSpeedPercent)`
+  (`audioMs * percent / 100`, Sonic is exact enough), with the speed read from Settings by the stats store on
+  `appScope` when it records: no change to `transcribe`, the controller or the interface, and the audio path never
+  waits (a speed change mid-dictation skews that sample; accepted).
 - Model downloads (`OnDeviceModelStore`, `AppContainer.onDeviceModels`, unit tested with MockWebServer): one at a
   time, on `appScope` (outlives the screen), OkHttp with a 30 s read timeout, files in
   `noBackupFilesDir/models/<modelId>/` (never backed up; no backup-rule change). `init` scans off main: a model is
@@ -934,10 +969,10 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
   (Accessibility Service / Microphone Permission: "Enabled" in blue, "Disabled" in the failure colour with "Setup →"
   (accessibility settings / the permission request; permanently denied after an earlier request -> App info;
   accessibility also shows the restricted-settings hint); both re-checked on `ON_RESUME`), then nav cards
-  Transcription Provider (audio-lines), Post Processing Provider (sparkles), Appearance (eye), Statistics (gauge,
+  Transcription Settings (audio-lines), Post Processing Settings (sparkles), Appearance (eye), Statistics (gauge,
   "Transcription and cleanup times and usage"); footer
   "Version <versionName>" (PackageManager), pinned to the bottom while the content is short.
-- Transcription Provider: picker card (audio-lines icon, "Transcription Provider" black dropdown: On device, OpenAI,
+- Transcription Settings: picker card (audio-lines icon, "Transcription Provider" black dropdown: On device, OpenAI,
   Vercel AI Gateway, Deepgram, Soniox, each with its brand mark in a `ProviderIconBox` (On device: Lucide `smartphone`;
   Gateway: the Vercel mark; `SelectField`'s `optionIcon`); an unknown stored id shows as OpenAI); "Provider
   Settings": the selected provider's "API Key" (Gateway helper "(shared with post processing)"), Soniox "Region"
@@ -956,7 +991,7 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
   live Soniox model). Menu items of streaming models end with the Lucide `radio` icon ("Streams"; OpenAI
   `isRealtimeTranscriptionModel`, Gateway `isStreamingTranscriptionModel`, Deepgram every model while `deepgramUpload`
   is off, Soniox `sonioxStreams`).
-- Transcription Provider with On device (CP14): no "Provider Settings" section (no key); "Model Settings" =
+- Transcription Settings with On device (CP14): no "Provider Settings" section (no key); "Model Settings" =
   `OnDeviceModelSettings` (`ui/settings/OnDeviceSettings.kt`): "Speech-to-text Model" read-only dropdown (catalogue
   order, labels `onDeviceModelLabel`: "Parakeet Unified EN · 663 MB" or "· Downloaded"; the streaming model's row
   ends with the radio icon (`SelectDropdown` / `SelectField` `streams`, menu rows only); helper
@@ -980,10 +1015,11 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
   Speed subtitle "Speeds up the audio (pitch kept), so it transcribes faster." and helper "Higher
   speeds can lower accuracy.". `SettingsApp` collects `onDeviceModels.state` (app-level, like the Soniox catalogue)
   and doesn't load the OpenAI list while On device is selected.
-- Post Processing Provider: "AI Cleanup" switch card (sparkles, "Polish the transcript with an LLM before it's
-  inserted."); everything below is dimmed (alpha 0.38, animated) while off but stays editable: picker card ("Vercel
-  AI Gateway" / "OpenRouter" / custom providers, see CP13 below), "Provider Settings" key (Gateway: "(shared with
-  transcription)"; OpenRouter
+- Post Processing Settings: "Remove Filler Words" switch card (eraser, "Remove common filler words like uh, um, hmm
+  from the transcript.", not dimmed), then the "AI Cleanup" switch card (sparkles, "Polish the transcript with an LLM
+  before it's inserted."); everything below it is dimmed (alpha 0.38, animated) while off but stays editable: picker
+  card ("Vercel AI Gateway" / "OpenRouter" / custom providers, see CP13 below), "Provider Settings" key (Gateway:
+  "(shared with transcription)"; OpenRouter
   placeholder "sk-or-…"), "Model Settings": "Cleanup Model" combobox ("Model must support structured output."),
   "Reasoning Level" dropdown ("Model default" + the saved model's efforts, else `Settings.REASONING_EFFORTS`; "Not
   listed for this model" error only when the model's list is known and lacks the saved value, which is still sent;
@@ -1326,6 +1362,11 @@ Not covered by unit tests; check on a real device (ideally more than one OEM) af
   words / 38 min - (recording + stop->done); Soniox real-time shows 0 % saved; a Deepgram upload session gets its own
   "(upload)" section; Reset zeroes the card and removes every section; TalkBack reads each card figure (value,
   label) and each row.
+- Filler words (CP18): real voice "um, uh, hmm" removed (cleanup off and on) with `en` set; with a blank language and
+  a cloud model, English "um" removed (log `Filler words: language en`) and Portuguese/German speech with "um" kept;
+  TextClassifier answers in the accessibility service's process on a real phone (no `Language detection failed`
+  warning, detection well under 1 s); "Uh." alone = "No speech detected"; a trailing "um." keeps the sentence's
+  period; the live panel still shows the raw words; switch off = text unchanged.
 - Long Gateway upload: a 10 min Gateway after-stop dictation (VAD off) succeeds; on a 413, reuse `splitAtPauses`
   for the Gateway too.
 - Gateway STT with a real voice: live text streams and the final is inserted (default model, plus a 16 kHz one:
@@ -1420,3 +1461,4 @@ Update this section as checkpoints land.
 | CP15 | On-device streaming STT (Nemotron) | Done (device check pending) |
 | CP16 | On-device statistics | Done (device check pending) |
 | CP17 | Cloud + cleanup statistics | Done (device check pending) |
+| CP18 | Filler-word removal + settings page renames | Done (device check pending) |

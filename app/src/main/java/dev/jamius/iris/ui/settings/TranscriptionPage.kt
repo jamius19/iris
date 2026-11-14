@@ -48,7 +48,7 @@ import dev.jamius.iris.ui.components.Text
 import dev.jamius.iris.ui.theme.IrisTheme
 
 /**
- * Transcription Provider: the provider, its key (and Soniox region), model, language and timeout, then the audio
+ * Transcription Settings: the provider, its key (and Soniox region), model, language and timeout, then the audio
  * options (Skip Silence, Audio Speed). Each provider's fields are separate calls, so unsaved input never carries over.
  * On device has no key or timeout: its model, download, licence and Unload Model instead (language for Whisper only).
  */
@@ -74,7 +74,7 @@ fun TranscriptionPage(
     val sonioxLive =
         settings.sttSoniox && sonioxStreams(settings.sonioxSttModel, sonioxState.models)
 
-    PageScaffold(title = "Transcription Provider", onBack = onBack) {
+    PageScaffold(title = "Transcription Settings", onBack = onBack) {
         Card(verticalPadding = 15.dp) {
             IconRow(R.drawable.lucide_audio_lines, iconTopPadding = 0.dp) {
                 SelectField(

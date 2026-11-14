@@ -75,6 +75,8 @@ data class Settings(
     val vadEnabled: Boolean,
     /** Speed-up of the audio sent to the STT service, in percent (100 = as recorded). */
     val sttSpeedPercent: Int,
+    /** Remove filler words (uh, hmm; um/ah/eh, äh, euh only with the language known) from the final transcript. */
+    val removeFillerWords: Boolean,
     val cleanupEnabled: Boolean,
     val cleanupProviderId: String,
     /** The Vercel AI Gateway cleanup model. */

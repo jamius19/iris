@@ -86,6 +86,10 @@ class SettingsRepository(
         dataStore.edit { it[Keys.STT_SPEED_PERCENT] = percent }
     }
 
+    suspend fun setRemoveFillerWords(enabled: Boolean) {
+        dataStore.edit { it[Keys.REMOVE_FILLER_WORDS] = enabled }
+    }
+
     suspend fun setCleanupEnabled(enabled: Boolean) {
         dataStore.edit { it[Keys.CLEANUP_ENABLED] = enabled }
     }
@@ -238,6 +242,7 @@ internal object Keys {
     val STT_TIMEOUT_SECONDS = intPreferencesKey("stt_timeout_seconds")
     val VAD_ENABLED = booleanPreferencesKey("vad_enabled")
     val STT_SPEED_PERCENT = intPreferencesKey("stt_speed_percent")
+    val REMOVE_FILLER_WORDS = booleanPreferencesKey("remove_filler_words")
     val CLEANUP_ENABLED = booleanPreferencesKey("cleanup_enabled")
     val CLEANUP_PROVIDER_ID = stringPreferencesKey("cleanup_provider_id")
     val CLEANUP_MODEL = stringPreferencesKey("cleanup_model")
@@ -299,6 +304,7 @@ internal fun Preferences.toSettings(storedSecrets: Set<Secret>): Settings {
         sttTimeoutSeconds = this[Keys.STT_TIMEOUT_SECONDS] ?: Settings.DEFAULT_STT_TIMEOUT_SECONDS,
         vadEnabled = this[Keys.VAD_ENABLED] ?: true,
         sttSpeedPercent = this[Keys.STT_SPEED_PERCENT] ?: Settings.DEFAULT_STT_SPEED_PERCENT,
+        removeFillerWords = this[Keys.REMOVE_FILLER_WORDS] ?: true,
         cleanupEnabled = this[Keys.CLEANUP_ENABLED] ?: false,
         cleanupProviderId = cleanupProviderId,
         cleanupModel = this[Keys.CLEANUP_MODEL] ?: Settings.DEFAULT_CLEANUP_MODEL,

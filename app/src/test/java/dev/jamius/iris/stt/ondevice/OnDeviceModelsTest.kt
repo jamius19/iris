@@ -51,6 +51,15 @@ class OnDeviceModelsTest {
     }
 
     @Test
+    fun onlyTheEnglishModelsHaveAnOutputLanguage() {
+        assertEquals(
+            listOf("nemotron-streaming-en", "parakeet-unified-en", "moonshine-base-en"),
+            ON_DEVICE_MODELS.filter { it.outputLanguage == "en" }.map { it.id }
+        )
+        assertTrue(ON_DEVICE_MODELS.all { it.outputLanguage == null || it.outputLanguage == "en" })
+    }
+
+    @Test
     fun unknownIdIsTheDefaultModel() {
         assertEquals(Settings.DEFAULT_ON_DEVICE_STT_MODEL, onDeviceModel("x").id)
         assertEquals("whisper-small", onDeviceModel("whisper-small").id)
