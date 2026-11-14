@@ -58,12 +58,13 @@ Silero VAD ("Skip silence") decides which audio is sent (cloud: to cut STT cost;
   `a9a701eb18cbd5f786f28f986c16895ffc0d0337e4a9a63131b619d9542e07d4`); OFL licences ship as `assets/inter_OFL.txt` /
   `assets/blinker_OFL.txt`.
 - Lucide 1.72.0 icons (https://github.com/lucide-icons/lucide/tree/1.72.0/icons) as `res/drawable/lucide_<name>.xml`
-  (19: accessibility, mic, audio-lines, sparkles, eye, eye-off, cloud, arrow-down, arrow-right, refresh-cw, trash,
-  radio, check, chevron-left, chevron-down, plus, smartphone, gauge, eraser): viewport 24, white stroke (tinted in
-  Compose), round caps/joins, circles/rects converted to paths; `android:width` = the use size and `strokeWidth`
+  (20: accessibility, mic, audio-lines, sparkles, eye, eye-off, cloud, arrow-down, arrow-right, refresh-cw, trash,
+  radio, check, chevron-left, chevron-down, plus, smartphone, gauge, eraser, save-check): viewport 24, white stroke
+  (tinted in Compose), round caps/joins, circles/rects converted to paths; `android:width` = the use size and `strokeWidth`
   chosen so the drawn stroke matches the Figma export (1.5 at 24/16 dp, 1.57 at 23, 1.64 at 22, 1.25 for sparkles,
-  1.6 at 15, 2.2 at 11; `smartphone` 14 dp at 1.7, drawn by `BrandIcon` as On device's provider icon). The
-  overlay keeps its own `ic_mic`/`ic_close`/`ic_check`/`ic_exclamation`. `assets/lucide_LICENSE.txt` is the full
+  1.6 at 15, 2.2 at 11; `save-check` 14 dp at 1.7; `smartphone` 14 dp at 1.7, drawn by `BrandIcon` as On device's
+  provider icon). The overlay keeps its own `ic_mic`/`ic_close`/`ic_check`/`ic_exclamation`.
+  `assets/lucide_LICENSE.txt` is the full
   upstream LICENSE (ISC + the Feather MIT block, "Copyright (c) 2013-present Cole Bemis": radio, check, chevrons,
   plus, trash, arrows are Feather-derived).
 - Logo `res/drawable/iris_logo.xml` (104 x 30 dp) converted from the designer's `iris_logo.svg` (viewBox 834.46 x
@@ -73,9 +74,11 @@ Silero VAD ("Skip silence") decides which audio is sent (cloud: to cut STT cost;
   #7624F4 light; `drawable-night` copy #C8FF00 for dark, a different SVG per mode needs only such a copy)
   / `provider_openai.xml` (15.75 x 16 dp, white) / `provider_deepgram.xml` (16 x 16 dp, #E042FF) /
   `provider_soniox.xml` (13.48 x 16 dp, #1881FF, from the SVG's `.st0` class), path data copied from the
-  user-supplied SVGs (viewBoxes 256 x 222 / 1024 x 730 / 256 x 260 / 24 x 24 / 211.35 x 250.84; no transforms); the
-  marks belong to their owners. `BrandIcon` (`ui.components`) draws one at 14 dp (the white
-  ones, `smartphone`, OpenAI, Vercel, tinted `onControl` so they read on the light dropdowns; the rest untinted).
+  user-supplied SVGs (viewBoxes 256 x 222 / 1024 x 730 / 256 x 260 / 24 x 24 / 211.35 x 250.84; no transforms);
+  on-device model makers' marks `provider_nvidia.xml` (16 x 10.91 dp, #74B71B, the 24 x 24 SVG cropped to the mark
+  by a group translate) / `provider_moonshine.xml` (16 x 16 dp, viewBox 256 x 256: the SVG's white mark drawn in its
+  background square's #5578BB, square dropped); the marks belong to their owners. `BrandIcon` (`ui.components`)
+  draws one at 14 dp (the white ones, `smartphone`, OpenAI, Vercel, tinted `onControl` so they read on the light dropdowns; the rest untinted).
 - Manual DI: `AppContainer` held by the custom `Application` class `IrisApp`. No Hilt/Koin.
 - All versions live in `gradle/libs.versions.toml`.
 
@@ -699,10 +702,10 @@ Providers (settings store a provider id for each):
   | id | label / languages | engine | repo @ commit | size | licence |
   |---|---|---|---|---|---|
   | `nemotron-streaming-en` (default, CP15) | Nemotron Streaming English / English | `NEMO_STREAMING` | `csukuangfj2/sherpa-onnx-nemotron-speech-streaming-en-0.6b-1120ms-int8-2026-04-25` @ `b0b6bae3` | 661,919,419 B | NVIDIA Open Model License |
-  | `parakeet-unified-en` | Parakeet Unified EN / English | `NEMO_TRANSDUCER` | `csukuangfj2/sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-non-streaming` @ `8c3a10fb` | 663,043,117 B | NVIDIA Open Model License |
+  | `parakeet-unified-en` | Parakeet Unified English / English | `NEMO_TRANSDUCER` | `csukuangfj2/sherpa-onnx-nemo-parakeet-unified-en-0.6b-int8-non-streaming` @ `8c3a10fb` | 663,043,117 B | NVIDIA Open Model License |
   | `parakeet-tdt-v3` | Parakeet TDT v3 / 25 European languages | `NEMO_TRANSDUCER` | `csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8` @ `ed5d7456` | 670,576,784 B | CC BY 4.0 |
   | `whisper-small` | Whisper Small / 99 languages | `WHISPER` | `csukuangfj/sherpa-onnx-whisper-small` @ `8f3c18b3` | 375,485,327 B | MIT (OpenAI) |
-  | `moonshine-base-en` | Moonshine Base EN / English, fastest | `MOONSHINE_V2` | `csukuangfj2/sherpa-onnx-moonshine-base-en-quantized-2026-02-27` @ `8f4d6c58` | 141,300,566 B | MIT (Moonshine AI) |
+  | `moonshine-base-en` | Moonshine Base English / English, fastest | `MOONSHINE_V2` | `csukuangfj2/sherpa-onnx-moonshine-base-en-quantized-2026-02-27` @ `8f4d6c58` | 141,300,566 B | MIT (Moonshine AI) |
 
   Full commits, file names, sizes and hashes are in `ON_DEVICE_MODELS`; the licence line (with its link) shows under
   the download in settings. Configs (`OnDeviceRecognizer`, sherpa Kotlin API v2.0.1): `FeatureConfig(16000, 80)`
@@ -995,13 +998,16 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
   is off, Soniox `sonioxStreams`).
 - Transcription Settings with On device (CP14): no "Provider Settings" section (no key); "Model Settings" =
   `OnDeviceModelSettings` (`ui/settings/OnDeviceSettings.kt`): "Speech-to-text Model" read-only dropdown (catalogue
-  order, labels `onDeviceModelLabel`: "Parakeet Unified EN · 663 MB" or "· Downloaded"; the streaming model's row
-  ends with the radio icon (`SelectDropdown` / `SelectField` `streams`, menu rows only); helper
+  order, labels = the model's label, e.g. "Parakeet Unified English"; `optionIcon` = the maker's mark in a
+  `ProviderIconBox` (`onDeviceModelIcon`: NeMo engines NVIDIA, Whisper OpenAI, Moonshine Moonshine AI); a downloaded
+  model gets `optionBadge` = Lucide `save-check` in `onControl` right after its name, in the field and the menu
+  (content description "Downloaded"; `LabelWithBadge`: the name ellipsizes before it); the streaming model's row ends with the
+  radio icon (`SelectDropdown` / `SelectField` `streams`, menu rows only); helper
   `onDeviceModelHelper`: "<languages>. Runs offline on this phone.", for the streaming model "This streaming model
   only supports English."), then "Download": this model downloading -> `ProgressBar` (`ui.components`, 3 dp line
   like the slider track, `progressBarRangeInfo`) + "120 / 663 MB" (`downloadProgressText`) + "Cancel"; another
   model downloading -> helper "Another model is downloading."; being deleted -> "Deleting…" (muted, no button);
-  downloaded -> "Downloaded" (enabled colour) +
+  downloaded -> "Downloaded" (enabled colour) with the size (`megabytesText`, text colour) below it +
   "Delete" (`DangerButton`, no confirmation); else "Download (663 MB)" (`megabytesText`: 10^6 B, rounded); the
   store's error for this model in the error slot. Then the licence line (helper style, muted, underlined link).
   "Language Code" only for Whisper (helper "Leave blank to auto-detect. Codes Whisper doesn't know auto-detect
@@ -1334,8 +1340,8 @@ Not covered by unit tests; check on a real device (ideally more than one OEM) af
   transcription may remain until Soniox's 30-day auto-delete); (6) EU region with an EU key works, a US key on EU =
   key error; (7) app start offline, then a dictation online: the catalogue is fetched at session start. Speed hidden
   for `stt-rt-*`, shown for async; console usage matches (real-time = wall-clock stream time).
-- On device (CP14): each model (Parakeet Unified EN, Parakeet TDT v3, Whisper Small, Moonshine Base EN) downloads
-  and transcribes a real voice; with Skip Silence on, text appears per phrase as you pause; a phrase over 20 s is
+- On device (CP14): each model (Parakeet Unified English, Parakeet TDT v3, Whisper Small, Moonshine Base English)
+  downloads and transcribes a real voice; with Skip Silence on, text appears per phrase as you pause; a phrase over 20 s is
   split without lost words; Whisper with `de` and with a blank language; speed 1.5x; the VAD (now on sherpa's ORT)
   still detects real speech and keeps first/last words (emulator only showed silence); memory (`adb shell dumpsys
   meminfo dev.jamius.iris`) after the preload and after the Unload Model delay once the bubble hides (default 5 min; log

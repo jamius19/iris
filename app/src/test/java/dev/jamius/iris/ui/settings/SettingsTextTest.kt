@@ -50,10 +50,7 @@ class SettingsTextTest {
         assertEquals("0 MB", megabytesText(0))
         assertEquals("120 / 663 MB", downloadProgressText(120_400_000, 663_043_117))
         val parakeet = onDeviceModel("parakeet-unified-en")
-        assertEquals("Parakeet Unified EN · 663 MB", onDeviceModelLabel(parakeet, downloaded = false))
-        assertEquals("Parakeet Unified EN · Downloaded", onDeviceModelLabel(parakeet, downloaded = true))
         val nemotron = onDeviceModel("nemotron-streaming-en")
-        assertEquals("Nemotron Streaming English · 662 MB", onDeviceModelLabel(nemotron, downloaded = false))
         assertEquals("This streaming model only supports English.", onDeviceModelHelper(nemotron))
         assertEquals("English. Runs offline on this phone.", onDeviceModelHelper(parakeet))
     }

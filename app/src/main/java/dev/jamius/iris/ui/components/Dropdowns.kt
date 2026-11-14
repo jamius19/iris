@@ -224,8 +224,8 @@ private fun DropdownPanel(
 }
 
 /**
- * One panel row: [leading] (if any), text (medium when selected), then the "Streams" radio icon and the selected
- * check.
+ * One panel row: [leading] (if any), text (medium when selected) with [badge] (if any) right after it, then the
+ * "Streams" radio icon and the selected check.
  */
 @Composable
 private fun PanelItem(
@@ -233,6 +233,7 @@ private fun PanelItem(
     selected: Boolean,
     streams: Boolean,
     leading: (@Composable () -> Unit)? = null,
+    badge: (@Composable () -> Unit)? = null,
     onClick: () -> Unit,
 ) {
     val colors = IrisTheme.colors
@@ -253,23 +254,39 @@ private fun PanelItem(
         verticalAlignment = Alignment.CenterVertically
     ) {
         leading?.invoke()
-        Text(
-            text,
-            if (selected) type.menuItemSelected else type.menuItem,
-            Modifier.weight(1f),
-            color = colors.onControl,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
+        LabelWithBadge(Modifier.weight(1f), badge) {
+            Text(
+                text,
+                if (selected) type.menuItemSelected else type.menuItem,
+                it,
+                color = colors.onControl,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
         if (streams) Icon(R.drawable.lucide_radio, "Streams", colors.onControl.copy(alpha = 0.7f))
         if (selected) Icon(R.drawable.lucide_check, null, colors.onControl)
     }
 }
 
+/** [text] (given its modifier) with [badge] (if any) right after it; the text ellipsizes before the badge. */
+@Composable
+private fun LabelWithBadge(
+    modifier: Modifier,
+    badge: (@Composable () -> Unit)?,
+    text: @Composable (Modifier) -> Unit,
+) {
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+        text(Modifier.weight(1f, fill = false))
+        badge?.invoke()
+    }
+}
+
 /**
  * Read-only black dropdown (fixed choices): shows [selected]; a pick closes the panel and calls [onSelect] if it
- * changed. [optionIcon] (if any) is drawn before each option's text, in the field and the panel. Options that
- * [streams] get the radio icon (menu rows only). TalkBack: "[label], <value>, Collapsed/Expanded, drop down list".
+ * changed. [optionIcon] (if any) is drawn before each option's text and [optionBadge] (if any) right after it, in
+ * the field and the panel. Options that [streams] get the radio icon (menu rows only). TalkBack: "[label],
+ * <value>, Collapsed/Expanded, drop down list".
  */
 @Composable
 fun <T> SelectDropdown(
@@ -280,6 +297,7 @@ fun <T> SelectDropdown(
     onSelect: (T) -> Unit,
     modifier: Modifier = Modifier,
     optionIcon: (@Composable (T) -> Unit)? = null,
+    optionBadge: (@Composable (T) -> Unit)? = null,
     streams: (T) -> Boolean = { false },
 ) {
     val colors = IrisTheme.colors
@@ -310,17 +328,18 @@ fun <T> SelectDropdown(
                 optionIcon(selected)
                 Spacer(Modifier.width(8.dp))
             }
-            Text(
-                optionLabel(selected),
-                IrisTheme.type.button,
-                Modifier
-                    .weight(1f)
-                    .padding(vertical = 8.dp)
-                    .clearAndSetSemantics {},
-                color = colors.onControl,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+            LabelWithBadge(Modifier.weight(1f), optionBadge?.let { { it(selected) } }) {
+                Text(
+                    optionLabel(selected),
+                    IrisTheme.type.button,
+                    it
+                        .padding(vertical = 8.dp)
+                        .clearAndSetSemantics {},
+                    color = colors.onControl,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
             Box(Modifier.size(28.dp, ControlHeight), contentAlignment = Alignment.Center) {
                 Icon(R.drawable.lucide_arrow_down, null, colors.onControl, Modifier.rotate(arrowRotation(open)))
             }
@@ -341,7 +360,8 @@ fun <T> SelectDropdown(
                     optionLabel(option),
                     option == selected,
                     streams = streams(option),
-                    leading = optionIcon?.let { { it(option) } }
+                    leading = optionIcon?.let { { it(option) } },
+                    badge = optionBadge?.let { { it(option) } }
                 ) {
                     open = false
                     if (option != selected) onSelect(option)
@@ -364,6 +384,7 @@ fun <T> SelectField(
     error: String? = null,
     spacing: Dp = 8.dp,
     optionIcon: (@Composable (T) -> Unit)? = null,
+    optionBadge: (@Composable (T) -> Unit)? = null,
     streams: (T) -> Boolean = { false },
     helperContent: (@Composable () -> Unit)? = null,
 ) {
@@ -382,6 +403,7 @@ fun <T> SelectField(
             optionLabel,
             onSelect = { saveState.save { onSave(it) } },
             optionIcon = optionIcon,
+            optionBadge = optionBadge,
             streams = streams
         )
     }

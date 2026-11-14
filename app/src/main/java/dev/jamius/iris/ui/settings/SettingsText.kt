@@ -81,10 +81,6 @@ fun megabytesText(bytes: Long): String = "${(bytes + 500_000) / 1_000_000} MB"
 fun downloadProgressText(doneBytes: Long, totalBytes: Long): String =
     "${(doneBytes + 500_000) / 1_000_000} / ${megabytesText(totalBytes)}"
 
-/** An on-device model in the model menu: its size, or "Downloaded". */
-fun onDeviceModelLabel(model: OnDeviceModel, downloaded: Boolean): String =
-    "${model.label} · ${if (downloaded) "Downloaded" else megabytesText(model.sizeBytes)}"
-
 /** The helper under the on-device model menu. */
 fun onDeviceModelHelper(model: OnDeviceModel): String = if (model.streams) {
     "This streaming model only supports English."

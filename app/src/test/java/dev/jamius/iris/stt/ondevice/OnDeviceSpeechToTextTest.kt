@@ -106,7 +106,7 @@ class OnDeviceSpeechToTextTest {
             stt.run(flow { collected = true })
             fail("Expected SttException")
         } catch (e: SttException) {
-            assertEquals("Download the Moonshine Base EN model in Iris settings", e.message)
+            assertEquals("Download the Moonshine Base English model in Iris settings", e.message)
         }
         assertFalse(collected)
         assertTrue(languages.isEmpty())
@@ -479,7 +479,7 @@ class OnDeviceSpeechToTextTest {
             provider(downloaded = false).run(flowOf(chunk(10)))
             fail("Expected SttException")
         } catch (e: SttException) {
-            assertEquals("Download the Moonshine Base EN model in Iris settings", e.message)
+            assertEquals("Download the Moonshine Base English model in Iris settings", e.message)
         }
 
         assertTrue(records.isEmpty())

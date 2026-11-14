@@ -72,7 +72,7 @@ val ON_DEVICE_MODELS: List<OnDeviceModel> = listOf(
     ),
     OnDeviceModel(
         id = "parakeet-unified-en",
-        label = "Parakeet Unified EN",
+        label = "Parakeet Unified English",
         languages = "English",
         outputLanguage = "en",
         engine = OnDeviceEngine.NEMO_TRANSDUCER,
@@ -151,7 +151,7 @@ val ON_DEVICE_MODELS: List<OnDeviceModel> = listOf(
     ),
     OnDeviceModel(
         id = "moonshine-base-en",
-        label = "Moonshine Base EN",
+        label = "Moonshine Base English",
         languages = "English, fastest",
         outputLanguage = "en",
         engine = OnDeviceEngine.MOONSHINE_V2,
