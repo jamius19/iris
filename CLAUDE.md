@@ -966,9 +966,11 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
   "Language Code" only for Whisper (helper "Leave blank to auto-detect. Codes Whisper doesn't know auto-detect
   too."); no Timeout; last, "Unload Model" (`SelectField` over `Settings.ON_DEVICE_UNLOAD_MINUTES`, labels
   `onDeviceUnloadLabel`: "Never", "Immediately", "After 2 minutes", "After 5 minutes" (default), "After 10 minutes",
-  "After 15 minutes", "After 1 hour"; helper "Frees the model's memory if you haven't dictated for this long."; saved at
-  once). Audio: Skip Silence subtitle "Detects speech on-device and transcribes each phrase as you
-  pause." (streaming model: "Detects speech on-device and transcribes only that."; `skipSilenceSubtitle`); Audio
+  "After 15 minutes", "After 1 hour"; helper `UNLOAD_HELPER` "Frees the model's memory if you haven't dictated for
+  this long." with three RAM guide lines below it, one per line: "8 GB+ RAM: Never or 15 minutes+.", "6 GB: 5–10
+  minutes.", "4 GB or less: Immediately or 2 minutes."; saved at once). Audio: Skip Silence subtitle "Detects speech
+  on-device and transcribes each phrase as you pause." (streaming model: "Detects speech on-device and transcribes
+  only that."; `skipSilenceSubtitle`); Audio
   Speed subtitle "Speeds up the audio (pitch kept), so it transcribes faster." and helper "Higher
   speeds can lower accuracy.". `SettingsApp` collects `onDeviceModels.state` (app-level, like the Soniox catalogue)
   and doesn't load the OpenAI list while On device is selected.

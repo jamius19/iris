@@ -275,7 +275,7 @@ fun TranscriptionPage(
                     optionLabel = ::onDeviceUnloadLabel,
                     onSave = { repository.setOnDeviceUnloadMinutes(it) },
                     saver = saver,
-                    helper = "Frees the model's memory if you haven't dictated for this long."
+                    helper = UNLOAD_HELPER
                 )
             }
         }
@@ -319,6 +319,10 @@ fun TranscriptionPage(
 
 private const val KEY_PLACEHOLDER = "Paste your API key"
 private const val MODEL_LABEL = "Speech-to-text Model"
+private const val UNLOAD_HELPER = "Frees the model's memory if you haven't dictated for this long.\n" +
+    "8 GB+ RAM: Never or 15 minutes+.\n" +
+    "6 GB: 5–10 minutes.\n" +
+    "4 GB or less: Immediately or 2 minutes."
 
 /** A transcription provider's brand mark in the provider menu. */
 @DrawableRes
