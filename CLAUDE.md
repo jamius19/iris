@@ -70,7 +70,8 @@ Silero VAD ("Skip silence") decides which audio is sent (cloud: to cut STT cost;
   240.43); fills `@color/logo_body` / `@color/logo_capsule` (light #3F3F42 / #777A80, `values-night` #D9DBDC /
   #8E9196).
 - Brand marks `res/drawable/provider_vercel.xml` (16 x 13.875 dp, white) / `provider_openrouter.xml` (16 x 11.4 dp,
-  #C8FF00) / `provider_openai.xml` (15.75 x 16 dp, white) / `provider_deepgram.xml` (16 x 16 dp, #E042FF) /
+  #7624F4 light; `drawable-night` copy #C8FF00 for dark, a different SVG per mode needs only such a copy)
+  / `provider_openai.xml` (15.75 x 16 dp, white) / `provider_deepgram.xml` (16 x 16 dp, #E042FF) /
   `provider_soniox.xml` (13.48 x 16 dp, #1881FF, from the SVG's `.st0` class), path data copied from the
   user-supplied SVGs (viewBoxes 256 x 222 / 1024 x 730 / 256 x 260 / 24 x 24 / 211.35 x 250.84; no transforms); the
   marks belong to their owners. `BrandIcon` (`ui.components`) draws one at 14 dp (the white
