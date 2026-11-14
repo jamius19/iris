@@ -42,7 +42,7 @@ import dev.jamius.iris.ui.components.SwitchRow
 /**
  * Transcription Provider: the provider, its key (and Soniox region), model, language and timeout, then the audio
  * options (Skip Silence, Audio Speed). Each provider's fields are separate calls, so unsaved input never carries over.
- * On device has no key or timeout: its model, download and licence instead (language for Whisper only).
+ * On device has no key or timeout: its model, download, licence and Unload Model instead (language for Whisper only).
  */
 @Composable
 fun TranscriptionPage(
@@ -265,6 +265,17 @@ fun TranscriptionPage(
                     valueText = ::secondsText,
                     onSave = { repository.setSttTimeoutSeconds(it) },
                     saver = saver
+                )
+            } else {
+                Separator()
+                SelectField(
+                    label = "Unload Model",
+                    options = Settings.ON_DEVICE_UNLOAD_MINUTES,
+                    selected = settings.onDeviceUnloadMinutes,
+                    optionLabel = ::onDeviceUnloadLabel,
+                    onSave = { repository.setOnDeviceUnloadMinutes(it) },
+                    saver = saver,
+                    helper = "Frees the model's memory if you haven't dictated for this long."
                 )
             }
         }

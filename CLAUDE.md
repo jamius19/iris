@@ -380,7 +380,9 @@ Providers (settings store a provider id for each):
 - STT provider: `Settings.sttProviderId` (`stt_provider_id`): `openai` (default) = OpenAI (direct),
   `vercel-gateway` = Vercel AI Gateway, `deepgram` = Deepgram (direct), `soniox` = Soniox (direct), or `on-device` =
   On device (`sttOnDevice`; model `onDeviceSttModel` / `on_device_stt_model`, default `nemotron-streaming-en`, an
-  unknown id = the default model; no key, so `sttKeySet` is true; uses the shared `sttLanguage`); an unknown id means
+  unknown id = the default model; `onDeviceUnloadMinutes` / `on_device_unload_minutes` (int;
+  `Settings.ON_DEVICE_UNLOAD_MINUTES` = -1 Never, 0 Immediately, 2, 5, 10, 15, 60; default 5; any other stored value =
+  the default); no key, so `sttKeySet` is true; uses the shared `sttLanguage`); an unknown id means
   OpenAI. Each has its own model setting (`sttModel`, `gatewaySttModel`, default
   `openai/gpt-live-transcribe`, `deepgramSttModel`, default `nova-3`, `sonioxSttModel`, default `stt-rt-v6`) and key
   (Soniox also `sonioxRegion`, default `us`); `activeSttModel` / `sttKeySet` follow the selection; the language
@@ -725,11 +727,18 @@ Providers (settings store a provider id for each):
   is too short for a 121-frame window. `reset()` is never called (endpointing off). Errors: load failure
   (`Exception`/`LinkageError`, `Log.e`) = "Couldn't load the on-device model"; decode failure = "On-device
   transcription failed". Memory: preloaded by `warmUp` (bubble shown / state changes; the service's `sttKeySet`
-  gate is true for On device); the service calls
-  `setBubbleShown(true)` in `refreshFocus` and `(false)` in the `hideBubble` runnable and `onDestroy`: hidden, the
-  model is released once unused for 5 min (re-armed while decodes still run, e.g. Finalizing after focus loss);
-  `IrisApp.onTrimMemory(>= TRIM_MEMORY_BACKGROUND)` releases it too (with a bound accessibility service this may
-  rarely fire). Logs `Loaded <id> in X ms`, `Decoded X ms of audio in Y ms` (no text), `Released <id>`. Emulator
+  gate is true for On device); the service calls `setIdle(!bubbleShown && no dictation Listening/Finalizing)`
+  (`updateModelIdle`: `refreshFocus` sets `bubbleShown`, the `hideBubble` runnable clears it after the debounce, every
+  dictation state calls it; `onDestroy` calls `setIdle(true)`, its scope cancel ends any session) and
+  `setUnloadMinutes(onDeviceUnloadMinutes)` from its settings collect (both no-ops on an unchanged value, so `idleSince`
+  isn't reset). While idle the model is released once unused for the Unload Model delay, counted from max(became idle,
+  last load/decode) (`idleReleaseWaitMs`, re-checked after each wait), under the lock (after any running decode); Never
+  (-1) = no idle release, Immediately (0) = at once. Not idle during a session: an offline model still decoding queued
+  phrases after focus loss (Finalizing) would otherwise be released between two decodes (the lock is free between them)
+  and reload mid-session. A changed setting applies to a running countdown at once (time already idle counts; Never
+  cancels it). `IrisApp.onTrimMemory(>= TRIM_MEMORY_BACKGROUND)` releases it too, also with Never (with a bound
+  accessibility service this may rarely fire), as do switching the provider away from On device and deleting the model.
+  Logs `Loaded <id> in X ms`, `Decoded X ms of audio in Y ms` (no text), `Released <id>`. Emulator
   (x86_64, 2026-11-13, Moonshine Base EN): load 1.2-1.9 s, 3-4 s of silence decoded in 109-130 ms, `stop->final`
   ~180 ms; release build PSS ~244 MB with it loaded (native heap ~204 MB).
   Statistics hooks (CP16): `decode` returns `Decoded(text, busyMs)` (the native decode's time) and `stream` emits
@@ -952,7 +961,10 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
   "Delete" (`DangerButton`, no confirmation); else "Download (663 MB)" (`megabytesText`: 10^6 B, rounded); the
   store's error for this model in the error slot. Then the licence line (helper style, muted, underlined link).
   "Language Code" only for Whisper (helper "Leave blank to auto-detect. Codes Whisper doesn't know auto-detect
-  too."); no Timeout. Audio: Skip Silence subtitle "Detects speech on-device and transcribes each phrase as you
+  too."); no Timeout; last, "Unload Model" (`SelectField` over `Settings.ON_DEVICE_UNLOAD_MINUTES`, labels
+  `onDeviceUnloadLabel`: "Never", "Immediately", "After 2 minutes", "After 5 minutes" (default), "After 10 minutes",
+  "After 15 minutes", "After 1 hour"; helper "Frees the model's memory if you haven't dictated for this long."; saved at
+  once). Audio: Skip Silence subtitle "Detects speech on-device and transcribes each phrase as you
   pause." (streaming model: "Detects speech on-device and transcribes only that."; `skipSilenceSubtitle`); Audio
   Speed subtitle "Speeds up the audio (pitch kept), so it transcribes faster." and helper "Higher
   speeds can lower accuracy.". `SettingsApp` collects `onDeviceModels.state` (app-level, like the Soniox catalogue)
@@ -1274,10 +1286,13 @@ Not covered by unit tests; check on a real device (ideally more than one OEM) af
   and transcribes a real voice; with Skip Silence on, text appears per phrase as you pause; a phrase over 20 s is
   split without lost words; Whisper with `de` and with a blank language; speed 1.5x; the VAD (now on sherpa's ORT)
   still detects real speech and keeps first/last words (emulator only showed silence); memory (`adb shell dumpsys
-  meminfo dev.jamius.iris`) after the preload and 5 min after the bubble hides (log `Released <id>`); load time of
-  the Parakeet models on a mid-range phone (and that Finalizing stays within the 60 s + 2 x audio deadline);
-  deleting the selected model (next dictation: "Download the ... model"); a release build on arm64 loads sherpa and
-  the VAD; a download over mobile data that drops resumes.
+  meminfo dev.jamius.iris`) after the preload and after the Unload Model delay once the bubble hides (default 5 min; log
+  `Released <id>`); load time of the Parakeet models on a mid-range phone (and that Finalizing stays within the 60 s + 2
+  x audio deadline); deleting the selected model (next dictation: "Download the ... model"); a release build on arm64
+  loads sherpa and the VAD; a download over mobile data that drops resumes. Unload Model: a change mid-countdown applies
+  at once (hidden 3 min, pick "After 2 minutes" -> `Released` at once; pick "Never" -> no release); "Immediately" with
+  an offline model: stop, leave the field while Finalizing -> all phrases decode with no second `Loaded` mid-session,
+  then `Released`; "Never" keeps it loaded (until a memory trim, a provider switch or a model delete).
 - On device streaming (CP15, Nemotron Streaming English): real voice, live text while recording; RTF (`Decoded X ms
   of audio in Y ms`, Y < X on a mid-range phone, else the backlog grows; live text lags >= ~1.2 s + decode;
   stop->final ≈ 2 window decodes + backlog); the first word right after the tap with Skip Silence off (the first 9

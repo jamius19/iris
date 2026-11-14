@@ -62,6 +62,11 @@ data class Settings(
     val sonioxLanguages: String,
     /** The on-device model: a catalogue id in `stt.ondevice`; an unknown id means the default model. */
     val onDeviceSttModel: String,
+    /**
+     * Minutes the on-device model stays loaded unused while the bubble is hidden: -1 never unloads, 0 at once. One of
+     * [ON_DEVICE_UNLOAD_MINUTES]; any other stored value means the default.
+     */
+    val onDeviceUnloadMinutes: Int,
     /** ISO-639-1 code; blank means auto-detect. */
     val sttLanguage: String,
     /** How long to wait for the final transcript once the audio is sent; past it the session fails. */
@@ -194,6 +199,11 @@ data class Settings(
 
         const val DEFAULT_STT_TIMEOUT_SECONDS = 10
         val STT_TIMEOUT_RANGE = 5..30
+
+        const val DEFAULT_ON_DEVICE_UNLOAD_MINUTES = 5
+
+        /** The Unload Model options in menu order: -1 = never, 0 = immediately. */
+        val ON_DEVICE_UNLOAD_MINUTES = listOf(-1, 0, 2, 5, 10, 15, 60)
 
         const val DEFAULT_STT_SPEED_PERCENT = 100
         val STT_SPEED_PERCENT_RANGE = 100..200

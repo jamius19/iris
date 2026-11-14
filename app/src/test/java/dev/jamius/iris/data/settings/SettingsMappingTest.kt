@@ -71,6 +71,7 @@ class SettingsMappingTest {
         assertEquals(Settings.STT_PROVIDER_OPENAI, settings.sttProviderId)
         assertFalse(settings.sttOnDevice)
         assertEquals("nemotron-streaming-en", settings.onDeviceSttModel)
+        assertEquals(5, settings.onDeviceUnloadMinutes)
         assertEquals(Settings.DEFAULT_STT_MODEL, settings.sttModel)
         assertEquals(Settings.DEFAULT_GATEWAY_STT_MODEL, settings.gatewaySttModel)
         assertTrue(settings.gatewaySttLive)
@@ -128,6 +129,7 @@ class SettingsMappingTest {
             Keys.SONIOX_STT_MODEL to "stt-async-v6",
             Keys.SONIOX_REGION to "eu",
             Keys.SONIOX_LANGUAGES to "en, bn",
+            Keys.ON_DEVICE_UNLOAD_MINUTES to -1,
             Keys.STT_LANGUAGE to "fr",
             Keys.STT_TIMEOUT_SECONDS to 20,
             Keys.VAD_ENABLED to false,
@@ -170,6 +172,7 @@ class SettingsMappingTest {
         assertEquals("stt-async-v6", settings.sonioxSttModel)
         assertEquals("eu", settings.sonioxRegion)
         assertEquals("en, bn", settings.sonioxLanguages)
+        assertEquals(-1, settings.onDeviceUnloadMinutes)
         assertEquals("fr", settings.sttLanguage)
         assertEquals(20, settings.sttTimeoutSeconds)
         assertFalse(settings.vadEnabled)
@@ -196,6 +199,13 @@ class SettingsMappingTest {
         assertEquals(0.75f, settings.bubbleYFraction)
         assertEquals(5, settings.panelLines)
         assertEquals(70, settings.panelWidthPercent)
+    }
+
+    @Test
+    fun unloadMinutesOutsideTheOptionsMeanTheDefault() {
+        val settings = mutablePreferencesOf(Keys.ON_DEVICE_UNLOAD_MINUTES to 7).toSettings(emptySet())
+
+        assertEquals(Settings.DEFAULT_ON_DEVICE_UNLOAD_MINUTES, settings.onDeviceUnloadMinutes)
     }
 
     @Test

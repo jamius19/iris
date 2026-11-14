@@ -92,6 +92,14 @@ fun onDeviceModelHelper(model: OnDeviceModel): String = if (model.streams) {
     "${model.languages}. Runs offline on this phone."
 }
 
+/** An Unload Model option ([Settings.ON_DEVICE_UNLOAD_MINUTES]). */
+fun onDeviceUnloadLabel(minutes: Int): String = when (minutes) {
+    -1 -> "Never"
+    0 -> "Immediately"
+    60 -> "After 1 hour"
+    else -> "After $minutes minutes"
+}
+
 /** The Skip Silence switch's subtitle; [onDeviceModel] is the selected one with On device, else null. */
 fun skipSilenceSubtitle(onDeviceModel: OnDeviceModel?): String = when {
     onDeviceModel == null -> "Detects speech on-device and sends only that, to cut cost."

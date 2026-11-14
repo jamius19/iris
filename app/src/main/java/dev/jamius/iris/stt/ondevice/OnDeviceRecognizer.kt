@@ -18,6 +18,7 @@ import com.k2fsa.sherpa.onnx.OnlineModelConfig
 import com.k2fsa.sherpa.onnx.OnlineRecognizer
 import com.k2fsa.sherpa.onnx.OnlineRecognizerConfig
 import com.k2fsa.sherpa.onnx.OnlineTransducerModelConfig
+import dev.jamius.iris.data.settings.Settings
 import dev.jamius.iris.stt.SttException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -44,7 +45,8 @@ data class Decoded(val text: String, val busyMs: Long)
  * decode, unload and release all run on one worker thread under one lock: decodes are serialized across sessions
  * (Whisper mutates shared decoder state), a session started during a load waits for it, and an unload never runs
  * mid-decode. A [stream] session holds the lock for the whole dictation, so unload, release and model switches wait
- * for it to end. Released 5 min after the bubble hides (or on memory trim). Not unit tested (native).
+ * for it to end. Released once unused for the Unload Model delay while idle (see [setIdle]), on memory trim, or by
+ * [release]. Not unit tested (native).
  *
  * @param dir a model's download directory (the store's).
  * @param onLoaded a model's load time after each successful load (on the worker; must not block).
@@ -78,8 +80,17 @@ class OnDeviceRecognizer(
     @Volatile
     private var lastUse = 0L
 
+    /** The bubble is hidden and no dictation is listening or finalizing: the idle countdown runs (see [setIdle]). */
     @Volatile
-    private var bubbleShown = false
+    private var idle = false
+
+    /** `elapsedRealtime` when [idle] last turned true. */
+    @Volatile
+    private var idleSince = 0L
+
+    /** The Unload Model setting, in minutes: -1 never, 0 at once. */
+    @Volatile
+    private var unloadMinutes = Settings.DEFAULT_ON_DEVICE_UNLOAD_MINUTES
 
     /** Main thread only. */
     private var idleRelease: Job? = null
@@ -190,19 +201,39 @@ class OnDeviceRecognizer(
         scope.launch { inUse.withLock { releaseLoaded() } }
     }
 
-    /** Main thread. Hidden: releases the model once nothing used it for 5 min; shown: keeps it. */
-    fun setBubbleShown(shown: Boolean) {
-        bubbleShown = shown
+    /**
+     * Main thread. [idle] = the bubble is hidden and no dictation is listening or finalizing: the model is released
+     * once unused for the [setUnloadMinutes] delay. Not idle stops the countdown. A repeat doesn't restart it.
+     */
+    fun setIdle(idle: Boolean) {
+        if (idle == this.idle) return
+        this.idle = idle
+        if (idle) idleSince = SystemClock.elapsedRealtime()
+        armIdleRelease()
+    }
+
+    /** Main thread. The Unload Model setting; a running countdown takes it at once (time already idle counts). */
+    fun setUnloadMinutes(minutes: Int) {
+        if (minutes == unloadMinutes) return
+        unloadMinutes = minutes
+        if (idle) armIdleRelease()
+    }
+
+    /**
+     * Main thread. (Re)starts the countdown while [idle]; a load or decode since then (e.g. a cancelled decode
+     * finishing) pushes it out.
+     */
+    private fun armIdleRelease() {
         idleRelease?.cancel()
-        idleRelease = if (shown) null else scope.launch {
-            delay(IDLE_MS)
-            // A decode since (e.g. Finalizing after focus loss) re-arms the wait.
+        idleRelease = if (!idle) null else scope.launch {
             while (true) {
-                val idle = SystemClock.elapsedRealtime() - lastUse
-                if (idle >= IDLE_MS) break
-                delay(IDLE_MS - idle)
+                val wait = idleReleaseWaitMs(unloadMinutes, idleSince, lastUse, SystemClock.elapsedRealtime())
+                    ?: return@launch
+                if (wait <= 0) break
+                delay(wait)
             }
-            if (!bubbleShown) inUse.withLock { releaseLoaded() }
+            // Under the lock: after any running decode.
+            inUse.withLock { if (idle) releaseLoaded() }
         }
     }
 
@@ -320,7 +351,6 @@ class OnDeviceRecognizer(
 
         /** sherpa's Android examples; more threads land on little cores and slow the decode. */
         const val NUM_THREADS = 2
-        const val IDLE_MS = 5 * 60 * 1000L
 
         /**
          * Zeros after the last chunk, 1.3 s: `inputFinished()` doesn't pad, and a chunk is decoded only once more than
@@ -330,3 +360,10 @@ class OnDeviceRecognizer(
         const val TAIL_PADDING_SAMPLES = 20_800
     }
 }
+
+/**
+ * Milliseconds until an idle model is released: null = never ([unloadMinutes] < 0), <= 0 = now. Idle time counts
+ * from the later of [idleSince] and [lastUse] (the last load or decode); all `elapsedRealtime`.
+ */
+internal fun idleReleaseWaitMs(unloadMinutes: Int, idleSince: Long, lastUse: Long, now: Long): Long? =
+    if (unloadMinutes < 0) null else unloadMinutes * 60_000L - (now - maxOf(idleSince, lastUse))

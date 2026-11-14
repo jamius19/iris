@@ -52,11 +52,15 @@ class IrisAccessibilityService : AccessibilityService() {
     private val hideBubble = Runnable {
         dictation?.onFocusLost()
         overlay?.hide()
-        (application as IrisApp).container.onDeviceRecognizer.setBubbleShown(false)
+        bubbleShown = false
+        updateModelIdle()
     }
 
     /** True while the bubble is wanted: an editable field has input focus, or the keyboard is open (see class doc). */
     private var fieldFocused = false
+
+    /** Set by [refreshFocus] and by [hideBubble] after its debounce, for [updateModelIdle]. */
+    private var bubbleShown = false
 
     /**
      * The input-focused node the bubble is shown for: editable, or (keyboard only) not editable or null. Call
@@ -108,6 +112,7 @@ class IrisAccessibilityService : AccessibilityService() {
         scope.launch {
             repository.settings.collect {
                 sttWarmUp = if (it.sttKeySet) container.speechToText(it) else null
+                container.onDeviceRecognizer.setUnloadMinutes(it.onDeviceUnloadMinutes)
                 if (!it.sttOnDevice) container.onDeviceRecognizer.release() // No-op when nothing is loaded.
                 overlay.setPanelSize(it.panelLines, it.panelWidthPercent) // Skips unchanged values.
             }
@@ -116,6 +121,7 @@ class IrisAccessibilityService : AccessibilityService() {
         scope.launch {
             dictation.state.collect {
                 render(it)
+                updateModelIdle()
                 warmUpStt() // A finished session used up the warmed connection; warm one for the next.
             }
         }
@@ -151,7 +157,8 @@ class IrisAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         handler.removeCallbacks(hideBubble)
-        (application as IrisApp).container.onDeviceRecognizer.setBubbleShown(false)
+        // Idle: the scope cancel below ends any session.
+        (application as IrisApp).container.onDeviceRecognizer.setIdle(true)
         overlay?.hide(animate = false)
         overlay = null
         dictation = null
@@ -180,7 +187,8 @@ class IrisAccessibilityService : AccessibilityService() {
             handler.removeCallbacks(hideBubble)
             overlay.show()
             dictation?.let { render(it.state.value) } // Restores the panel if the bubble was hidden mid-session.
-            (application as IrisApp).container.onDeviceRecognizer.setBubbleShown(true)
+            bubbleShown = true
+            updateModelIdle()
             warmUpStt()
         } else if (!handler.hasCallbacks(hideBubble)) {
             handler.postDelayed(hideBubble, HIDE_DELAY_MS)
@@ -206,6 +214,16 @@ class IrisAccessibilityService : AccessibilityService() {
         if (!fieldFocused) return
         if (state is DictationState.Listening || state is DictationState.Finalizing) return
         stt.warmUp()
+    }
+
+    /**
+     * The on-device model's idle countdown runs only while the bubble is hidden and no dictation is listening or
+     * finalizing (an offline model decoding queued phrases after focus loss isn't released between two decodes).
+     */
+    private fun updateModelIdle() {
+        val state = dictation?.state?.value
+        val busy = state is DictationState.Listening || state is DictationState.Finalizing
+        (application as IrisApp).container.onDeviceRecognizer.setIdle(!bubbleShown && !busy)
     }
 
     private fun render(state: DictationState) {
