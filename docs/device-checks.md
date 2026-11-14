@@ -82,4 +82,4 @@ mic is silent, so every real-voice item is still unverified. Run the relevant gr
   ("Battery Usage", "Optimized"), "Set up Battery Usage" on Setup, and the link as a link that opens on double-tap.
 - Footer update check: opening the app shows "Version x · Checking for update", then "Up to date" (also
   while the repo has no release), or "Update available" in the failure colour once a release with a higher
-  `v<versionName>` tag exists. Offline: only the version.
+  `v<versionName>` tag exists; tapping it opens the release page in the browser. Offline: only the version.

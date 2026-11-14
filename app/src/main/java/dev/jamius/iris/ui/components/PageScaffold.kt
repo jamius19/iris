@@ -50,9 +50,12 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.unit.dp
 import dev.jamius.iris.R
 import dev.jamius.iris.ui.theme.IrisTheme
@@ -140,7 +143,11 @@ fun PageScaffold(title: String?, onBack: (() -> Unit)?, content: @Composable Col
                         val status = buildAnnotatedString {
                             append(" · ")
                             if (update == UpdateStatus.AVAILABLE) {
-                                withStyle(SpanStyle(color = colors.failure)) { append(updateText) }
+                                // A link like Home's: opens the release page in the browser.
+                                val link = SpanStyle(color = colors.failure, textDecoration = TextDecoration.Underline)
+                                withLink(LinkAnnotation.Url(LATEST_RELEASE_PAGE, TextLinkStyles(link))) {
+                                    append(updateText)
+                                }
                             } else {
                                 append(updateText)
                             }
@@ -154,3 +161,4 @@ fun PageScaffold(title: String?, onBack: (() -> Unit)?, content: @Composable Col
 }
 
 private const val FOOTER_MS = 200
+private const val LATEST_RELEASE_PAGE = "https://github.com/jamius19/Iris/releases/latest"
