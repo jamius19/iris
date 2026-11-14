@@ -8,21 +8,34 @@ package dev.jamius.iris.ui.settings
 import android.Manifest
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.Activity
+import android.app.ActivityManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
+import android.os.PowerManager
 import android.view.accessibility.AccessibilityManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -33,18 +46,25 @@ import dev.jamius.iris.ui.components.NavCard
 import dev.jamius.iris.ui.components.PageScaffold
 import dev.jamius.iris.ui.components.ServicesDivider
 import dev.jamius.iris.ui.components.StatusRow
+import dev.jamius.iris.ui.components.Text
+import dev.jamius.iris.ui.theme.IrisTheme
 
-/** Home: the Services card (accessibility service, microphone; re-checked on resume) and the sub-page cards. */
+/**
+ * Home: the Services card (accessibility service, microphone, battery mode; re-checked on resume) and the sub-page
+ * cards.
+ */
 @Composable
 fun HomePage(onOpen: (Page) -> Unit) {
     val context = LocalContext.current
     var accessibilityEnabled by remember { mutableStateOf(isAccessibilityServiceEnabled(context)) }
     var accessibilityTurnedOn by remember { mutableStateOf(isAccessibilityServiceTurnedOn(context)) }
     var micGranted by remember { mutableStateOf(isMicGranted(context)) }
+    var batteryMode by remember { mutableStateOf(currentBatteryMode(context)) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         accessibilityEnabled = isAccessibilityServiceEnabled(context)
         accessibilityTurnedOn = isAccessibilityServiceTurnedOn(context)
         micGranted = isMicGranted(context)
+        batteryMode = currentBatteryMode(context)
     }
     // Turned on but not bound: the process died (e.g. a permission change) and the system didn't restart the
     // service (HyperOS 3 lists it under "Crashed services"); only turning it off and on rebinds it.
@@ -64,6 +84,16 @@ fun HomePage(onOpen: (Page) -> Unit) {
             )
         }
         micRequested = true
+    }
+    val dontKillMyApp = buildAnnotatedString {
+        withLink(
+            LinkAnnotation.Url(
+                dontKillMyAppUrl(Build.MANUFACTURER),
+                TextLinkStyles(SpanStyle(textDecoration = TextDecoration.Underline))
+            )
+        ) {
+            append("Phone keeps turning Iris off?")
+        }
     }
 
     PageScaffold(title = null, onBack = null) {
@@ -92,6 +122,34 @@ fun HomePage(onOpen: (Page) -> Unit) {
                 helper = null,
                 onSetup = { micPermission.launch(Manifest.permission.RECORD_AUDIO) }
             )
+            ServicesDivider()
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                StatusRow(
+                    icon = R.drawable.lucide_battery,
+                    iconTopPadding = 1.dp,
+                    title = "Battery Usage",
+                    enabled = batteryMode == BatteryMode.UNRESTRICTED,
+                    helper = "In App info, open Battery and choose Unrestricted (\"No restrictions\" on some " +
+                        "phones), so Android doesn't stop Iris in the background.",
+                    onSetup = {
+                        context.startActivity(
+                            Intent(
+                                android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                Uri.fromParts("package", context.packageName, null)
+                            )
+                        )
+                    },
+                    enabledText = batteryMode.label,
+                    disabledText = batteryMode.label
+                )
+                // Lines up with the row's text: IconRow's 24 dp icon column + 11 dp gap.
+                Text(
+                    dontKillMyApp,
+                    IrisTheme.type.helper,
+                    Modifier.padding(start = 35.dp),
+                    color = IrisTheme.colors.muted
+                )
+            }
         }
         NavCard(
             R.drawable.lucide_audio_lines,
@@ -132,3 +190,9 @@ private fun isAccessibilityServiceTurnedOn(context: Context): Boolean {
 
 private fun isMicGranted(context: Context): Boolean =
     context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+
+private fun currentBatteryMode(context: Context): BatteryMode = batteryMode(
+    ignoringOptimizations = context.getSystemService(PowerManager::class.java)
+        .isIgnoringBatteryOptimizations(context.packageName),
+    backgroundRestricted = context.getSystemService(ActivityManager::class.java).isBackgroundRestricted
+)

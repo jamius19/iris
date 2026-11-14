@@ -249,4 +249,25 @@ class SettingsTextTest {
         assertNull(faviconDomain("https://llm.internal/v1") { null })
         assertNull(faviconDomain("not a url") { "x.com" })
     }
+
+    @Test
+    fun batteryModes() {
+        assertEquals(BatteryMode.UNRESTRICTED, batteryMode(ignoringOptimizations = true, backgroundRestricted = false))
+        assertEquals(BatteryMode.OPTIMIZED, batteryMode(ignoringOptimizations = false, backgroundRestricted = false))
+        assertEquals(BatteryMode.RESTRICTED, batteryMode(ignoringOptimizations = false, backgroundRestricted = true))
+        // Restricted is checked first.
+        assertEquals(BatteryMode.RESTRICTED, batteryMode(ignoringOptimizations = true, backgroundRestricted = true))
+    }
+
+    @Test
+    fun dontKillMyAppUrls() {
+        assertEquals("https://dontkillmyapp.com/xiaomi?app=Iris", dontKillMyAppUrl("Xiaomi"))
+        assertEquals("https://dontkillmyapp.com/samsung?app=Iris", dontKillMyAppUrl("samsung"))
+        assertEquals("https://dontkillmyapp.com/hmd-global?app=Iris", dontKillMyAppUrl("HMD Global"))
+        assertEquals("https://dontkillmyapp.com/xiaomi?app=Iris", dontKillMyAppUrl(" Xiaomi "))
+        // No page on the site (404): the home page.
+        assertEquals("https://dontkillmyapp.com/?app=Iris", dontKillMyAppUrl("HONOR"))
+        assertEquals("https://dontkillmyapp.com/?app=Iris", dontKillMyAppUrl("unknown"))
+        assertEquals("https://dontkillmyapp.com/?app=Iris", dontKillMyAppUrl(""))
+    }
 }

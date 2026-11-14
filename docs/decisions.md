@@ -53,7 +53,13 @@ Choices that can look like bugs or omissions. Each was decided on purpose; chang
 - **Billed audio ignores** keep-alive zeros, padding and per-request minimums.
 
 ## UI
-- **Small icon buttons are below the 48 dp touch guideline** (dense design; they sit edge to edge).
+- **Small icon buttons and text links (licence, dontkillmyapp.com) are below the 48 dp touch guideline** (dense design;
+  they sit edge to edge).
 - **No confirmation on deletes** (prompt, provider, model, statistics reset).
 - **Sub-pages open fresh**: their saved state is dropped once back on Home.
 - **Release builds are arm64-v8a only**: 32-bit devices can't install the app.
+- **The Battery row checks only Android's own battery setting.** OEM task killers (HyperOS autostart, Samsung
+  sleeping apps, ...) can't be read through public APIs, so the row links to dontkillmyapp.com instead. There is
+  no "Allow" dialog (`REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`): Play allows it only for a few app types; Setup opens
+  App info. Only Unrestricted counts as OK, so a fresh install (Optimized by default) shows the row in the
+  failure colour.

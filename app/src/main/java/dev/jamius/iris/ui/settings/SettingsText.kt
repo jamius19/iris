@@ -121,6 +121,30 @@ fun verdictLabel(verdict: SpeedVerdict): String = when (verdict) {
     SpeedVerdict.FALLS_BEHIND -> "Falls behind"
 }
 
+/** The app's battery mode as App info shows it; only [UNRESTRICTED] keeps Iris safe from background limits. */
+enum class BatteryMode(val label: String) {
+    UNRESTRICTED("Unrestricted"),
+    OPTIMIZED("Optimized"),
+    RESTRICTED("Restricted")
+}
+
+/** Restricted wins (a restricted app can't also be exempt in practice, but check it first anyway). */
+fun batteryMode(ignoringOptimizations: Boolean, backgroundRestricted: Boolean): BatteryMode = when {
+    backgroundRestricted -> BatteryMode.RESTRICTED
+    ignoringOptimizations -> BatteryMode.UNRESTRICTED
+    else -> BatteryMode.OPTIMIZED
+}
+
+/** dontkillmyapp.com's page for [manufacturer] (`Build.MANUFACTURER`), or its home page if it has none. */
+fun dontKillMyAppUrl(manufacturer: String): String {
+    val slug = manufacturer.trim().lowercase().replace(' ', '-')
+    return if (slug in DONT_KILL_MY_APP_VENDORS) {
+        "https://dontkillmyapp.com/$slug?app=Iris"
+    } else {
+        "https://dontkillmyapp.com/?app=Iris"
+    }
+}
+
 /** Milliseconds as seconds, rounded to tenths: "4.8 s". */
 fun tenthsText(ms: Long): String {
     val tenths = (ms + 50) / 100
@@ -177,6 +201,10 @@ fun newPromptName(existing: List<String>): String {
 fun providerOptionsError(text: String): String? = runCatching { parseProviderOptions(text) }.exceptionOrNull()?.message
 
 private const val NEW_PROMPT = "New prompt"
+
+/** Vendor pages that exist on dontkillmyapp.com (an unknown slug is a 404; "honor" is one). */
+private val DONT_KILL_MY_APP_VENDORS =
+    setOf("xiaomi", "samsung", "huawei", "oneplus", "oppo", "vivo", "realme", "google", "hmd-global")
 
 const val GATEWAY_OPTIONS_HINT = "Sent as providerOptions, e.g. {\"gateway\": {\"order\": [\"azure\", \"openai\"]}}. " +
     "See the AI Gateway provider options docs. Leave blank to send none. Stored unencrypted: don't put API keys here."

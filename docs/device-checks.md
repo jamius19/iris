@@ -73,3 +73,10 @@ mic is silent, so every real-voice item is still unverified. Run the relevant gr
 - TalkBack reads dropdowns, switches, sliders (name + value), icon buttons and a saved key ("API Key, Saved").
 - Statistics match the logs: Speed ≈ sent audio ÷ decode time, Transcription Time ≈ median `stop->transcript`,
   cleanup p90 ≈ the high end of `cleanup X ms`. "No speech detected" and ✕ add nothing. Stats survive a restart.
+- Battery Usage row: set Unrestricted, Optimized and Restricted in App info, return to Home: the row shows each
+  (Unrestricted in blue, no Setup; the others in the failure colour with helper and Setup). On HyperOS, check
+  "No restrictions" reads as Unrestricted.
+- Battery Setup opens Iris's App info on stock Android (emulator) and on HyperOS; the helper's path matches.
+- "Phone keeps turning Iris off?" opens the browser at the phone maker's dontkillmyapp.com page (the home page on
+  an unlisted maker, e.g. the emulator if its maker isn't Google). TalkBack reads the row's title and mode
+  ("Battery Usage", "Optimized"), "Set up Battery Usage" on Setup, and the link as a link that opens on double-tap.
