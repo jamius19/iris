@@ -73,6 +73,7 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.shadow.Shadow
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
@@ -128,9 +129,34 @@ private fun ControlShell(modifier: Modifier, hasError: Boolean = false, content:
 @Composable
 private fun arrowRotation(open: Boolean): Float = animateFloatAsState(if (open) 180f else 0f, tween(200)).value
 
-/** Where the dropdown's anchor sits in the window (not clipped by the scroll viewport). */
-private fun Modifier.trackAnchor(onBounds: (Rect) -> Unit): Modifier =
-    onGloballyPositioned { onBounds(Rect(it.positionInWindow(), it.size.toSize())) }
+/**
+ * Where a dropdown's anchor sits in the window (not clipped by the scroll viewport). [bounds] only follows the anchor
+ * while the panel is open: a page slide moves every anchor each frame, which must not recompose closed dropdowns.
+ */
+private class Anchor {
+    var coordinates: LayoutCoordinates? = null
+    var open = false
+    var bounds by mutableStateOf<Rect?>(null)
+
+    fun update() {
+        val current = coordinates?.takeIf { it.isAttached } ?: return
+        bounds = Rect(current.positionInWindow(), current.size.toSize())
+    }
+}
+
+/** The [Anchor] of a dropdown whose panel is [open]; its bounds are read as the panel opens. */
+@Composable
+private fun rememberAnchor(open: Boolean): Anchor {
+    val anchor = remember { Anchor() }
+    if (open && !anchor.open) anchor.update()
+    anchor.open = open
+    return anchor
+}
+
+private fun Modifier.trackAnchor(anchor: Anchor): Modifier = onGloballyPositioned {
+    anchor.coordinates = it
+    if (anchor.open) anchor.update()
+}
 
 /**
  * The black dropdown panel in a [Popup], as wide as [anchor] (window pixels), 4 dp below it, or above it when the
@@ -303,10 +329,10 @@ fun <T> SelectDropdown(
     val colors = IrisTheme.colors
     val focusManager = LocalFocusManager.current
     var open by remember { mutableStateOf(false) }
-    var anchor by remember { mutableStateOf<Rect?>(null) }
+    val anchor = rememberAnchor(open)
     // A tap on the field while the panel is open dismisses it (outside tap); it must not reopen it at once.
     var dismissedAt by remember { mutableLongStateOf(0L) }
-    Box(modifier.trackAnchor { anchor = it }) {
+    Box(modifier.trackAnchor(anchor)) {
         ControlShell(
             Modifier
                 .clickable(
@@ -346,7 +372,7 @@ fun <T> SelectDropdown(
         }
         DropdownPanel(
             expanded = open,
-            anchor = anchor,
+            anchor = anchor.bounds,
             focusable = true,
             onDismiss = {
                 open = false
@@ -441,11 +467,11 @@ fun ModelCombobox(
     var menuOpen by remember { mutableStateOf(false) }
     var fetchedOnOpen by remember { mutableStateOf(false) }
     var dismissedAt by remember { mutableLongStateOf(0L) }
-    var anchor by remember { mutableStateOf<Rect?>(null) }
     val focusRequester = remember { FocusRequester() }
     val saveState = rememberSaveState(saver)
     val filtered = remember(models, query) { filterModels(models, query) }
     val expanded = menuOpen && filtered.isNotEmpty()
+    val anchor = rememberAnchor(expanded)
 
     LaunchedEffect(stored) {
         if (stored != lastStored) {
@@ -495,7 +521,7 @@ fun ModelCombobox(
         helper = helper,
         error = listOfNotNull(error ?: saveState.error, loadError).joinToString("\n").ifEmpty { null }
     ) {
-        Box(Modifier.trackAnchor { anchor = it }) {
+        Box(Modifier.trackAnchor(anchor)) {
             ControlShell(
                 Modifier.pointerInput(Unit) { detectTapGestures { focusRequester.requestFocus() } },
                 hasError = error != null
@@ -569,7 +595,7 @@ fun ModelCombobox(
             }
             DropdownPanel(
                 expanded = expanded,
-                anchor = anchor,
+                anchor = anchor.bounds,
                 focusable = false,
                 onDismiss = {
                     menuOpen = false
