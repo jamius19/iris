@@ -80,3 +80,6 @@ mic is silent, so every real-voice item is still unverified. Run the relevant gr
 - "Phone keeps turning Iris off?" opens the browser at the phone maker's dontkillmyapp.com page (the home page on
   an unlisted maker, e.g. the emulator if its maker isn't Google). TalkBack reads the row's title and mode
   ("Battery Usage", "Optimized"), "Set up Battery Usage" on Setup, and the link as a link that opens on double-tap.
+- Footer update check: opening the app shows "Version x · Checking for update", then "Up to date" (also
+  while the repo has no release), or "Update available" in the failure colour once a release with a higher
+  `v<versionName>` tag exists. Offline: only the version.

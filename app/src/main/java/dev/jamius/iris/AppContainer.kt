@@ -45,7 +45,9 @@ import dev.jamius.iris.stt.soniox.sonioxRegion
 import dev.jamius.iris.stt.soniox.sonioxStreams
 import dev.jamius.iris.stt.vercel.VercelGatewayFileTranscription
 import dev.jamius.iris.stt.vercel.VercelGatewaySpeechToText
+import dev.jamius.iris.ui.components.UpdateStatus
 import dev.jamius.iris.ui.settings.Favicons
+import dev.jamius.iris.ui.settings.checkForUpdate
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -255,6 +257,11 @@ class AppContainer(context: Context) {
 
     /** Custom providers' favicons for the settings' provider menu (the cache dir: evicted icons are refetched). */
     val favicons = Favicons(httpClient, File(context.cacheDir, "favicons"))
+
+    private val versionName = context.packageManager.getPackageInfo(context.packageName, 0).versionName.orEmpty()
+
+    /** Whether GitHub has a newer release than this build, for the settings footer. */
+    suspend fun updateStatus(): UpdateStatus = checkForUpdate(httpClient, versionName)
 
     /** One per accessibility service; [scope] is the service's main-thread scope. */
     fun dictationController(

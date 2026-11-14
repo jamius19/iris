@@ -5,6 +5,13 @@
 
 package dev.jamius.iris.ui.components
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -33,6 +40,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,15 +50,23 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import dev.jamius.iris.R
 import dev.jamius.iris.ui.theme.IrisTheme
 
+/** The update check's result, shown after the version in the footer ([UNKNOWN]: check failed, nothing shown). */
+enum class UpdateStatus { CHECKING, UP_TO_DATE, AVAILABLE, UNKNOWN }
+
+val LocalUpdateStatus = compositionLocalOf { UpdateStatus.UNKNOWN }
+
 /**
  * A settings page: background, the logo (Home, [title] null) or a back chevron + title, [content] (items 15 dp
- * apart) and the version footer, pinned to the bottom while the content is short. Content scrolls under the nav bar
- * (its inset is bottom padding inside the scroll); the IME lifts the viewport by its full height. Tapping empty space
- * clears focus, which commits a focused text field.
+ * apart) and the version footer (with [LocalUpdateStatus]), pinned to the bottom while the content is short. Content
+ * scrolls under the nav bar (its inset is bottom padding inside the scroll); the IME lifts the viewport by its full
+ * height. Tapping empty space clears focus, which commits a focused text field.
  */
 @Composable
 fun PageScaffold(title: String?, onBack: (() -> Unit)?, content: @Composable ColumnScope.() -> Unit) {
@@ -103,7 +119,38 @@ fun PageScaffold(title: String?, onBack: (() -> Unit)?, content: @Composable Col
             }
             Spacer(Modifier.height(28.dp))
             Spacer(Modifier.weight(1f))
-            Text("Version $version", type.footer, Modifier.fillMaxWidth(), color = colors.muted)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                Text("Version $version", type.footer, color = colors.muted)
+                // A new status slides up over the old one while the width animates, so the centred footer glides to
+                // its new place instead of jumping.
+                AnimatedContent(
+                    targetState = LocalUpdateStatus.current,
+                    transitionSpec = {
+                        (slideInVertically(tween(FOOTER_MS)) { it } + fadeIn(tween(FOOTER_MS))) togetherWith
+                            (slideOutVertically(tween(FOOTER_MS)) { -it } + fadeOut(tween(FOOTER_MS)))
+                    }
+                ) { update ->
+                    val updateText = when (update) {
+                        UpdateStatus.CHECKING -> "Checking for update"
+                        UpdateStatus.UP_TO_DATE -> "Up to date"
+                        UpdateStatus.AVAILABLE -> "Update available"
+                        UpdateStatus.UNKNOWN -> null
+                    }
+                    if (updateText != null) {
+                        val status = buildAnnotatedString {
+                            append(" · ")
+                            if (update == UpdateStatus.AVAILABLE) {
+                                withStyle(SpanStyle(color = colors.failure)) { append(updateText) }
+                            } else {
+                                append(updateText)
+                            }
+                        }
+                        Text(status, type.footer, color = colors.muted)
+                    }
+                }
+            }
         }
     }
 }
+
+private const val FOOTER_MS = 200
