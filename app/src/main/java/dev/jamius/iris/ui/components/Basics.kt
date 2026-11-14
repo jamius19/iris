@@ -21,6 +21,7 @@ import androidx.compose.ui.graphics.isSpecified
 import androidx.compose.ui.graphics.takeOrElse
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -48,6 +49,13 @@ fun Text(
 ) {
     val resolved = color.takeOrElse { style.color.takeOrElse { IrisTheme.colors.text } }
     BasicText(text, modifier, style.copy(color = resolved), overflow = overflow, maxLines = maxLines)
+}
+
+/** [Text] with spans (e.g. bold labels). */
+@Composable
+fun Text(text: AnnotatedString, style: TextStyle, modifier: Modifier = Modifier, color: Color = Color.Unspecified) {
+    val resolved = color.takeOrElse { style.color.takeOrElse { IrisTheme.colors.text } }
+    BasicText(text, modifier, style.copy(color = resolved))
 }
 
 /** A drawable (Lucide icons are drawn white and tinted here); its size comes from the drawable or [modifier]. */

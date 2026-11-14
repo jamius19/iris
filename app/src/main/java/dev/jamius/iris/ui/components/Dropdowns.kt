@@ -365,9 +365,16 @@ fun <T> SelectField(
     spacing: Dp = 8.dp,
     optionIcon: (@Composable (T) -> Unit)? = null,
     streams: (T) -> Boolean = { false },
+    helperContent: (@Composable () -> Unit)? = null,
 ) {
     val saveState = rememberSaveState(saver)
-    FieldGroup(label, helper = helper, error = saveState.error ?: error, spacing = spacing) {
+    FieldGroup(
+        label,
+        helper = helper,
+        error = saveState.error ?: error,
+        spacing = spacing,
+        helperContent = helperContent
+    ) {
         SelectDropdown(
             label,
             options,

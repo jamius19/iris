@@ -138,8 +138,8 @@ fun IconRow(
 
 /**
  * A labelled control: [label] (+ [subtitle] 4 dp below), [content], then the helper slot: [error] (failure colour)
- * above [helper] ([helperColor], muted by default). While it holds focus, the whole group (incl. helper/error) is
- * kept above the IME.
+ * above [helper] ([helperColor], muted by default), then [helperContent] (a rich helper drawing its own text). While
+ * it holds focus, the whole group (incl. helper/error) is kept above the IME.
  */
 @Composable
 fun FieldGroup(
@@ -150,6 +150,7 @@ fun FieldGroup(
     error: String? = null,
     helperColor: Color = Color.Unspecified,
     spacing: Dp = 8.dp,
+    helperContent: (@Composable () -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val colors = IrisTheme.colors
@@ -164,10 +165,11 @@ fun FieldGroup(
             }
         }
         content()
-        if (error != null || helper != null) {
+        if (error != null || helper != null || helperContent != null) {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 error?.let { Text(it, type.helper, color = colors.failure) }
                 helper?.let { Text(it, type.helper, color = helperColor.takeOrElse { colors.muted }) }
+                helperContent?.invoke()
             }
         }
     }

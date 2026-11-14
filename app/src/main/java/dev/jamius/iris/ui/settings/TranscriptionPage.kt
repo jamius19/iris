@@ -6,7 +6,13 @@
 package dev.jamius.iris.ui.settings
 
 import androidx.annotation.DrawableRes
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import dev.jamius.iris.R
 import dev.jamius.iris.data.settings.Secret
@@ -38,6 +44,8 @@ import dev.jamius.iris.ui.components.SelectField
 import dev.jamius.iris.ui.components.Separator
 import dev.jamius.iris.ui.components.SliderGroup
 import dev.jamius.iris.ui.components.SwitchRow
+import dev.jamius.iris.ui.components.Text
+import dev.jamius.iris.ui.theme.IrisTheme
 
 /**
  * Transcription Provider: the provider, its key (and Soniox region), model, language and timeout, then the audio
@@ -275,7 +283,7 @@ fun TranscriptionPage(
                     optionLabel = ::onDeviceUnloadLabel,
                     onSave = { repository.setOnDeviceUnloadMinutes(it) },
                     saver = saver,
-                    helper = UNLOAD_HELPER
+                    helperContent = { UnloadHelper() }
                 )
             }
         }
@@ -319,10 +327,30 @@ fun TranscriptionPage(
 
 private const val KEY_PLACEHOLDER = "Paste your API key"
 private const val MODEL_LABEL = "Speech-to-text Model"
-private const val UNLOAD_HELPER = "Frees the model's memory if you haven't dictated for this long.\n" +
-    "8 GB+ RAM: Never or 15 minutes+.\n" +
-    "6 GB: 5–10 minutes.\n" +
-    "4 GB or less: Immediately or 2 minutes."
+
+/** RAM guide lines under the Unload Model helper, each label in SemiBold. */
+private val UNLOAD_RAM_GUIDE = buildAnnotatedString {
+    listOf(
+        "8 GB+ RAM:" to " Never or 15 minutes+.",
+        "6 GB:" to " 5–10 minutes.",
+        "4 GB or less:" to " Immediately or 2 minutes."
+    ).forEachIndexed { i, (label, advice) ->
+        if (i > 0) append("\n")
+        withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) { append(label) }
+        append(advice)
+    }
+}
+
+/** The Unload Model helper: what it does, then the RAM guide 4 dp below (helper style and colour). */
+@Composable
+private fun UnloadHelper() {
+    val style = IrisTheme.type.helper
+    val color = IrisTheme.colors.muted
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("Frees the model's memory if you haven't dictated for this long.", style, color = color)
+        Text(UNLOAD_RAM_GUIDE, style, color = color)
+    }
+}
 
 /** A transcription provider's brand mark in the provider menu. */
 @DrawableRes

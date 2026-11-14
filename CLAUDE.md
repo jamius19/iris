@@ -966,8 +966,10 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
   "Language Code" only for Whisper (helper "Leave blank to auto-detect. Codes Whisper doesn't know auto-detect
   too."); no Timeout; last, "Unload Model" (`SelectField` over `Settings.ON_DEVICE_UNLOAD_MINUTES`, labels
   `onDeviceUnloadLabel`: "Never", "Immediately", "After 2 minutes", "After 5 minutes" (default), "After 10 minutes",
-  "After 15 minutes", "After 1 hour"; helper `UNLOAD_HELPER` "Frees the model's memory if you haven't dictated for
-  this long." with three RAM guide lines below it, one per line: "8 GB+ RAM: Never or 15 minutes+.", "6 GB: 5–10
+  "After 15 minutes", "After 1 hour"; helper `UnloadHelper` (the `helperContent` slot of `SelectField` /
+  `FieldGroup`, below any error): "Frees the model's memory if you haven't dictated for this long.", then 4 dp
+  below, three RAM guide lines (`UNLOAD_RAM_GUIDE`, an `AnnotatedString`, labels SemiBold 600), one per line:
+  "8 GB+ RAM: Never or 15 minutes+.", "6 GB: 5–10
   minutes.", "4 GB or less: Immediately or 2 minutes."; saved at once). Audio: Skip Silence subtitle "Detects speech
   on-device and transcribes each phrase as you pause." (streaming model: "Detects speech on-device and transcribes
   only that."; `skipSilenceSubtitle`); Audio
