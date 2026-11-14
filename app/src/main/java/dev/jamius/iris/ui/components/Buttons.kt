@@ -32,7 +32,10 @@ import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import dev.jamius.iris.ui.theme.IrisTheme
 
-/** The design's small dark button ("Setup →"): hugs its text + 11 dp trailing icon (if any). */
+/**
+ * The small filled button ("Setup →"; dark in light mode, white in dark mode): hugs its text + 11 dp trailing icon
+ * (if any).
+ */
 @Composable
 fun SmallButton(
     text: String,
@@ -51,7 +54,6 @@ fun SmallButton(
             )
             .clip(ControlShape)
             .background(colors.button)
-            .controlBorder(colors)
             .clickable(
                 interactionSource = null,
                 indication = PressIndication(colors.pressOverlayOnButton),

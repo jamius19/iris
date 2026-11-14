@@ -1053,7 +1053,7 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
   aren't cached, so they retry); `rememberFavicon` clears the old icon when the base URL changes; built-ins never
   fetch. The plus makes one in-memory draft (plain `remember`, "Unnamed Provider", selected in the UI only,
   never used for cleanup; a second plus focuses its Name); picking any provider, leaving the page or closing the app
-  discards it. Provider Settings for custom providers (draft and saved) is a form committed only by "Save" (dark
+  discards it. Provider Settings for custom providers (draft and saved) is a form committed only by "Save" (filled
   `SmallButton`): "Provider Type" (one option "OpenAI Compatible"), "Provider Name" ("My provider"), "Provider Base
   URL" ("https://api.example.com/v1", "Enter your OpenAI-compatible base URL here."), "API
   Key" (`DraftApiKeyField`). Save checks `providerDraftErrors` (name, `baseUrlError`: blank / not https / unparseable,
@@ -1177,7 +1177,8 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
   #141616, card #212424, text #E8EAEA, muted #9B9EA0, failure #FF5C93 and enabled #5C9DFF (>= 4.5:1 on the card),
   warning (CP16, not in the design: Statistics' "Borderline") #B45309 light (~5:1 on white) / #F59E0B dark (~7:1),
   statsCard (CP17: the Statistics summary card, white text ~5.2:1) #0061F3 in both modes,
-  dropdowns and small buttons are black (#0B0C0C + 1 dp #3A3D3E outline),
+  dropdowns are black (#0B0C0C + 1 dp #3A3D3E outline), small filled buttons (`SmallButton`:
+  Setup, Save, Download, Cancel) white with #2F3031 text,
   slider/switch "on" = the text colour (a black thumb would
   vanish on a dark card). Shadows via `Modifier.dropShadow` (card y 3 blur 3.1 7 %, button y 2 blur 0.95 8 %,
   panel y 4 blur 12 16 %; dark 35-50 %). `Theme.Iris` (+ `values-night`) sets `windowBackground` to
