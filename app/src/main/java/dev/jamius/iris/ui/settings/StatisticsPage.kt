@@ -75,7 +75,7 @@ fun StatisticsPage(stats: StatsSnapshot?, onReset: () -> Unit, onBack: () -> Uni
                     SpeedVerdict.BORDERLINE -> colors.warning
                     SpeedVerdict.FALLS_BEHIND -> colors.failure
                 }
-                StatRow("Speed", verdictLabel(verdict), verdictColor, speedFactorText(factor))
+                StatRow("Processing Speed", verdictLabel(verdict), verdictColor, speedFactorText(factor))
                 Separator()
                 StatRow(
                     "Transcription Time",
@@ -185,5 +185,5 @@ private const val CLOUD_HELPER = "Audio Sent is roughly what the service bills, 
 private const val CLEANUP_HELPER = "Only post processing requests that finished count. Failed and timed-out ones " +
     "are left out."
 
-private const val SPEED_HELPER = "Speed compares how long you spoke with how long the model took to transcribe it. " +
-    "At 1.5× or more it keeps up. Below 1× the transcription falls behind."
+private const val SPEED_HELPER = "Processing speed compares how long you spoke with how long the model took to " +
+    "transcribe it. At 1.5× or more it keeps up. Below 1× the transcription falls behind."
