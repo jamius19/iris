@@ -8,6 +8,7 @@ package dev.jamius.iris.ui.settings
 import android.Manifest
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.Activity
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -38,11 +39,16 @@ import dev.jamius.iris.ui.components.StatusRow
 fun HomePage(onOpen: (Page) -> Unit) {
     val context = LocalContext.current
     var accessibilityEnabled by remember { mutableStateOf(isAccessibilityServiceEnabled(context)) }
+    var accessibilityTurnedOn by remember { mutableStateOf(isAccessibilityServiceTurnedOn(context)) }
     var micGranted by remember { mutableStateOf(isMicGranted(context)) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         accessibilityEnabled = isAccessibilityServiceEnabled(context)
+        accessibilityTurnedOn = isAccessibilityServiceTurnedOn(context)
         micGranted = isMicGranted(context)
     }
+    // Turned on but not bound: the process died (e.g. a permission change) and the system didn't restart the
+    // service (HyperOS 3 lists it under "Crashed services"); only turning it off and on rebinds it.
+    val accessibilityStopped = !accessibilityEnabled && accessibilityTurnedOn
     // Dismissing the first-ever prompt also returns false with no rationale, so App info needs an earlier request.
     var micRequested by rememberSaveable { mutableStateOf(false) }
     val micPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
@@ -67,9 +73,15 @@ fun HomePage(onOpen: (Page) -> Unit) {
                 iconTopPadding = 1.dp,
                 title = "Accessibility Service",
                 enabled = accessibilityEnabled,
-                helper = "If the toggle is greyed out, open App info for Iris, tap ⋮ and choose " +
-                    "\"Allow restricted settings\".",
-                onSetup = { context.startActivity(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+                helper = if (accessibilityStopped) {
+                    "Iris stopped, e.g. after a permission change. Turn it off and on again in " +
+                        "Accessibility settings."
+                } else {
+                    "If the toggle is greyed out, open App info for Iris, tap ⋮ and choose " +
+                        "\"Allow restricted settings\"."
+                },
+                onSetup = { context.startActivity(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
+                disabledText = if (accessibilityStopped) "Not running" else "Disabled"
             )
             ServicesDivider()
             StatusRow(
@@ -107,6 +119,16 @@ private fun isAccessibilityServiceEnabled(context: Context): Boolean =
             it.resolveInfo.serviceInfo.packageName == context.packageName &&
                 it.resolveInfo.serviceInfo.name == IrisAccessibilityService::class.java.name
         }
+
+/** The user's toggle (the secure setting), whether or not the service is bound. */
+private fun isAccessibilityServiceTurnedOn(context: Context): Boolean {
+    val enabled = android.provider.Settings.Secure.getString(
+        context.contentResolver,
+        android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+    ) ?: return false
+    val iris = ComponentName(context, IrisAccessibilityService::class.java)
+    return enabled.split(':').any { ComponentName.unflattenFromString(it) == iris }
+}
 
 private fun isMicGranted(context: Context): Boolean =
     context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED

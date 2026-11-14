@@ -31,7 +31,7 @@ fun NavCard(@DrawableRes icon: Int, title: String, subtitle: String, onClick: ()
 }
 
 /**
- * A Services row: icon, title, "Enabled" (blue) / "Disabled" (failure colour); while disabled, [helper] and a
+ * A Services row: icon, title, "Enabled" (blue) / [disabledText] (failure colour); while disabled, [helper] and a
  * "Setup" button ([onSetup]) below.
  */
 @Composable
@@ -42,6 +42,7 @@ fun StatusRow(
     enabled: Boolean,
     helper: String?,
     onSetup: () -> Unit,
+    disabledText: String = "Disabled",
 ) {
     val colors = IrisTheme.colors
     val type = IrisTheme.type
@@ -50,7 +51,7 @@ fun StatusRow(
             Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text(title, type.title)
                 Text(
-                    if (enabled) "Enabled" else "Disabled",
+                    if (enabled) "Enabled" else disabledText,
                     type.subtitle,
                     color = if (enabled) colors.enabled else colors.failure
                 )

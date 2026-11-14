@@ -973,7 +973,9 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
 - Home: logo (22 dp to the Services card: 7 dp bottom padding + the 15 dp item spacing), Services card
   (Accessibility Service / Microphone Permission: "Enabled" in blue, "Disabled" in the failure colour with "Setup →"
   (accessibility settings / the permission request; permanently denied after an earlier request -> App info;
-  accessibility also shows the restricted-settings hint); both re-checked on `ON_RESUME`), then nav cards
+  accessibility also shows the restricted-settings hint); accessibility turned on (the secure setting) but not bound
+  = "Not running" + "turn it off and on" hint: a permission change kills the process and HyperOS 3 leaves the service
+  under "Crashed services" without rebinding it (stock Android rebinds); both re-checked on `ON_RESUME`), then nav cards
   Transcription Settings (audio-lines), Post Processing Settings (sparkles), Appearance (eye), Statistics (gauge,
   "Transcription and cleanup times and usage"); footer
   "Version <versionName>" (PackageManager), pinned to the bottom while the content is short.
