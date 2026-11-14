@@ -41,6 +41,10 @@ class DictationControllerTest {
     private var audioReleased = false
     private var warmUps = 0
     private val warmUpSettings = mutableListOf<Settings>()
+
+    /** Cloud defaults: the tests below were written against OpenAI, the default before on device. */
+    private val openAi = emptyPreferences().toSettings(emptySet()).copy(sttProviderId = Settings.STT_PROVIDER_OPENAI)
+
     private var recordedRate = 0
     private val records = mutableListOf<Pair<Settings, DictationRecord>>()
 
@@ -106,7 +110,7 @@ class DictationControllerTest {
         audio: Flow<ByteArray> = this@DictationControllerTest.audio,
         cleanupEnabled: Boolean = false,
         level: Float = 0f,
-        settings: Settings = emptyPreferences().toSettings(emptySet()).copy(cleanupEnabled = cleanupEnabled),
+        settings: Settings = openAi.copy(cleanupEnabled = cleanupEnabled),
         vadModel: ((FloatArray) -> Float)? = null,
         onFinalTranscript: suspend (String) -> DictationState.Done = { text ->
             finals += text
@@ -195,7 +199,7 @@ class DictationControllerTest {
     @Test
     fun sessionRecordsAtTheProvidersRateForTheActiveModel() = runTest {
         val stt = FakeStt(rate = 16_000) { "Hi" }
-        val settings = emptyPreferences().toSettings(emptySet()).copy(
+        val settings = openAi.copy(
             sttProviderId = Settings.STT_PROVIDER_VERCEL_GATEWAY,
             gatewaySttModel = "google/gemini-3.5-transcribe-live"
         )
@@ -216,7 +220,7 @@ class DictationControllerTest {
         val cases = listOf(Settings.STT_PROVIDER_OPENAI to "fr", Settings.STT_PROVIDER_SONIOX to "en, bn")
         for ((provider, expected) in cases) {
             val stt = FakeStt { "Hi" }
-            val settings = emptyPreferences().toSettings(emptySet()).copy(
+            val settings = openAi.copy(
                 sttProviderId = provider,
                 sttLanguage = "fr",
                 sonioxLanguages = "en, bn"
@@ -271,7 +275,7 @@ class DictationControllerTest {
     @Test
     fun sessionPassesTheSttTimeoutSetting() = runTest {
         val stt = FakeStt { "Hi" }
-        val settings = emptyPreferences().toSettings(emptySet()).copy(sttTimeoutSeconds = 20)
+        val settings = openAi.copy(sttTimeoutSeconds = 20)
         val controller = controller(stt, settings = settings)
 
         controller.start()
@@ -581,7 +585,7 @@ class DictationControllerTest {
 
     @Test
     fun cleanupIsWarmedUpOnStartAndStopWhenEnabled() = runTest {
-        val settings = emptyPreferences().toSettings(emptySet())
+        val settings = openAi
             .copy(cleanupEnabled = true, cleanupProviderId = Settings.CLEANUP_PROVIDER_OPENROUTER)
         val controller = controller(FakeStt { "Hi" }, settings = settings)
 
@@ -836,7 +840,7 @@ class DictationControllerTest {
         }
     }
 
-    private fun speed(percent: Int) = emptyPreferences().toSettings(emptySet()).copy(sttSpeedPercent = percent)
+    private fun speed(percent: Int) = openAi.copy(sttSpeedPercent = percent)
 
     /** Speech at frames 20..29 and 200..209, stopped at frame 240 (before the second segment's hangover ends). */
     private fun TestScope.twoSegments(stt: FakeStt, settings: Settings = speed(100)) {
@@ -1070,7 +1074,7 @@ class DictationControllerTest {
 
     @Test
     fun onDeviceSessionIsRecordedToo() = runTest {
-        val settings = emptyPreferences().toSettings(emptySet()).copy(sttProviderId = Settings.STT_PROVIDER_ON_DEVICE)
+        val settings = openAi.copy(sttProviderId = Settings.STT_PROVIDER_ON_DEVICE)
         val controller = controller(FakeStt(rate = 16_000) { "Hi" }, audio = frames, settings = settings)
 
         dictateFrames(controller)
@@ -1127,7 +1131,7 @@ class DictationControllerTest {
     @Test
     fun fillerRemovalOffPassesTheTranscriptUnchanged() = runTest {
         val detections = mutableListOf<String>()
-        val settings = emptyPreferences().toSettings(emptySet()).copy(removeFillerWords = false)
+        val settings = openAi.copy(removeFillerWords = false)
         val controller = controller(
             FakeStt { "Uh, um, hello" },
             settings = settings,
@@ -1142,7 +1146,7 @@ class DictationControllerTest {
     @Test
     fun knownLanguageSkipsTheDetector() = runTest {
         val detections = mutableListOf<String>()
-        val settings = emptyPreferences().toSettings(emptySet()).copy(sttLanguage = "en")
+        val settings = openAi.copy(sttLanguage = "en")
         val controller = controller(
             FakeStt { "um hello there" },
             settings = settings,

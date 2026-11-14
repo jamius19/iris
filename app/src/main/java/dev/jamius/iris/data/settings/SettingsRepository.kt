@@ -288,7 +288,7 @@ internal fun Preferences.toSettings(storedSecrets: Set<Secret>): Settings {
         ?.takeIf { id -> id == Settings.CLEANUP_PROVIDER_OPENROUTER || customProviders.any { it.id == id } }
         ?: Settings.CLEANUP_PROVIDER_VERCEL_GATEWAY
     return Settings(
-        sttProviderId = this[Keys.STT_PROVIDER_ID] ?: Settings.STT_PROVIDER_OPENAI,
+        sttProviderId = this[Keys.STT_PROVIDER_ID] ?: Settings.STT_PROVIDER_ON_DEVICE,
         sttModel = this[Keys.STT_MODEL] ?: Settings.DEFAULT_STT_MODEL,
         gatewaySttModel = this[Keys.GATEWAY_STT_MODEL] ?: Settings.DEFAULT_GATEWAY_STT_MODEL,
         gatewaySttLive = this[Keys.GATEWAY_STT_LIVE] ?: true,

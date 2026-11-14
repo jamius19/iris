@@ -16,7 +16,7 @@ import org.junit.Test
 
 class FillerWordsTest {
 
-    private val defaults = emptyPreferences().toSettings(emptySet())
+    private val defaults = emptyPreferences().toSettings(emptySet()).copy(sttProviderId = Settings.STT_PROVIDER_OPENAI)
 
     @Test
     fun universalFillersGoWithAnUnknownLanguage() {
