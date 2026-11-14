@@ -25,6 +25,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.jamius.iris.R
 import dev.jamius.iris.ui.theme.IrisColors
 import dev.jamius.iris.ui.theme.IrisTheme
 
@@ -80,10 +81,14 @@ fun ProviderIconBox(content: @Composable () -> Unit) {
     }
 }
 
-/** A provider's brand mark for [ProviderIconBox]: 14 dp, untinted ([Icon] always tints). */
+/** White marks, tinted [IrisColors.onControl] so they read on the light dropdowns. */
+private val MONOCHROME_MARKS = setOf(R.drawable.lucide_smartphone, R.drawable.provider_openai, R.drawable.provider_vercel)
+
+/** A provider's brand mark for [ProviderIconBox]: 14 dp; coloured marks untinted ([Icon] always tints). */
 @Composable
 fun BrandIcon(@DrawableRes id: Int) {
-    Image(painterResource(id), null, Modifier.size(14.dp), contentScale = ContentScale.Fit)
+    val tint = if (id in MONOCHROME_MARKS) ColorFilter.tint(IrisTheme.colors.onControl) else null
+    Image(painterResource(id), null, Modifier.size(14.dp), contentScale = ContentScale.Fit, colorFilter = tint)
 }
 
 /** The 1 dp outline black controls get in dark mode (none in light). */

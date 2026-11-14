@@ -50,11 +50,11 @@ fun SmallButton(
                 Shadow(radius = 0.95.dp, color = colors.buttonShadow, offset = DpOffset(0.dp, 2.dp))
             )
             .clip(ControlShape)
-            .background(colors.control)
+            .background(colors.button)
             .controlBorder(colors)
             .clickable(
                 interactionSource = null,
-                indication = PressIndication(colors.pressOverlayOnControl),
+                indication = PressIndication(colors.pressOverlayOnButton),
                 role = Role.Button
             ) {
                 focusManager.clearFocus()

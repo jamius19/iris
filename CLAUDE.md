@@ -62,7 +62,7 @@ Silero VAD ("Skip silence") decides which audio is sent (cloud: to cut STT cost;
   radio, check, chevron-left, chevron-down, plus, smartphone, gauge, eraser): viewport 24, white stroke (tinted in
   Compose), round caps/joins, circles/rects converted to paths; `android:width` = the use size and `strokeWidth`
   chosen so the drawn stroke matches the Figma export (1.5 at 24/16 dp, 1.57 at 23, 1.64 at 22, 1.25 for sparkles,
-  1.6 at 15, 2.2 at 11; `smartphone` 14 dp at 1.7, drawn untinted by `BrandIcon` as On device's provider icon). The
+  1.6 at 15, 2.2 at 11; `smartphone` 14 dp at 1.7, drawn by `BrandIcon` as On device's provider icon). The
   overlay keeps its own `ic_mic`/`ic_close`/`ic_check`/`ic_exclamation`. `assets/lucide_LICENSE.txt` is the full
   upstream LICENSE (ISC + the Feather MIT block, "Copyright (c) 2013-present Cole Bemis": radio, check, chevrons,
   plus, trash, arrows are Feather-derived).
@@ -73,7 +73,8 @@ Silero VAD ("Skip silence") decides which audio is sent (cloud: to cut STT cost;
   #C8FF00) / `provider_openai.xml` (15.75 x 16 dp, white) / `provider_deepgram.xml` (16 x 16 dp, #E042FF) /
   `provider_soniox.xml` (13.48 x 16 dp, #1881FF, from the SVG's `.st0` class), path data copied from the
   user-supplied SVGs (viewBoxes 256 x 222 / 1024 x 730 / 256 x 260 / 24 x 24 / 211.35 x 250.84; no transforms); the
-  marks belong to their owners. `BrandIcon` (`ui.components`) draws one untinted at 14 dp.
+  marks belong to their owners. `BrandIcon` (`ui.components`) draws one at 14 dp (the white
+  ones, `smartphone`, OpenAI, Vercel, tinted `onControl` so they read on the light dropdowns; the rest untinted).
 - Manual DI: `AppContainer` held by the custom `Application` class `IrisApp`. No Hilt/Koin.
 - All versions live in `gradle/libs.versions.toml`.
 
@@ -1145,7 +1146,8 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
   trash ("Delete saved API key", only when one is set) discards the input, then clears the stored key. Helper "API
   key saved. Enter a new one to replace it." / "Not set" (failure colour). OpenAI key save/clear calls
   `ModelCatalogs.onOpenAiKeyChanged`.
-- Dropdowns (all black, panels black): `SelectDropdown` (read-only; `Role.DropdownList`, content description
+- Dropdowns (fields and panels #E8EAEE with #2F3031 text/icons in light, black in dark):
+  `SelectDropdown` (read-only; `Role.DropdownList`, content description
   "<label>, <value>", state "Expanded"/"Collapsed", click label "Change"; focusable `Popup`, so back and outside taps
   close it) and `ModelCombobox` (editable `BasicTextField`: focusing it opens the full list, typing filters with
   `filterModels` (case-insensitive substring) and reopens it; the arrow ("Show/Hide models") and refresh ("Refresh
@@ -1174,7 +1176,8 @@ Settings UI (CP12, Figma design; `ui.settings` / `ui.components` / `ui.theme`, C
   #141616, card #212424, text #E8EAEA, muted #9B9EA0, failure #FF5C93 and enabled #5C9DFF (>= 4.5:1 on the card),
   warning (CP16, not in the design: Statistics' "Borderline") #B45309 light (~5:1 on white) / #F59E0B dark (~7:1),
   statsCard (CP17: the Statistics summary card, white text ~5.2:1) #0061F3 in both modes,
-  controls stay black (#0B0C0C + 1 dp #3A3D3E outline), slider/switch "on" = the text colour (a black thumb would
+  dropdowns and small buttons are black (#0B0C0C + 1 dp #3A3D3E outline),
+  slider/switch "on" = the text colour (a black thumb would
   vanish on a dark card). Shadows via `Modifier.dropShadow` (card y 3 blur 3.1 7 %, button y 2 blur 0.95 8 %,
   panel y 4 blur 12 16 %; dark 35-50 %). `Theme.Iris` (+ `values-night`) sets `windowBackground` to
   `settings_background` (no white flash). `IrisType`: Blinker 600 page title 22/26 sp and section heading 16/19;

@@ -23,10 +23,11 @@ import androidx.compose.ui.graphics.Color
  * | enabled | #0061F3 | #5C9DFF | "Enabled" status, "Keeps up" |
  * | warning | #B45309 | #F59E0B | "Borderline" (Statistics) |
  * | statsCard | #0061F3 | #0061F3 | Statistics summary card, white text (~5.2:1) |
- * | control | #2F3031 | #0B0C0C | dropdown fields and panels, small dark buttons |
+ * | control | #E8EAEE | #0B0C0C | dropdown fields and panels |
  * | controlBorder | none | #3A3D3E | 1 dp outline of controls/panels in dark |
- * | onControl | #FFFFFF | #FFFFFF | text + icons on control |
- * | onControlMuted | #A9ABAD | #8E9193 | placeholder on control |
+ * | onControl | #2F3031 | #FFFFFF | text + icons on control |
+ * | onControlMuted | #6F7173 | #8E9193 | placeholder on control |
+ * | button | #2F3031 | #0B0C0C | small dark buttons |
  * | buttonText | #FDFDFD | #FDFDFD | Setup text + icon |
  * | fieldBorder | #D7D7D7 | #3D4142 | outlined text field border |
  * | fieldBorderFocused | #2F3031 | #E8EAEA | focused field border |
@@ -40,11 +41,12 @@ import androidx.compose.ui.graphics.Color
  * | buttonShadow | black 8 % | black 35 % | small button shadow (y 2, blur 0.95) |
  * | panelShadow | black 16 % | black 50 % | dropdown panel shadow (y 4, blur 12) |
  * | pressOverlay | black 6 % | white 6 % | press feedback on cards/rows |
- * | pressOverlayOnControl | white 10 % | white 10 % | press feedback on black controls |
+ * | pressOverlayOnControl | black 6 % | white 10 % | press feedback on dropdowns |
+ * | pressOverlayOnButton | white 10 % | white 10 % | press feedback on small dark buttons |
  *
  * Dark derivation: a cool dark grey page (#141616 keeps the light background's slight green-cyan tint) with cards
- * one step lighter and the same text/muted hierarchy. Dropdowns stay black (#0B0C0C, darker than the card, plus a
- * 1 dp outline so the edge reads), so "all dropdowns black" holds in both themes. The slider and switch "on" colour
+ * one step lighter and the same text/muted hierarchy. Dropdowns are black in dark (#0B0C0C, darker than the card,
+ * plus a 1 dp outline so the edge reads); in light they are light grey (#E8EAEE). The slider and switch "on" colour
  * is [accent] (the text colour), not [control]: a black thumb would vanish on a dark card. Failure and enabled are
  * lightened to keep >= 4.5:1 on the dark card at 11-12 sp (#EC1664 ~3.7:1 -> #FF5C93 ~5.4:1; #0061F3 ~2.8:1 ->
  * #5C9DFF ~5.8:1). Warning (not in the design) is an amber with the same contrast: #B45309 ~5:1 on white, #F59E0B
@@ -65,6 +67,7 @@ data class IrisColors(
     val controlBorder: Color,
     val onControl: Color,
     val onControlMuted: Color,
+    val button: Color,
     val buttonText: Color,
     val fieldBorder: Color,
     val fieldBorderFocused: Color,
@@ -79,6 +82,7 @@ data class IrisColors(
     val panelShadow: Color,
     val pressOverlay: Color,
     val pressOverlayOnControl: Color,
+    val pressOverlayOnButton: Color,
 )
 
 val LightIrisColors = IrisColors(
@@ -90,10 +94,11 @@ val LightIrisColors = IrisColors(
     enabled = Color(0xFF0061F3),
     warning = Color(0xFFB45309),
     statsCard = Color(0xFF0061F3),
-    control = Color(0xFF2F3031),
+    control = Color(0xFFE8EAEE),
     controlBorder = Color.Unspecified,
-    onControl = Color(0xFFFFFFFF),
-    onControlMuted = Color(0xFFA9ABAD),
+    onControl = Color(0xFF2F3031),
+    onControlMuted = Color(0xFF6F7173),
+    button = Color(0xFF2F3031),
     buttonText = Color(0xFFFDFDFD),
     fieldBorder = Color(0xFFD7D7D7),
     fieldBorderFocused = Color(0xFF2F3031),
@@ -107,7 +112,8 @@ val LightIrisColors = IrisColors(
     buttonShadow = Color.Black.copy(alpha = 0.08f),
     panelShadow = Color.Black.copy(alpha = 0.16f),
     pressOverlay = Color.Black.copy(alpha = 0.06f),
-    pressOverlayOnControl = Color.White.copy(alpha = 0.10f),
+    pressOverlayOnControl = Color.Black.copy(alpha = 0.06f),
+    pressOverlayOnButton = Color.White.copy(alpha = 0.10f),
 )
 
 val DarkIrisColors = IrisColors(
@@ -123,6 +129,7 @@ val DarkIrisColors = IrisColors(
     controlBorder = Color(0xFF3A3D3E),
     onControl = Color(0xFFFFFFFF),
     onControlMuted = Color(0xFF8E9193),
+    button = Color(0xFF0B0C0C),
     buttonText = Color(0xFFFDFDFD),
     fieldBorder = Color(0xFF3D4142),
     fieldBorderFocused = Color(0xFFE8EAEA),
@@ -137,4 +144,5 @@ val DarkIrisColors = IrisColors(
     panelShadow = Color.Black.copy(alpha = 0.50f),
     pressOverlay = Color.White.copy(alpha = 0.06f),
     pressOverlayOnControl = Color.White.copy(alpha = 0.10f),
+    pressOverlayOnButton = Color.White.copy(alpha = 0.10f),
 )
