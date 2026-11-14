@@ -61,7 +61,8 @@ fun StatusRow(
                     "Setup",
                     R.drawable.lucide_arrow_right,
                     onSetup,
-                    Modifier.semantics { contentDescription = "Set up $title" }
+                    Modifier.semantics { contentDescription = "Set up $title" },
+                    setup = true
                 )
             }
         }

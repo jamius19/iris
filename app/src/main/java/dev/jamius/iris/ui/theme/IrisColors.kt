@@ -27,8 +27,10 @@ import androidx.compose.ui.graphics.Color
  * | controlBorder | none | #3A3D3E | 1 dp outline of controls/panels in dark |
  * | onControl | #2F3031 | #FFFFFF | text + icons on control |
  * | onControlMuted | #6F7173 | #8E9193 | placeholder on control |
- * | button | #2F3031 | #FFFFFF | small filled buttons (Setup, Save, Download, Cancel) |
- * | buttonText | #FDFDFD | #2F3031 | small filled button text + icon |
+ * | button | #2F3031 | #0B0C0C | small dark buttons |
+ * | buttonText | #FDFDFD | #FDFDFD | small dark button text + icon |
+ * | setupButton | #2F3031 | #FFFFFF | Home's "Setup →" buttons (no outline in dark) |
+ * | setupButtonText | #FDFDFD | #2F3031 | Setup text + icon |
  * | fieldBorder | #D7D7D7 | #3D4142 | outlined text field border |
  * | fieldBorderFocused | #2F3031 | #E8EAEA | focused field border |
  * | servicesDivider | #D6D8DD | #343738 | 1 dp divider in the Home Services card |
@@ -42,7 +44,8 @@ import androidx.compose.ui.graphics.Color
  * | panelShadow | black 16 % | black 50 % | dropdown panel shadow (y 4, blur 12) |
  * | pressOverlay | black 6 % | white 6 % | press feedback on cards/rows |
  * | pressOverlayOnControl | black 6 % | white 10 % | press feedback on dropdowns |
- * | pressOverlayOnButton | white 10 % | black 6 % | press feedback on small filled buttons |
+ * | pressOverlayOnButton | white 10 % | white 10 % | press feedback on small dark buttons |
+ * | pressOverlayOnSetupButton | white 10 % | black 6 % | press feedback on Setup |
  *
  * Dark derivation: a cool dark grey page (#141616 keeps the light background's slight green-cyan tint) with cards
  * one step lighter and the same text/muted hierarchy. Dropdowns are black in dark (#0B0C0C, darker than the card,
@@ -69,6 +72,8 @@ data class IrisColors(
     val onControlMuted: Color,
     val button: Color,
     val buttonText: Color,
+    val setupButton: Color,
+    val setupButtonText: Color,
     val fieldBorder: Color,
     val fieldBorderFocused: Color,
     val servicesDivider: Color,
@@ -83,6 +88,7 @@ data class IrisColors(
     val pressOverlay: Color,
     val pressOverlayOnControl: Color,
     val pressOverlayOnButton: Color,
+    val pressOverlayOnSetupButton: Color,
 )
 
 val LightIrisColors = IrisColors(
@@ -100,6 +106,8 @@ val LightIrisColors = IrisColors(
     onControlMuted = Color(0xFF6F7173),
     button = Color(0xFF2F3031),
     buttonText = Color(0xFFFDFDFD),
+    setupButton = Color(0xFF2F3031),
+    setupButtonText = Color(0xFFFDFDFD),
     fieldBorder = Color(0xFFD7D7D7),
     fieldBorderFocused = Color(0xFF2F3031),
     servicesDivider = Color(0xFFD6D8DD),
@@ -114,6 +122,7 @@ val LightIrisColors = IrisColors(
     pressOverlay = Color.Black.copy(alpha = 0.06f),
     pressOverlayOnControl = Color.Black.copy(alpha = 0.06f),
     pressOverlayOnButton = Color.White.copy(alpha = 0.10f),
+    pressOverlayOnSetupButton = Color.White.copy(alpha = 0.10f),
 )
 
 val DarkIrisColors = IrisColors(
@@ -129,8 +138,10 @@ val DarkIrisColors = IrisColors(
     controlBorder = Color(0xFF3A3D3E),
     onControl = Color(0xFFFFFFFF),
     onControlMuted = Color(0xFF8E9193),
-    button = Color(0xFFFFFFFF),
-    buttonText = Color(0xFF2F3031),
+    button = Color(0xFF0B0C0C),
+    buttonText = Color(0xFFFDFDFD),
+    setupButton = Color(0xFFFFFFFF),
+    setupButtonText = Color(0xFF2F3031),
     fieldBorder = Color(0xFF3D4142),
     fieldBorderFocused = Color(0xFFE8EAEA),
     servicesDivider = Color(0xFF343738),
@@ -144,5 +155,6 @@ val DarkIrisColors = IrisColors(
     panelShadow = Color.Black.copy(alpha = 0.50f),
     pressOverlay = Color.White.copy(alpha = 0.06f),
     pressOverlayOnControl = Color.White.copy(alpha = 0.10f),
-    pressOverlayOnButton = Color.Black.copy(alpha = 0.06f),
+    pressOverlayOnButton = Color.White.copy(alpha = 0.10f),
+    pressOverlayOnSetupButton = Color.Black.copy(alpha = 0.06f),
 )

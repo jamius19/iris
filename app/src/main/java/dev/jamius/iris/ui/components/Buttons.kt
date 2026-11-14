@@ -33,8 +33,8 @@ import androidx.compose.ui.unit.dp
 import dev.jamius.iris.ui.theme.IrisTheme
 
 /**
- * The small filled button ("Setup →"; dark in light mode, white in dark mode): hugs its text + 11 dp trailing icon
- * (if any).
+ * The design's small dark button ("Setup →"): hugs its text + 11 dp trailing icon (if any). [setup]: Home's Setup
+ * buttons, white in dark mode.
  */
 @Composable
 fun SmallButton(
@@ -42,9 +42,12 @@ fun SmallButton(
     @DrawableRes trailingIcon: Int? = null,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    setup: Boolean = false,
 ) {
     val colors = IrisTheme.colors
     val focusManager = LocalFocusManager.current
+    val textColor = if (setup) colors.setupButtonText else colors.buttonText
+    val pressOverlay = if (setup) colors.pressOverlayOnSetupButton else colors.pressOverlayOnButton
     Row(
         modifier = modifier
             .heightIn(min = 32.dp)
@@ -53,10 +56,11 @@ fun SmallButton(
                 Shadow(radius = 0.95.dp, color = colors.buttonShadow, offset = DpOffset(0.dp, 2.dp))
             )
             .clip(ControlShape)
-            .background(colors.button)
+            .background(if (setup) colors.setupButton else colors.button)
+            .then(if (setup) Modifier else Modifier.controlBorder(colors))
             .clickable(
                 interactionSource = null,
-                indication = PressIndication(colors.pressOverlayOnButton),
+                indication = PressIndication(pressOverlay),
                 role = Role.Button
             ) {
                 focusManager.clearFocus()
@@ -66,8 +70,8 @@ fun SmallButton(
         horizontalArrangement = Arrangement.spacedBy(3.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(text, IrisTheme.type.button, color = colors.buttonText)
-        trailingIcon?.let { Icon(it, contentDescription = null, tint = colors.buttonText) }
+        Text(text, IrisTheme.type.button, color = textColor)
+        trailingIcon?.let { Icon(it, contentDescription = null, tint = textColor) }
     }
 }
 
