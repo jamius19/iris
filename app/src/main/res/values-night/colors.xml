@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bubble_idle">#FFFFFFFF</color>
+    <color name="bubble_idle_icon">#FF000000</color>
+    <color name="bubble_control">#FF000000</color>
+    <color name="bubble_control_icon">#FFFFFFFF</color>
+    <color name="settings_background">#FF141616</color>
+    <color name="logo_body">#FFD9DBDC</color>
+    <color name="logo_capsule">#FF8E9196</color>
+</resources>

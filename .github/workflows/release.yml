@@ -1,0 +1,79 @@
+# Author: Jamius Siam
+# Since: 14/11/2026
+#
+# Every push to main: build a signed release APK (arm64-v8a only), run the unit tests and upload the APK as a workflow
+# artifact (iris-<versionName>-arm64-v8a-<short sha>.apk). If tag v<versionName> doesn't exist yet, also create it on
+# the pushed commit with a GitHub Release carrying iris-<versionName>-arm64-v8a.apk.
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: 25
+          cache: gradle
+
+      - name: Decode keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.IRIS_KEYSTORE_B64 }}
+        run: echo "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/iris-release.p12"
+
+      - name: Build and test
+        env:
+          IRIS_KEYSTORE_FILE: ${{ runner.temp }}/iris-release.p12
+          IRIS_KEYSTORE_PASSWORD: ${{ secrets.IRIS_KEYSTORE_PASSWORD }}
+          IRIS_KEY_ALIAS: ${{ secrets.IRIS_KEY_ALIAS }}
+        run: bash ./gradlew assembleRelease testDebugUnitTest --console=plain
+
+      - name: Name the APK
+        id: apk
+        run: |
+          dir=app/build/outputs/apk/release
+          version=$(jq -r '.elements[0].versionName' "$dir/output-metadata.json")
+          file=$(jq -r '.elements[0].outputFile' "$dir/output-metadata.json")
+          # Release builds are arm64-v8a only (abiFilters in app/build.gradle.kts).
+          release="iris-$version-arm64-v8a.apk"
+          build="iris-$version-arm64-v8a-${GITHUB_SHA::7}.apk"
+          cp "$dir/$file" "$release"
+          cp "$dir/$file" "$build"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: ${{ steps.apk.outputs.build }}
+          archive: false
+          if-no-files-found: error
+
+      - name: Release a new version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.apk.outputs.version }}
+          APK: ${{ steps.apk.outputs.release }}
+        run: |
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v$VERSION" --silent 2>/dev/null; then
+            echo "v$VERSION is already released"
+          else
+            gh release create "v$VERSION" "$APK" --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" --title "Iris $VERSION"
+          fi

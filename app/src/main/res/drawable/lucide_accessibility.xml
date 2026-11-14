@@ -1,0 +1,37 @@
+<!-- Lucide "accessibility" 1.72.0 (https://lucide.dev/icons/accessibility), ISC/MIT: assets/lucide_LICENSE.txt. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="23dp"
+    android:height="23dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:pathData="M15,4a1,1 0 1,0 2,0a1,1 0 1,0 -2,0"
+        android:strokeWidth="1.57"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="m18 19 1-7-6 1"
+        android:strokeWidth="1.57"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="m5 8 3-3 5.5 3-2.36 3.5"
+        android:strokeWidth="1.57"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M4.24 14.5a5 5 0 0 0 6.88 6"
+        android:strokeWidth="1.57"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:pathData="M13.76 17.5a5 5 0 0 0-6.88-6"
+        android:strokeWidth="1.57"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

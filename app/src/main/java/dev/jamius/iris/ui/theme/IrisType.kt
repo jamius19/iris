@@ -1,0 +1,102 @@
+/*
+* Author: Jamius Siam
+* Since: 13/11/2026
+*/
+
+package dev.jamius.iris.ui.theme
+
+import android.content.Context
+import android.graphics.Typeface
+import androidx.compose.runtime.Immutable
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.AndroidFont
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontLoadingStrategy
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontVariation
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.LineHeightStyle
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.sp
+import dev.jamius.iris.R
+import android.graphics.fonts.Font as PlatformFont
+import android.graphics.fonts.FontFamily as PlatformFontFamily
+
+/** Inter (variable, `res/font/inter.ttf`): one instance per weight the design uses; optical size left at 14. */
+val Inter = FontFamily(listOf(400, 500, 600, 800).map { InterFont(FontWeight(it)) })
+
+/**
+ * One Inter weight, built with the platform `Font.Builder`. Not Compose's resource `Font(..., variationSettings)`:
+ * that applies the variation through `Paint.setFontVariationSettings`, and HyperOS (Android 16) swaps the result
+ * back to the default instance, so every weight drew at 400 there.
+ */
+private class InterFont(override val weight: FontWeight) :
+    AndroidFont(FontLoadingStrategy.Blocking, Loader, FontVariation.Settings()) {
+
+    override val style = FontStyle.Normal
+
+    private object Loader : TypefaceLoader {
+        override fun loadBlocking(context: Context, font: AndroidFont): Typeface {
+            val weight = font.weight.weight
+            val inter = PlatformFont.Builder(context.resources, R.font.inter)
+                .setWeight(weight)
+                .setFontVariationSettings("'wght' $weight")
+                .build()
+            return Typeface.CustomFallbackBuilder(PlatformFontFamily.Builder(inter).build()).build()
+        }
+
+        override suspend fun awaitLoad(context: Context, font: AndroidFont): Typeface =
+            throw UnsupportedOperationException("Inter loads blocking")
+    }
+}
+
+/** Blinker SemiBold: page titles and section headings only. */
+val Blinker = FontFamily(Font(R.font.blinker_semibold, FontWeight.SemiBold))
+
+/** The settings UI type scale (Figma sizes + 1-2 sp, so it reads comfortably on a phone). */
+@Immutable
+data class IrisType(
+    val pageTitle: TextStyle,
+    val sectionHeading: TextStyle,
+    /** Row titles and field labels. */
+    val title: TextStyle,
+    /** Nav/status/switch-card subtitles. */
+    val subtitle: TextStyle,
+    /** Button text and dropdown values. */
+    val button: TextStyle,
+    /** Text field content and placeholders. */
+    val field: TextStyle,
+    /** JSON text. */
+    val mono: TextStyle,
+    val helper: TextStyle,
+    val sliderValue: TextStyle,
+    val menuItem: TextStyle,
+    val menuItemSelected: TextStyle,
+    val footer: TextStyle,
+)
+
+private fun style(family: FontFamily, weight: Int, size: TextUnit, lineHeight: TextUnit) = TextStyle(
+    fontFamily = family,
+    fontWeight = FontWeight(weight),
+    fontSize = size,
+    lineHeight = lineHeight,
+    letterSpacing = 0.sp,
+    lineHeightStyle = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.None)
+)
+
+val DefaultIrisType = IrisType(
+    pageTitle = style(Blinker, 600, 22.sp, 26.sp),
+    sectionHeading = style(Blinker, 600, 16.sp, 19.sp),
+    title = style(Inter, 600, 15.sp, 18.sp),
+    subtitle = style(Inter, 500, 13.sp, 16.sp),
+    button = style(Inter, 500, 14.sp, 17.sp),
+    field = style(Inter, 400, 14.sp, 17.sp),
+    mono = style(FontFamily.Monospace, 400, 13.sp, 16.sp),
+    helper = style(Inter, 500, 12.sp, 15.sp),
+    sliderValue = style(Inter, 800, 13.sp, 16.sp),
+    menuItem = style(Inter, 400, 14.sp, 17.sp),
+    menuItemSelected = style(Inter, 500, 14.sp, 17.sp),
+    footer = style(Inter, 500, 13.sp, 16.sp).copy(textAlign = TextAlign.Center),
+)

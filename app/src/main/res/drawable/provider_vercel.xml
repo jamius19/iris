@@ -1,0 +1,10 @@
+<!-- Vercel mark, converted from the user-supplied vercel.svg (viewBox 256 x 222); the mark belongs to Vercel. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="16dp"
+    android:height="13.875dp"
+    android:viewportWidth="256"
+    android:viewportHeight="222">
+    <path
+        android:pathData="M128,0L256,221.705H0Z"
+        android:fillColor="#FFFFFFFF" />
+</vector>

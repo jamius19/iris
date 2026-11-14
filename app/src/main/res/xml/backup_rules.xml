@@ -6,6 +6,10 @@
    See https://developer.android.com/about/versions/12/backup-restore
 -->
 <full-backup-content>
+    <!-- Encrypted API keys: the Keystore key that decrypts them is not backed up. -->
+    <exclude domain="file" path="datastore/secrets.preferences_pb" />
+    <!-- On-device model statistics: measured on this phone. -->
+    <exclude domain="file" path="datastore/on_device_stats.preferences_pb" />
     <!--
    <include domain="sharedpref" path="."/>
    <exclude domain="sharedpref" path="device.xml"/>

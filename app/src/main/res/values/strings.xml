@@ -1,3 +1,11 @@
 <resources>
     <string name="app_name">Iris</string>
+    <string name="accessibility_service_label">Iris dictation</string>
+    <!-- aapt collapses the line break and indentation below into a single space. -->
+    <string name="accessibility_service_description">Shows a mic bubble when you focus a text field, so you can
+        dictate into any app. Iris reads which field is focused and inserts your transcribed text into it.</string>
+    <string name="bubble_start">Start dictation. Drag to move.</string>
+    <string name="bubble_cancel">Cancel dictation</string>
+    <string name="bubble_working">Finishing dictation</string>
+    <string name="pill_stop">Stop dictation</string>
 </resources>

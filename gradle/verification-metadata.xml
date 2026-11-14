@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Checksums for sherpa-onnx only (a native AAR built by JitPack from a re-pointable tag); everything else is
+     trusted. -->
+<verification-metadata xmlns="https://schema.gradle.org/dependency-verification">
+   <configuration>
+      <verify-metadata>false</verify-metadata>
+      <verify-signatures>false</verify-signatures>
+      <trusted-artifacts>
+         <trust group="^(?!com\.github\.k2-fsa).*$" regex="true"/>
+      </trusted-artifacts>
+   </configuration>
+   <components>
+      <component group="com.github.k2-fsa.sherpa-onnx" name="sherpa-onnx" version="v2.0.1">
+         <artifact name="sherpa-onnx-v2.0.1.aar">
+            <sha256 value="a8d09d1d32f3eb8520482c6d3d43fae674681c5b050385967c70a3c2c9bf0ee7"
+                    origin="GitHub release AAR, re-published by JitPack"/>
+         </artifact>
+         <artifact name="sherpa-onnx-v2.0.1.pom">
+            <sha256 value="38bcef5ff7fb51f3589241fb074df6afaab258e03095d3dcc8a887981d526402" origin="JitPack"/>
+         </artifact>
+      </component>
+   </components>
+</verification-metadata>

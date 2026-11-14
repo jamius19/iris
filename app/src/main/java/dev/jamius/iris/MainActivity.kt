@@ -4,44 +4,42 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
+import dev.jamius.iris.ui.components.LocalUpdateStatus
+import dev.jamius.iris.ui.components.Saver
+import dev.jamius.iris.ui.components.UpdateStatus
+import dev.jamius.iris.ui.settings.SettingsApp
 import dev.jamius.iris.ui.theme.IrisTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // The system's 90 % white 3-button nav scrim is replaced by a page-coloured one in SettingsApp.
+        window.isNavigationBarContrastEnforced = false
+        val container = (application as IrisApp).container
+        val saver = Saver(container.appScope)
         setContent {
             IrisTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    Greeting(
-                        name = "Android",
-                        modifier = Modifier.padding(innerPadding)
+                // Checked each time the app opens.
+                val update by produceState(UpdateStatus.CHECKING) { value = container.updateStatus() }
+                CompositionLocalProvider(LocalUpdateStatus provides update) {
+                    SettingsApp(
+                        repository = container.settingsRepository,
+                        saver = saver,
+                        gatewayModels = container::gatewayModels,
+                        openRouterModels = container::openRouterModels,
+                        openAiModels = container::openAiTranscriptionModels,
+                        customModels = container::customCleanupModels,
+                        sonioxCatalog = container.sonioxCatalog,
+                        onDeviceModels = container.onDeviceModels,
+                        statistics = container.statistics,
+                        favicons = container.favicons
                     )
                 }
             }
         }
-    }
-}
-
-@Composable
-fun Greeting(name: String, modifier: Modifier = Modifier) {
-    Text(
-        text = "Hello $name!",
-        modifier = modifier
-    )
-}
-
-@Preview(showBackground = true)
-@Composable
-fun GreetingPreview() {
-    IrisTheme {
-        Greeting("Android")
     }
 }
