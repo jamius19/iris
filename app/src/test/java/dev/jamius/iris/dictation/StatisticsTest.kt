@@ -28,7 +28,7 @@ import org.junit.Test
 
 class StatisticsTest {
 
-    private val openAi = emptyPreferences().toSettings(emptySet())
+    private val openAi = emptyPreferences().toSettings(emptySet()).copy(sttProviderId = Settings.STT_PROVIDER_OPENAI)
     private val gateway = openAi.copy(sttProviderId = Settings.STT_PROVIDER_VERCEL_GATEWAY)
     private val deepgram = openAi.copy(sttProviderId = Settings.STT_PROVIDER_DEEPGRAM)
     private val soniox = openAi.copy(sttProviderId = Settings.STT_PROVIDER_SONIOX)

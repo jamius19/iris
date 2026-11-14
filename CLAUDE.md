@@ -46,7 +46,7 @@ Provider differences are interface members (`sampleRate(model)`, `streams`, `liv
 `wantsSegmentEnds`), not new types.
 
 ## Key decisions (don't re-litigate without a concrete reason)
-- OpenAI Realtime (direct) is the default STT. The mode (streaming vs upload) follows the model, except Deepgram,
+- On device (Nemotron) is the default STT. The mode (streaming vs upload) follows the model, except Deepgram,
   where a setting picks the cheaper pre-recorded upload.
 - On device: sherpa-onnx offline models decode each VAD phrase as the user pauses (pseudo-live); Nemotron (the
   default) is a true streaming model with one stream per dictation.

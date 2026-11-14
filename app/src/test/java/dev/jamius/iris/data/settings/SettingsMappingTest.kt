@@ -68,8 +68,8 @@ class SettingsMappingTest {
     fun emptyPreferencesMapToDefaults() {
         val settings = emptyPreferences().toSettings(emptySet())
 
-        assertEquals(Settings.STT_PROVIDER_OPENAI, settings.sttProviderId)
-        assertFalse(settings.sttOnDevice)
+        assertEquals(Settings.STT_PROVIDER_ON_DEVICE, settings.sttProviderId)
+        assertTrue(settings.sttOnDevice)
         assertEquals("nemotron-streaming-en", settings.onDeviceSttModel)
         assertEquals(5, settings.onDeviceUnloadMinutes)
         assertEquals(Settings.DEFAULT_STT_MODEL, settings.sttModel)
@@ -86,7 +86,7 @@ class SettingsMappingTest {
         assertFalse(settings.sttGateway)
         assertFalse(settings.sttDeepgram)
         assertFalse(settings.sttSoniox)
-        assertEquals(Settings.DEFAULT_STT_MODEL, settings.activeSttModel)
+        assertEquals(Settings.DEFAULT_ON_DEVICE_STT_MODEL, settings.activeSttModel)
         assertEquals("", settings.sttLanguage)
         assertEquals(Settings.DEFAULT_STT_TIMEOUT_SECONDS, settings.sttTimeoutSeconds)
         assertTrue(settings.vadEnabled)
@@ -214,6 +214,7 @@ class SettingsMappingTest {
     @Test
     fun activeSttModelAndKeyFollowTheProvider() {
         val prefs = mutablePreferencesOf(
+            Keys.STT_PROVIDER_ID to Settings.STT_PROVIDER_OPENAI,
             Keys.STT_MODEL to "gpt-transcribe",
             Keys.GATEWAY_STT_MODEL to "spacexai/grok-stt",
             Keys.DEEPGRAM_STT_MODEL to "nova-2",
